@@ -315,10 +315,8 @@ struct ProposalInboxView: View {
             }
 
         case .memo(let text):
-            TextEditor(text: .constant(text))
-                .font(.callout)
-                .frame(minHeight: 80)
-                .disabled(true)
+            MarkdownPreview(markdown: text, fontSize: 13)
+                .frame(minHeight: 100)
         }
     }
 

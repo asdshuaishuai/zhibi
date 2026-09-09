@@ -264,6 +264,16 @@ MainActor.assumeIsolated {
     let nospace = "##第二章"
     let back3 = MarkdownLite.serialize(MarkdownLite.render(nospace, bodyFont: font, textColor: .textColor))
     check("无空格标题识别", back3.hasPrefix("## 第二章"), "得到 [\(back3)]")
+
+    // 列表（无序/有序/嵌套）往返
+    let listDoc = "- 第一项\n- 第二项\n  - 子项\n1. 数字一\n2. 数字二"
+    let listBack = MarkdownLite.serialize(MarkdownLite.render(listDoc, bodyFont: font, textColor: .textColor))
+    check("列表往返", listBack.contains("- 第一项") && listBack.contains("- 第二项") && listBack.contains("  - 子项") && listBack.contains("1. 数字一") && listBack.contains("2. 数字二"), "得到 [\(listBack)]")
+
+    // 行内代码往返
+    let codeDoc = "用 `cachedWords` 缓存字数。"
+    let codeBack = MarkdownLite.serialize(MarkdownLite.render(codeDoc, bodyFont: font, textColor: .textColor))
+    check("行内代码往返", codeBack.contains("`cachedWords`"), "得到 [\(codeBack)]")
 }
 
 // MARK: - 11. 每日字数账本（写作计入 / 导入不计入 / 删字扣回）

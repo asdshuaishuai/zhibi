@@ -327,6 +327,7 @@ struct CanonView: View {
     @ObservedObject var store: ProjectStore
     @State private var selectedSection: UUID?
     @State private var newTitle = ""
+    @State private var previewMode = false
 
     var body: some View {
         HSplitView {
@@ -375,6 +376,13 @@ struct CanonView: View {
                             ForEach(Certainty.allCases, id: \.self) { Text($0.rawValue).tag($0) }
                         }
                         .controlSize(.small)
+                        Button {
+                            previewMode.toggle()
+                        } label: {
+                            Image(systemName: previewMode ? "pencil.line" : "eye")
+                        }
+                        .help(previewMode ? "切换到编辑" : "渲染预览")
+                        .controlSize(.small)
                         Button(role: .destructive) {
                             _ = store.canonSections.remove(at: idx)
                             selectedSection = nil
@@ -384,10 +392,14 @@ struct CanonView: View {
                     }
                     .padding(10)
                     Divider()
-                    TextEditor(text: Binding(
-                        get: { store.canonSections[idx].content },
-                        set: { store.canonSections[idx].content = $0; store.saveSoon() }))
-                        .font(.system(size: 14))
+                    if previewMode {
+                        MarkdownPreview(markdown: store.canonSections[idx].content)
+                    } else {
+                        TextEditor(text: Binding(
+                            get: { store.canonSections[idx].content },
+                            set: { store.canonSections[idx].content = $0; store.saveSoon() }))
+                            .font(.system(size: 14))
+                    }
                     Text("设定是作者主权：AI 只读，不代写。确定度三态：已定（正典）/ 暂定 / 有意留白。")
                         .font(.caption2).foregroundStyle(.tertiary)
                         .padding(.horizontal, 10).padding(.vertical, 5)

@@ -13,10 +13,13 @@ enum MarkdownLite {
         case heading = 1
         case quote = 2
         case rule = 3
+        case listItem = 4
     }
 
     static let kindKey = NSAttributedString.Key("zb.md.kind")
     static let levelKey = NSAttributedString.Key("zb.md.level")
+    static let markerKey = NSAttributedString.Key("zb.md.marker")
+    static let codeKey = NSAttributedString.Key("zb.md.code")
 
     // MARK: markdown → 富文本
 
@@ -30,10 +33,12 @@ enum MarkdownLite {
         for line in lines {
             // 只剥半角空白判空；全角空格缩进属于正文内容。
             // 单换行不熔段：每个非空行独立成段（中文 txt 常见单换行分段形态）
+            let leadingSpaces = line.prefix(while: { $0 == " " }).count
             let trimmed = line.trimmingCharacters(in: CharacterSet(charactersIn: " \t"))
             if trimmed.isEmpty {
                 continue
             }
+            let indentLevel = min(3, leadingSpaces / 2)
             let headingPrefix = trimmed.prefix(while: { $0 == "#" })
             let headingLevel = headingPrefix.count
             let headingRest = trimmed.dropFirst(headingLevel).drop(while: { $0 == " " })
@@ -46,6 +51,9 @@ enum MarkdownLite {
                 let rule = inline("────────", kind: .rule, level: 0,
                                   baseFont: bodyFont, textColor: textColor.withAlphaComponent(0.5))
                 appendBlock(rule)
+            } else if var list = listMarker(trimmed) {
+                list.level = max(list.level, indentLevel)
+                appendBlock(listAttr(list, baseFont: bodyFont, textColor: textColor))
             } else if trimmed.hasPrefix("> ") {
                 appendBlock(inline(String(trimmed.dropFirst(2)), kind: .quote, level: 0,
                                    baseFont: bodyFont, textColor: textColor.withAlphaComponent(0.78)))
@@ -54,6 +62,50 @@ enum MarkdownLite {
                                    baseFont: bodyFont, textColor: textColor))
             }
         }
+        return out
+    }
+
+    struct ListMarker {
+        var text: String       // 去掉标记后的内容
+        var marker: String     // "- " 或 "1. "
+        var level: Int         // 嵌套层级（缩进/2）
+    }
+
+    /// 识别列表行：无序（- / *）、有序（1. / 1、），缩进两个空格一层
+    static func listMarker(_ trimmed: String) -> ListMarker? {
+        let leading = trimmed.prefix(while: { $0 == " " })
+        let level = min(3, leading.count / 2)
+        let body = trimmed.dropFirst(leading.count)
+
+        if body.hasPrefix("- ") || body.hasPrefix("* ") {
+            let content = String(body.dropFirst(2))
+            guard !content.isEmpty else { return nil }
+            return ListMarker(text: content, marker: "- ", level: level)
+        }
+        // 有序：数字+.（含全角顿号）
+        if let re = cachedRegex("^(\\d{1,3})[.、)]\\s+(.+)$"),
+           let m = re.firstMatch(in: String(body), range: NSRange(location: 0, length: (body as NSString).length)),
+           m.range(at: 1).location != NSNotFound {
+            let num = (body as NSString).substring(with: m.range(at: 1))
+            let content = (body as NSString).substring(with: m.range(at: 2))
+            return ListMarker(text: content, marker: num + ". ", level: level)
+        }
+        return nil
+    }
+
+    private static func listAttr(_ list: ListMarker, baseFont: NSFont, textColor: NSColor) -> NSAttributedString {
+        let rendered = inline(list.text, kind: .listItem, level: list.level,
+                              baseFont: baseFont, textColor: textColor)
+        let out = NSMutableAttributedString(attributedString: rendered)
+        let ps = NSMutableParagraphStyle()
+        ps.headIndent = CGFloat(16 * (list.level + 1))
+        ps.firstLineHeadIndent = CGFloat(16 * list.level)
+        ps.lineSpacing = 3
+        ps.paragraphSpacing = 5
+        out.addAttribute(.paragraphStyle, value: ps,
+                         range: NSRange(location: 0, length: out.length))
+        out.addAttribute(markerKey, value: list.marker,
+                         range: NSRange(location: 0, length: out.length))
         return out
     }
 
@@ -102,6 +154,52 @@ enum MarkdownLite {
                     continue
                 }
             }
+            if ch == "`" {
+                // 行内代码：`code` → 等宽字体 + 浅底
+                flush()
+                let rest = text[currentIndex...]
+                if rest.hasPrefix("`"), let close = rest.dropFirst().firstIndex(of: "`") {
+                    let codeText = String(rest[rest.index(after: rest.startIndex)..<close])
+                    var f = NSFont.monospacedSystemFont(ofSize: baseFont.pointSize * 0.92, weight: .regular)
+                    let ps = NSMutableParagraphStyle()
+                    applyParagraphStyle(ps, kind: kind)
+                    let attr = NSAttributedString(string: codeText, attributes: [
+                        .font: f,
+                        .foregroundColor: textColor,
+                        .backgroundColor: textColor.withAlphaComponent(0.07),
+                        .paragraphStyle: ps,
+                        kindKey: kind.rawValue,
+                        levelKey: level,
+                        codeKey: true,
+                    ])
+                    out.append(attr)
+                    currentIndex = text.index(currentIndex, offsetBy: codeText.count + 2)
+                    continue
+                }
+            }
+            if ch == "~" {
+                // 删除线 ~~text~~
+                let rest = text[currentIndex...]
+                if rest.hasPrefix("~~"), let close = rest.dropFirst(2).range(of: "~~") {
+                    flush()
+                    let strikeText = String(rest[rest.index(rest.startIndex, offsetBy: 2)..<close.lowerBound])
+                    var font = baseFont
+                    let ps = NSMutableParagraphStyle()
+                    applyParagraphStyle(ps, kind: kind)
+                    let attr = NSMutableAttributedString(string: strikeText, attributes: [
+                        .font: font,
+                        .foregroundColor: textColor,
+                        .paragraphStyle: ps,
+                        kindKey: kind.rawValue,
+                        levelKey: level,
+                    ])
+                    attr.addAttribute(.strikethroughStyle, value: NSUnderlineStyle.single.rawValue,
+                                      range: NSRange(location: 0, length: (strikeText as NSString).length))
+                    out.append(attr)
+                    currentIndex = close.upperBound
+                    continue
+                }
+            }
             if ch == "*" {
                 let next = text.index(after: currentIndex)
                 let next2 = next < text.endIndex ? text.index(after: next) : nil
@@ -140,7 +238,7 @@ enum MarkdownLite {
 
     private static func applyParagraphStyle(_ ps: NSMutableParagraphStyle, kind: BlockKind) {
         switch kind {
-        case .paragraph:
+        case .paragraph, .listItem:
             ps.lineSpacing = 4.5
             ps.paragraphSpacing = 11
         case .heading:
@@ -182,6 +280,10 @@ enum MarkdownLite {
             switch kind {
             case .rule:
                 lines.append("---")
+            case .listItem:
+                let marker = attributed.attribute(markerKey, at: trimmed.location, effectiveRange: nil) as? String ?? "- "
+                let indent = String(repeating: "  ", count: max(0, (attributed.attribute(levelKey, at: trimmed.location, effectiveRange: nil) as? Int ?? 0)))
+                lines.append(indent + marker + runsMarkdown(attributed, range: trimmed))
             case .heading:
                 // 标题的加粗是结构性样式，不回写成行内 **；level 保留 ### 层级
                 let level = attributed.attribute(levelKey, at: trimmed.location, effectiveRange: nil) as? Int ?? 1
@@ -202,9 +304,17 @@ enum MarkdownLite {
              .replacingOccurrences(of: "*", with: "\\*")
         }
         var out = ""
-        attributed.enumerateAttribute(.font, in: range) { value, subRange, stop in
+        attributed.enumerateAttributes(in: range) { (attrs: [NSAttributedString.Key: Any], subRange: NSRange, _: UnsafeMutablePointer<ObjCBool>) in
             let text = (attributed.string as NSString).substring(with: subRange)
-            guard let font = value as? NSFont, !text.isEmpty else {
+            if (attrs[codeKey] as? Bool) == true {
+                out += "`" + escape(text) + "`"
+                return
+            }
+            if attrs[.strikethroughStyle] != nil {
+                out += "~~" + escape(text) + "~~"
+                return
+            }
+            guard let font = attrs[.font] as? NSFont, !text.isEmpty else {
                 out += escape(text)
                 return
             }

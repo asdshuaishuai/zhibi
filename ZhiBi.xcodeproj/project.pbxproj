@@ -61,6 +61,7 @@
 		DD34AEA31B6171EA8B241D1E /* PromptLibrary.swift in Sources */ = {isa = PBXBuildFile; fileRef = 325E50520695455EBE751F5C /* PromptLibrary.swift */; };
 		DF6702C1317D6401CAB1DFD0 /* PromptLibrary.swift in Sources */ = {isa = PBXBuildFile; fileRef = 325E50520695455EBE751F5C /* PromptLibrary.swift */; };
 		E1351ED3A8C94BBC93C62EFE /* ProjectStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = D8564138587ABEAC002A4B68 /* ProjectStore.swift */; };
+		E654F585E3FC2A2FDCA571CD /* MarkdownPreview.swift in Sources */ = {isa = PBXBuildFile; fileRef = F6615822875FE4D9E8C09829 /* MarkdownPreview.swift */; };
 		E9845B8BE95AAE20A37579FA /* ProposalModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 833C495A26924EEA95D0349B /* ProposalModels.swift */; };
 		ED6312FCED64977DC2A4C5CD /* CharactersView.swift in Sources */ = {isa = PBXBuildFile; fileRef = ED1008100FF4B150910026A2 /* CharactersView.swift */; };
 		F05FEB2D328735EFCEF97DA2 /* ClueBoardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B85387468E5BFF6999C7E32C /* ClueBoardView.swift */; };
@@ -114,6 +115,7 @@
 		ED1008100FF4B150910026A2 /* CharactersView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CharactersView.swift; sourceTree = "<group>"; };
 		EFCBDCBAA19FAB8D89D65B31 /* ClueModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClueModels.swift; sourceTree = "<group>"; };
 		F22B3EDAB84970F350CC04A1 /* FxAgent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FxAgent.swift; sourceTree = "<group>"; };
+		F6615822875FE4D9E8C09829 /* MarkdownPreview.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownPreview.swift; sourceTree = "<group>"; };
 		FC177BEC977F220E191AF37A /* ZhiBi.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = ZhiBi.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
@@ -226,6 +228,7 @@
 				B85387468E5BFF6999C7E32C /* ClueBoardView.swift */,
 				0AB87DF6723082F1EAB19FBC /* DesignSystem.swift */,
 				5314F4D05F25C0C7182B41E3 /* GlassTheme.swift */,
+				F6615822875FE4D9E8C09829 /* MarkdownPreview.swift */,
 				1CD9D1C3F2192B1CC43C7F1A /* MemoryAndCanonViews.swift */,
 				C478AA9297450472AC802936 /* OutlineView.swift */,
 				5BA7AC83AAEEDF034F757095 /* PipelineSheet.swift */,
@@ -388,6 +391,7 @@
 				169192E9D97F7D3E12DB4517 /* GlassTheme.swift in Sources */,
 				8AF11B4F365558786EB55430 /* ImportService.swift in Sources */,
 				9DDD01BC626DC50427855A12 /* MarkdownLite.swift in Sources */,
+				E654F585E3FC2A2FDCA571CD /* MarkdownPreview.swift in Sources */,
 				1242CE501B368FB6F1310BAB /* MemoryAndCanonViews.swift in Sources */,
 				9F7D0324476FBAFF5969D1AE /* MemoryHub.swift in Sources */,
 				634C28C59B79835D21C0C261 /* NovelModels.swift in Sources */,
