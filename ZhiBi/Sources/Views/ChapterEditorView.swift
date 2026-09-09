@@ -125,16 +125,7 @@ struct ChapterEditorView: View {
                 aiTasteBadge(lint)
             }
 
-            // 排版模式
-            Menu {
-                Toggle("居中稿纸版式", isOn: $proseCentered)
-                Toggle("宋体正文", isOn: $proseSerif)
-                Stepper("字号 \(Int(proseFontSize))", value: $proseFontSize, in: 12...24, step: 1)
-            } label: {
-                Image(systemName: "textformat.size")
-            }
-            .help("正文排版")
-            .accessibilityLabel("正文排版")
+            typesetMenu
 
             Button {
                 showPipeline = true
@@ -228,6 +219,19 @@ struct ChapterEditorView: View {
         .padding(.horizontal, 14)
         .padding(.vertical, 8)
         .frame(minHeight: 44)
+    }
+
+    @ViewBuilder
+    private var typesetMenu: some View {
+        Menu {
+            Toggle("居中稿纸版式", isOn: $proseCentered)
+            Toggle("宋体正文", isOn: $proseSerif)
+            Stepper("字号 \(Int(proseFontSize))", value: $proseFontSize, in: 12...24, step: 1)
+        } label: {
+            Image(systemName: "textformat.size")
+        }
+        .help("正文排版")
+        .accessibilityLabel("正文排版")
     }
 
     private func addNote() {
@@ -362,7 +366,9 @@ struct RecallSheetView: View {
     let directive: String
     @Environment(\.dismiss) private var dismiss
 
-    private var pack: ContextPack {
+    @State private var pack: ContextPack?
+
+    private func buildPack() -> ContextPack {
         ContextPackBuilder.build(store: store, forChapter: chapterNumber, budget: vm.config.contextTokenBudget)
     }
 
@@ -371,8 +377,10 @@ struct RecallSheetView: View {
             HStack {
                 Image(systemName: "arrow.triangle.pull")
                 Text("第\(chapterNumber)章 写作召回包").font(.headline)
-                Text("≈\(pack.approxTokens) tokens · 确定性组装 · 上章结尾/近章摘要/贯穿线/活跃伏笔/角色状态")
-                    .font(.caption).foregroundStyle(.tertiary)
+                if let p = pack {
+                    Text("≈\(p.approxTokens) tokens · 确定性组装 · 上章结尾/近章摘要/贯穿线/活跃伏笔/角色状态")
+                        .font(.caption).foregroundStyle(.tertiary)
+                }
                 Spacer()
                 Button("生成写作备忘（提案）") {
                     Task {
@@ -388,7 +396,7 @@ struct RecallSheetView: View {
             Divider()
             ScrollView {
                 VStack(alignment: .leading, spacing: 10) {
-                    ForEach(pack.blocks) { block in
+                    ForEach(pack?.blocks ?? []) { block in
                         VStack(alignment: .leading, spacing: 4) {
                             HStack(spacing: 6) {
                                 Text(block.title).font(.caption.bold())
@@ -413,6 +421,7 @@ struct RecallSheetView: View {
             }
         }
         .frame(width: 720, height: 560)
+        .onAppear { if pack == nil { pack = buildPack() } }
     }
 }
 

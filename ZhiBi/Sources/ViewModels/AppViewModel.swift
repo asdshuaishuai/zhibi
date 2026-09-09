@@ -43,15 +43,17 @@ final class AppViewModel: ObservableObject {
         appearanceMode = AppearanceMode(rawValue: UserDefaults.standard.string(forKey: "appearanceMode") ?? "") ?? .system
     }
 
-    /// 书架卡牌：换封面风格（直接改 project.json，返回新风格序号）
-    func cycleCoverStyle(for ref: ProjectRef) -> Int? {
+    /// 书架卡牌：换封面风格（盘 IO 在后台线程，返回新风格序号）
+    func cycleCoverStyle(for ref: ProjectRef) async -> Int? {
         let file = ProjectLayout.projectFile(ref.url)
-        guard var project = try? Disk.readJSON(NovelProject.self, from: file) else { return nil }
-        let base = project.coverStyle ?? CoverStyle.defaultIndex(for: project.title)
-        let next = (base + 1) % CoverStyle.count
-        project.coverStyle = next
-        do { try Disk.writeJSON(project, to: file) } catch { return nil }
-        return next
+        return await Task.detached(priority: .utility) {
+            guard var project = try? Disk.readJSON(NovelProject.self, from: file) else { return nil }
+            let base = project.coverStyle ?? CoverStyle.defaultIndex(for: project.title)
+            let next = (base + 1) % CoverStyle.count
+            project.coverStyle = next
+            do { try Disk.writeJSON(project, to: file) } catch { return nil }
+            return next
+        }.value
     }
 
     /// 工具栏一键循环：跟随系统 → 浅色 → 深色

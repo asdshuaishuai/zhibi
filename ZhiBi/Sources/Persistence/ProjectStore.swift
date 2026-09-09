@@ -188,10 +188,14 @@ final class ProjectStore: ObservableObject {
         saveSoon()
     }
 
-    static func todayKey(_ date: Date = Date()) -> String {
+    private static let todayKeyFormatter: DateFormatter = {
         let f = DateFormatter()
         f.dateFormat = "yyyy-MM-dd"
-        return f.string(from: date)
+        return f
+    }()
+
+    static func todayKey(_ date: Date = Date()) -> String {
+        Self.todayKeyFormatter.string(from: date)
     }
 
     private func accumulateDailyWords(_ delta: Int) {

@@ -13,19 +13,25 @@ struct StatsView: View {
         let isToday: Bool
     }
 
-    private var bars: [DayBar] {
-        let daily = store.project.dailyWords ?? [:]
+    private static let keyFormatter: DateFormatter = {
         let f = DateFormatter()
         f.dateFormat = "yyyy-MM-dd"
-        let labelF = DateFormatter()
-        labelF.dateFormat = "M/d"
+        return f
+    }()
+    private static let labelFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "M/d"
+        return f
+    }()
+
+    private var bars: [DayBar] {
+        let daily = store.project.dailyWords ?? [:]
         var out: [DayBar] = []
         for offset in stride(from: 13, through: 0, by: -1) {
             let date = Calendar.current.date(byAdding: .day, value: -offset, to: Date()) ?? Date()
-            let key = ProjectStore.todayKey(date)
             out.append(DayBar(id: offset,
-                              label: labelF.string(from: date),
-                              words: daily[key] ?? 0,
+                              label: Self.labelFormatter.string(from: date),
+                              words: daily[Self.keyFormatter.string(from: date)] ?? 0,
                               isToday: offset == 0))
         }
         return out

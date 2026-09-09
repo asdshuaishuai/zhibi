@@ -172,7 +172,7 @@ struct WelcomeView: View {
                         ShelfBookCard(ref: ref, onOpen: { vm.openProject(ref) },
                                       onReveal: { NSWorkspace.shared.activateFileViewerSelecting([ref.url]) },
                                       onDelete: { projectPendingDelete = ref },
-                                      onCycleStyle: { vm.cycleCoverStyle(for: ref) ?? 0 })
+                                      onCycleStyle: { await vm.cycleCoverStyle(for: ref) })
                     }
                 }
                 .padding(.horizontal, 26)
@@ -191,7 +191,7 @@ struct WelcomeView: View {
                                 ShelfBookCard(ref: ref, onOpen: { vm.openProject(ref) },
                                               onReveal: { NSWorkspace.shared.activateFileViewerSelecting([ref.url]) },
                                               onDelete: { projectPendingDelete = ref },
-                                              onCycleStyle: { vm.cycleCoverStyle(for: ref) ?? 0 })
+                                              onCycleStyle: { await vm.cycleCoverStyle(for: ref) })
                             }
                         }
                         .padding(.horizontal, 26)
@@ -263,7 +263,7 @@ struct ShelfBookCard: View {
     let onOpen: () -> Void
     let onReveal: () -> Void
     let onDelete: () -> Void
-    var onCycleStyle: () -> Int? = { nil }
+    var onCycleStyle: () async -> Int? = { nil }
 
     @State private var stats: ShelfStats?
     @State private var style: Int?
@@ -330,7 +330,7 @@ struct ShelfBookCard: View {
             .overlay(alignment: .topTrailing) {
                 if hovering {
                     Button {
-                        style = onCycleStyle()
+                        Task { style = await onCycleStyle() }
                     } label: {
                         Image(systemName: "arrow.triangle.2.circlepath")
                             .font(.system(size: 10, weight: .semibold))

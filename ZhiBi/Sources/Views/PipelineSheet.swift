@@ -20,6 +20,7 @@ struct PipelineSheet: View {
     var body: some View {
         let currentDraft = draft
         let currentProposal = latestDraft
+        let draftWords = currentDraft.map { WordStats.chineseCount($0.text) }
         return VStack(spacing: 0) {
             header
             Divider()
@@ -68,19 +69,16 @@ struct PipelineSheet: View {
                         if let draft = currentDraft {
                             HStack(spacing: 8) {
                                 ZBChip(text: "v\(draft.version)", filled: true)
-                                Text("\(WordStats.chineseCount(draft.text)) 字").font(.caption2).foregroundStyle(.tertiary)
+                                Text("\(draftWords ?? 0) 字").font(.caption2).foregroundStyle(.tertiary)
                                 Spacer()
                             }
-                            ScrollView {
-                                Text(draft.text)
-                                    .font(.callout)
-                                    .textSelection(.enabled)
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-                                    .padding(10)
-                            }
-                            .frame(height: 220)
-                            .background(Color(nsColor: .underPageBackgroundColor))
-                            .cornerRadius(8)
+                            Text(draft.text)
+                                .font(.callout)
+                                .textSelection(.enabled)
+                                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                                .padding(10)
+                                .background(Color(nsColor: .underPageBackgroundColor))
+                                .cornerRadius(8)
                         } else {
                             emptyHint("还没有草稿——先点上面的「写草稿」。")
                         }
@@ -135,7 +133,7 @@ struct PipelineSheet: View {
                             Text("满意了？采纳入库").font(.headline)
                             Spacer()
                             if let draft = currentDraft {
-                                Text("草稿 \(WordStats.chineseCount(currentDraft?.text ?? "")) 字").font(.caption).foregroundStyle(.secondary)
+                                Text("草稿 \(draftWords ?? 0) 字").font(.caption).foregroundStyle(.secondary)
                             }
                         }
                         HStack {
