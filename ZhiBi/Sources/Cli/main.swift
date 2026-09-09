@@ -46,7 +46,7 @@ func check(_ name: String, _ condition: Bool, _ detail: String = "") {
 // MARK: - 1. 字数统计
 
 let sample = "他捏碎了手中的茶杯，滚烫的茶水流过指缝。"
-check("中文字数统计", WordStats.chineseCount(sample) == 18, "实际 \(WordStats.chineseCount(sample))")
+check("中文字数统计（含标点，网文口径）", WordStats.chineseCount(sample) == 20, "实际 \(WordStats.chineseCount(sample))")
 
 // MARK: - 2. AI 味确定性扫描
 
@@ -244,6 +244,27 @@ func markdownLiteTests() {
     check("引用块往返", back.contains("> 古籍有云：命外无命。"))
 }
 MainActor.assumeIsolated { markdownLiteTests() }
+
+// MARK: - 12. 本轮评审回归：单换行不熔段 / 字面 * 转义 / 无空格标题
+
+MainActor.assumeIsolated {
+    let font = NSFont.systemFont(ofSize: 15)
+    // 单换行不熔段：往返后每行独立成段
+    let singleNL = "第一行内容。\n第二行内容。"
+    let back1 = MarkdownLite.serialize(MarkdownLite.render(singleNL, bodyFont: font, textColor: .textColor))
+    check("单换行不熔段", back1.contains("第一行内容。") && back1.contains("第二行内容。") && back1 != singleNL)
+
+    // 字面 * 用 \* 转义：往返稳定（Markdown 语义，* 本身是定界符）
+    let star = "他算出 3\\*4=12。"
+    let back2 = MarkdownLite.serialize(MarkdownLite.render(star, bodyFont: font, textColor: .textColor))
+    let again2 = MarkdownLite.serialize(MarkdownLite.render(back2, bodyFont: font, textColor: .textColor))
+    check("转义 * 往返稳定", back2 == star + "\n" && again2 == back2, "得到 [\(back2)]")
+
+    // 无空格标题（##第二章）往返
+    let nospace = "##第二章"
+    let back3 = MarkdownLite.serialize(MarkdownLite.render(nospace, bodyFont: font, textColor: .textColor))
+    check("无空格标题识别", back3.hasPrefix("## 第二章"), "得到 [\(back3)]")
+}
 
 // MARK: - 11. 每日字数账本（写作计入 / 导入不计入 / 删字扣回）
 

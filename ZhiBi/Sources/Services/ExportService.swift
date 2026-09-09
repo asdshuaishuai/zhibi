@@ -24,7 +24,7 @@ enum ExportService {
         let stamp = ProjectStore.fileStamp()
         let dir = exportRoot().appendingPathComponent("\(ProjectLayout.safeFileName(store.project.title))-合并稿", isDirectory: true)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        let fileURL = dir.appendingPathComponent("\(store.project.title).\(format)")
+        let fileURL = dir.appendingPathComponent("\(ProjectLayout.safeFileName(store.project.title)).\(format)")
 
         var out = "# \(store.project.title)\n\n"
         if !store.project.genre.isEmpty { out += "题材：\(store.project.genre)\n\n" }

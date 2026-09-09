@@ -22,58 +22,38 @@ enum MarkdownLite {
 
     static func render(_ markdown: String, bodyFont: NSFont, textColor: NSColor) -> NSAttributedString {
         let out = NSMutableAttributedString()
-        let lines = markdown.replacingOccurrences(of: "\r\n", with: "\n").components(separatedBy: "\n")
-        var paragraphBuffer: [String] = []
-
         func appendBlock(_ attr: NSAttributedString) {
             out.append(attr)
             out.append(NSAttributedString(string: "\n"))
         }
-
-        func flushParagraph() {
-            guard !paragraphBuffer.isEmpty else { return }
-            appendBlock(inline(paragraphBuffer.joined(separator: ""), kind: .paragraph, level: 0,
-                               baseFont: bodyFont, textColor: textColor))
-            paragraphBuffer = []
-        }
-
+        let lines = markdown.replacingOccurrences(of: "\r\n", with: "\n").components(separatedBy: "\n")
         for line in lines {
-            // 只剥半角空白判空；全角空格缩进属于正文内容
+            // 只剥半角空白判空；全角空格缩进属于正文内容。
+            // 单换行不熔段：每个非空行独立成段（中文 txt 常见单换行分段形态）
             let trimmed = line.trimmingCharacters(in: CharacterSet(charactersIn: " \t"))
             if trimmed.isEmpty {
-                flushParagraph()
                 continue
             }
-            let headingLevel = trimmed.prefix(while: { $0 == "#" }).count
-            if headingLevel >= 3, trimmed.dropFirst(headingLevel).hasPrefix(" ") {
-                flushParagraph()
-                appendBlock(inline(String(trimmed.dropFirst(headingLevel + 1)), kind: .heading, level: min(headingLevel, 6),
-                                   baseFont: themedFont(base: bodyFont, bold: true, size: bodyFont.pointSize * 1.15),
-                                   textColor: textColor))
-            } else if headingLevel == 2, trimmed.hasPrefix("## ") {
-                flushParagraph()
-                appendBlock(inline(String(trimmed.dropFirst(3)), kind: .heading, level: 2,
-                                   baseFont: themedFont(base: bodyFont, bold: true, size: bodyFont.pointSize * 1.22),
-                                   textColor: textColor))
-            } else if headingLevel == 1, trimmed.hasPrefix("# ") {
-                flushParagraph()
-                appendBlock(inline(String(trimmed.dropFirst(2)), kind: .heading, level: 1,
-                                   baseFont: themedFont(base: bodyFont, bold: true, size: bodyFont.pointSize * 1.42),
+            let headingPrefix = trimmed.prefix(while: { $0 == "#" })
+            let headingLevel = headingPrefix.count
+            let headingRest = trimmed.dropFirst(headingLevel).drop(while: { $0 == " " })
+            if (1...6).contains(headingLevel), !headingRest.isEmpty {
+                appendBlock(inline(String(headingRest), kind: .heading, level: headingLevel,
+                                   baseFont: themedFont(base: bodyFont, bold: true,
+                                                        size: bodyFont.pointSize * (headingLevel == 1 ? 1.42 : 1.2)),
                                    textColor: textColor))
             } else if trimmed == "---" || trimmed == "———" {
-                flushParagraph()
                 let rule = inline("────────", kind: .rule, level: 0,
                                   baseFont: bodyFont, textColor: textColor.withAlphaComponent(0.5))
                 appendBlock(rule)
             } else if trimmed.hasPrefix("> ") {
-                flushParagraph()
                 appendBlock(inline(String(trimmed.dropFirst(2)), kind: .quote, level: 0,
                                    baseFont: bodyFont, textColor: textColor.withAlphaComponent(0.78)))
             } else {
-                paragraphBuffer.append(trimmed)
+                appendBlock(inline(trimmed, kind: .paragraph, level: 0,
+                                   baseFont: bodyFont, textColor: textColor))
             }
         }
-        flushParagraph()
         return out
     }
 
@@ -113,6 +93,15 @@ enum MarkdownLite {
         var currentIndex = text.startIndex
         while currentIndex < text.endIndex {
             let ch = text[currentIndex]
+            if ch == "\\" {
+                // \* → 字面星号，不作为定界符
+                let next = text.index(after: currentIndex)
+                if next < text.endIndex, text[next] == "*" {
+                    buffer.append("*")
+                    currentIndex = text.index(currentIndex, offsetBy: 2)
+                    continue
+                }
+            }
             if ch == "*" {
                 let next = text.index(after: currentIndex)
                 let next2 = next < text.endIndex ? text.index(after: next) : nil
@@ -208,28 +197,31 @@ enum MarkdownLite {
     }
 
     private static func runsMarkdown(_ attributed: NSAttributedString, range: NSRange) -> String {
+        func escape(_ t: String) -> String {
+            t.replacingOccurrences(of: "\\", with: "\\\\")
+             .replacingOccurrences(of: "*", with: "\\*")
+        }
         var out = ""
         attributed.enumerateAttribute(.font, in: range) { value, subRange, stop in
             let text = (attributed.string as NSString).substring(with: subRange)
             guard let font = value as? NSFont, !text.isEmpty else {
-                out += text
+                out += escape(text)
                 return
             }
             let traits = font.fontDescriptor.symbolicTraits
             let bold = traits.contains(.bold)
             let italic = traits.contains(.italic)
             if bold && italic {
-                out += "***" + text + "***"
+                out += "***" + escape(text) + "***"
             } else if bold {
-                out += "**" + text + "**"
+                out += "**" + escape(text) + "**"
             } else if italic {
-                out += "*" + text + "*"
+                out += "*" + escape(text) + "*"
             } else {
-                out += text
+                out += escape(text)
             }
         }
         while out.contains("****") { out = out.replacingOccurrences(of: "****", with: "") }
-        while out.contains("** *") { out = out.replacingOccurrences(of: "** *", with: "***") }
         return out
     }
 

@@ -204,6 +204,7 @@ struct ChapterEditorView: View {
             } label: {
                 Label("搭骨架", systemImage: "bone")
             }
+            .disabled(vm.ai.running)
             .help("AI 提出本章骨架提案，由你修改批准；正文由你亲笔完成")
 
             Button {
@@ -211,6 +212,7 @@ struct ChapterEditorView: View {
             } label: {
                 Label("验证", systemImage: "checkmark.seal")
             }
+            .disabled(vm.ai.running)
             .keyboardShortcut("v", modifiers: [.command, .shift])
             .help("一键验证：确定性体检 + AI 五类客观错误审校（⌘⇧V）")
 
@@ -219,6 +221,7 @@ struct ChapterEditorView: View {
             } label: {
                 Label("去AI味", systemImage: "sparkles")
             }
+            .disabled(vm.ai.running)
             .keyboardShortcut("d", modifiers: [.command, .shift])
             .help("去AI味：本地扫描 + 逐处修改建议（⌘⇧D）")
         }

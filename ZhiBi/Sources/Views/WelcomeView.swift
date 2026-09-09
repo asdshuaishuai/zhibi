@@ -370,11 +370,11 @@ struct ShelfBookCard: View {
         return try? Disk.readJSON(NovelProject.self, from: file)
     }
 
-    private static var shelfFormatter: DateFormatter {
+    private static let shelfFormatter: DateFormatter = {
         let f = DateFormatter()
         f.dateFormat = "M月d日"
         return f
-    }
+    }()
 
     /// 轻量统计：读各章 meta.json 的缓存字数（异步，不卡书架）
     static func loadStats(url: URL) -> ShelfStats {

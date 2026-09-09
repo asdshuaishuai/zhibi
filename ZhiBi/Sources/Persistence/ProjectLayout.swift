@@ -1,12 +1,14 @@
 import Foundation
 
 enum WordStats {
-    /// 中文字符数（网文计字口径：CJK + 中文标点之外的实义字符；这里按主流口径只数 CJK 与全角字符）
+    /// 中文字符数（网文平台口径：CJK 汉字 + 中文标点，与起点/番茄展示字数一致）
     static func chineseCount(_ text: String) -> Int {
         text.unicodeScalars.filter { scalar in
-            (0x4E00...0x9FFF).contains(scalar.value)
-                || (0x3400...0x4DBF).contains(scalar.value)
-                || (0xF900...0xFAFF).contains(scalar.value)
+            (0x4E00...0x9FFF).contains(scalar.value)      // CJK 基本区
+                || (0x3400...0x4DBF).contains(scalar.value) // 扩展 A
+                || (0xF900...0xFAFF).contains(scalar.value) // 兼容表意
+                || (0x3000...0x303F).contains(scalar.value) // CJK 标点（。、「」等）
+                || (0xFF00...0xFFEF).contains(scalar.value) // 全角标点/符号
         }.count
     }
 

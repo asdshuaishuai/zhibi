@@ -56,6 +56,14 @@ struct RichProseEditor: NSViewRepresentable {
         let coordinator = context.coordinator
         coordinator.parent = self
 
+        // 排版设置变化（宋体/字号）→ 重新渲染已有正文
+        if coordinator.lastFont != baseFont {
+            coordinator.lastFont = baseFont
+            coordinator.reload(markdown: coordinator.lastSerialized, baseFont: baseFont, textColor: textColor)
+            coordinator.scheduleHighlights()
+            return
+        }
+
         // 外部值变化（切章/加载/快照回滚）→ 重新渲染
         if coordinator.lastSerialized != markdown {
             let selected = tv.selectedRange()
@@ -64,10 +72,11 @@ struct RichProseEditor: NSViewRepresentable {
             let maxLoc = max(0, (tv.string as NSString).length)
             tv.setSelectedRange(NSRange(location: min(selected.location, maxLoc), length: 0))
             coordinator.scheduleHighlights()
+            return
         }
 
-        // 编辑后重算高亮（防抖）
-        coordinator.scheduleHighlights()
+        // 文本与词表都未变时不重排高亮——断开自馈循环
+        coordinator.scheduleHighlightsIfChanged()
     }
 
     @MainActor
@@ -75,6 +84,10 @@ struct RichProseEditor: NSViewRepresentable {
         var parent: RichProseEditor
         weak var textView: NSTextView?
         var lastSerialized: String = ""
+        var lastFont: NSFont?
+        private var lastNeedles: [String] = []
+        private var lastHighlightText: String = ""
+        private var lastLintSignature: String = ""
         private var highlightWork: DispatchWorkItem?
 
         init(_ parent: RichProseEditor) {
@@ -99,6 +112,16 @@ struct RichProseEditor: NSViewRepresentable {
         // MARK: 高亮（临时属性，不落盘）
 
         func scheduleHighlights() {
+            scheduleHighlightsIfChanged(force: true)
+        }
+
+        /// 文本与词表都未变化时不排程——断开 onLint→重渲染→重扫描的自馈循环
+        func scheduleHighlightsIfChanged(force: Bool = false) {
+            let text = textView?.string ?? ""
+            let needles = parent.clueNeedles
+            if !force, text == lastHighlightText, needles == lastNeedles { return }
+            lastHighlightText = text
+            lastNeedles = needles
             highlightWork?.cancel()
             let work = DispatchWorkItem { [weak self] in self?.applyHighlights() }
             highlightWork = work
@@ -108,13 +131,14 @@ struct RichProseEditor: NSViewRepresentable {
         private func applyHighlights() {
             guard let tv = textView, let lm = tv.layoutManager else { return }
             let text = tv.string
-            // 扫描放后台：完整 LLMint 扫描与高亮词范围一次算完，主线程只落临时属性
-            DispatchQueue.global(qos: .utility).async { [weak self] in
+            let needles = parent.clueNeedles
+            // 扫描放后台：完整扫描与高亮词范围一次算完，主线程只落临时属性
+            DispatchQueue.global(qos: .utility).async {
                 let summary = AILint.scan(text)
-                let marks = Self.highlightRanges(text: text, clueNeedles: self?.parent.clueNeedles ?? [])
-                DispatchQueue.main.async {
+                let marks = Self.highlightRanges(text: text, clueNeedles: needles)
+                DispatchQueue.main.async { [weak self] in
                     guard let self, let tv = self.textView, let lm = tv.layoutManager,
-                          (tv.string as NSString).length == (text as NSString).length else { return }
+                          tv.string == text else { return }
                     let ns = tv.string as NSString
                     let full = NSRange(location: 0, length: ns.length)
                     lm.removeTemporaryAttribute(.backgroundColor, forCharacterRange: full)
@@ -130,7 +154,12 @@ struct RichProseEditor: NSViewRepresentable {
                             lm.addTemporaryAttribute(.underlineColor, value: markUnderlineColor, forCharacterRange: range)
                         }
                     }
-                    self.parent.onLint?(summary)
+                    // 签名去重：结果无变化不回写，避免 onLint→重渲染→重扫描的自馈循环
+                    let signature = "\(summary.grade)|\(summary.topIssues.map { "\($0.kind):\($0.count)" }.joined(separator: ","))|\(summary.wordCount)"
+                    if signature != self.lastLintSignature {
+                        self.lastLintSignature = signature
+                        self.parent.onLint?(summary)
+                    }
                 }
             }
         }
@@ -164,6 +193,7 @@ struct RichProseEditor: NSViewRepresentable {
             let rendered = MarkdownLite.render(markdown, bodyFont: baseFont, textColor: textColor)
             tv.textStorage?.setAttributedString(rendered)
             tv.font = baseFont
+            lastFont = baseFont
             let ps = NSMutableParagraphStyle()
             ps.lineSpacing = 4.5
             ps.paragraphSpacing = 11

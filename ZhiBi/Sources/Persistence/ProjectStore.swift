@@ -102,22 +102,47 @@ final class ProjectStore: ObservableObject {
 
     func saveNow() throws {
         // 章节正文最先写——只落盘脏章节，它是作者最不可再生的数据
+        // meta.json 不再内嵌正文（prose.md 才是权威），磁盘减半
+        struct MetaChapter: Codable {
+            var id: UUID
+            var number: Int
+            var title: String
+            var status: ChapterStatus
+            var skeleton: ChapterSkeleton?
+            var summary: ChapterSummary?
+            var notes: [String]?
+            var cachedWords: Int?
+            var updatedAt: Date
+        }
         for ch in chapters where dirtyChapters.contains(ch.number) {
-            try Disk.writeJSON(ch, to: chapterMetaURL(ch.number))
+            let meta = MetaChapter(id: ch.id, number: ch.number, title: ch.title, status: ch.status,
+                                   skeleton: ch.skeleton, summary: ch.summary, notes: ch.notes,
+                                   cachedWords: ch.cachedWords, updatedAt: ch.updatedAt)
+            try Disk.writeJSON(meta, to: chapterMetaURL(ch.number))
             try Disk.write(Data(ch.prose.utf8), to: ProjectLayout.proseFile(rootURL, number: ch.number))
         }
         try Disk.writeJSON(project, to: ProjectLayout.projectFile(rootURL))
         try Disk.writeJSON(canonSections, to: ProjectLayout.canonDir(rootURL).appendingPathComponent("sections.json"))
-        // canon 每节同步导出为可手改的 md（派生视图）；文件名安全化，并清理已删除节的孤儿文件
-        let liveNames = Set(canonSections.map { ProjectLayout.safeFileName($0.title) + ".md" })
+        // canon 每节同步导出为可手改的 md（派生视图）；文件名安全化；
+        // 孤儿 md（用户手工放入）自动导入为新节，绝不静默删除
         let canonDir = ProjectLayout.canonDir(rootURL)
-        if let existing = try? FileManager.default.contentsOfDirectory(at: canonDir, includingPropertiesForKeys: nil) {
-            for f in existing where f.pathExtension == "md" && !liveNames.contains(f.lastPathComponent) {
-                try? FileManager.default.removeItem(at: f)
-            }
-        }
+        var usedNames = Set<String>()
         for section in canonSections {
-            try Disk.write(Data(section.content.utf8), to: canonDir.appendingPathComponent(ProjectLayout.safeFileName(section.title) + ".md"))
+            var name = ProjectLayout.safeFileName(section.title)
+            while usedNames.contains(name + ".md") {
+                name += "-x"
+            }
+            usedNames.insert(name + ".md")
+            try Disk.write(Data(section.content.utf8), to: canonDir.appendingPathComponent(name + ".md"))
+        }
+        if let existing = try? FileManager.default.contentsOfDirectory(at: canonDir, includingPropertiesForKeys: nil) {
+            for f in existing.sorted(by: { $0.lastPathComponent < $1.lastPathComponent })
+            where f.pathExtension == "md" && !usedNames.contains(f.lastPathComponent) {
+                if let text = try? String(contentsOf: f, encoding: .utf8) {
+                    canonSections.append(CanonSection(title: f.deletingPathExtension().lastPathComponent,
+                                                      content: text, certainty: .tentative))
+                }
+            }
         }
         let outlineDir = ProjectLayout.outlineFile(rootURL).deletingLastPathComponent()
         try Disk.writeJSON(storylines, to: outlineDir.appendingPathComponent("storylines.json"))
@@ -290,10 +315,13 @@ final class ProjectStore: ObservableObject {
             guard let n = chapter else { break }
             updateChapter(n) { $0.skeleton = sk; if $0.status == .empty { $0.status = .skeletoned } }
         case .draft(let draft):
-            // 作者采纳草稿才走到这里；覆盖前自动快照，正文永远可回滚
+            // 作者采纳草稿才走到这里；覆盖前自动快照，快照失败则中止采纳（旧稿保住）
             guard let n = chapter else { break }
             if let existing = self.chapter(n), !existing.prose.isEmpty {
-                _ = snapshotProse(chapter: n, tag: "采纳草稿前")
+                guard snapshotProse(chapter: n, tag: "采纳草稿前") != nil else {
+                    lastSaveError = "采纳中止：快照写入失败（检查磁盘/权限），草稿仍在收件箱"
+                    return
+                }
             }
             updateChapter(n) {
                 $0.prose = draft.text

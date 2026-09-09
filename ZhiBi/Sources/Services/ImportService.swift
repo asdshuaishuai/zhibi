@@ -53,6 +53,7 @@ enum ImportService {
             if let files = try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil) {
                 for f in files.sorted(by: { $0.lastPathComponent < $1.lastPathComponent }) where ["md", "txt"].contains(f.pathExtension.lowercased()) {
                     guard f.lastPathComponent.hasPrefix("_") == false else { continue }
+                    if (try? f.resourceValues(forKeys: [.isSymbolicLinkKey]))?.isSymbolicLink == true { continue }
                     summary.items.append(ImportItem(kind: kind, title: f.deletingPathExtension().lastPathComponent,
                                                     content: Disk.readText(f), sourceName: "\(dirName)/\(f.lastPathComponent)"))
                 }
@@ -76,6 +77,7 @@ enum ImportService {
         let proseDir = url.appendingPathComponent("正文", isDirectory: true)
         if let files = try? fm.contentsOfDirectory(at: proseDir, includingPropertiesForKeys: nil) {
             for f in files.sorted(by: { $0.lastPathComponent < $1.lastPathComponent }) where ["md", "txt"].contains(f.pathExtension.lowercased()) {
+                if (try? f.resourceValues(forKeys: [.isSymbolicLinkKey]))?.isSymbolicLink == true { continue }
                 if let (num, title) = parseChapterName(f.deletingPathExtension().lastPathComponent) {
                     summary.items.append(ImportItem(kind: .chapter, chapterNumber: num, title: title,
                                                     content: Disk.readText(f), sourceName: "正文/\(f.lastPathComponent)"))
@@ -145,6 +147,7 @@ enum ImportService {
         // generic 兜底：根目录下的散文件
         if let files = try? fm.contentsOfDirectory(at: url, includingPropertiesForKeys: nil) {
             for f in files.sorted(by: { $0.lastPathComponent < $1.lastPathComponent }) where ["md", "txt"].contains(f.pathExtension.lowercased()) {
+                if (try? f.resourceValues(forKeys: [.isSymbolicLinkKey]))?.isSymbolicLink == true { continue }
                 let name = f.deletingPathExtension().lastPathComponent
                 if let (num, title) = parseChapterName(name) {
                     summary.items.append(ImportItem(kind: .chapter, chapterNumber: num, title: title,

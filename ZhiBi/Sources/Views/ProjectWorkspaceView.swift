@@ -404,8 +404,3 @@ struct AgentStatusStrip: View {
         .background(Color.orange.opacity(0.08))
     }
 }
-
-struct ChapterItemID: Hashable {
-    let number: Int
-    init(_ n: Int) { number = n }
-}

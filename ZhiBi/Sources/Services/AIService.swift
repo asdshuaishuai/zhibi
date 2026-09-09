@@ -316,7 +316,9 @@ enum JSONValue: Decodable {
         }
         switch self {
         case .string(let s): return encode(s)
-        case .number(let d): return d.truncatingRemainder(dividingBy: 1) == 0 ? String(Int(d)) : String(d)
+        case .number(let d):
+            if d == d.rounded(), d >= Double(Int.min), d <= Double(Int.max) { return String(Int(d)) }
+            return String(d)
         case .bool(let b): return String(b)
         case .null: return "null"
         case .object(let o): return encode(Dictionary(uniqueKeysWithValues: o.map { ($0.key, $0.value.anyValue) }))
