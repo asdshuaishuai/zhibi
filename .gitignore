@@ -1,0 +1,7 @@
+.DS_Store
+*.xcuserdatad/
+xcuserdata/
+*.xcresult
+build/
+DerivedData/
+.playwright-mcp/

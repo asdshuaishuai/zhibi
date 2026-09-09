@@ -1,0 +1,293 @@
+import Foundation
+
+// MARK: - Prompt 库
+// 综合 InkOS（规划师/写手契约/结算铁律）、NarraCat（任务书/五类客观审校）、
+// oh-story（细纲契约/三档授权/7 Gate）与 Humanizer v4.1（去AI味方法论）。
+
+enum PromptLibrary {
+    /// 通用人格：编辑搭档，不写正文，产出皆为提案
+    static let persona = """
+    你是一本中文小说的编辑搭档。这本书由作者亲笔写作；你的职责是规划、记账、查错、给建议。
+    铁律：
+    1. 你永远不写正文。你的所有产出都通过 propose_* 工具登记为"提案"，由作者在收件箱里确认、修改或拒绝。
+    2. 完成与否以提案落盘为准，不要在文字里声称"已完成/已保存/已采纳"。
+    3. 对作者说话只用作者词汇（人话），不要输出字段名、英文枚举、工程黑话。
+    4. 做到就说做到，没做到就说没做到，不用"已充分考虑"这类话糊弄。
+    """
+
+    static func systemInstruction(for capability: AICapability) -> String {
+        persona + "\n\n当前任务：" + taskBrief(for: capability)
+    }
+
+    private static func taskBrief(for capability: AICapability) -> String {
+        switch capability {
+        case .outlineTimeline:
+            return "构建核心大纲：故事线 + 事件时间线。用 propose_storylines 与 propose_outline_events 提案。"
+        case .clueLedger:
+            return "盘点伏笔/线索台账。用 propose_clues 提案。"
+        case .chapterSkeleton:
+            return "为指定章节搭骨架。用 propose_skeleton 提案。"
+        case .chapterDraft:
+            return "按作者主线与骨架撰写整章草稿，用 propose_draft 提交全文。这是提案：作者会审查并给修改意见，采纳前不进正文。"
+        case .chapterRevise:
+            return "按作者修改意见修订草稿，用 propose_draft 提交修订后的完整全文（新版本，不是补丁）。"
+        case .memoryExtract:
+            return "从作者刚写完的正文提取记忆包。用 propose_memory 提案。"
+        case .validation:
+            return "对指定章节做一致性审校。用 propose_validation 提案。"
+        case .deslop:
+            return "对指定章节做去AI味诊断并给逐处修改建议。用 propose_deslop 提案。"
+        case .recallMemo:
+            return "基于上下文包给作者写本章备忘。用 propose_memo 提案。"
+        }
+    }
+
+    // MARK: - 大纲时间线
+
+    static func outlineTimelineTask(premise: String, canon: String, notes: String, targetChapters: Int) -> String {
+        """
+        请基于以下材料构建这本书的核心大纲。
+
+        ## 书籍信息
+        书名/题材/一句话核心：\(premise)
+        目标体量：约 \(targetChapters) 章
+        作者补充：\(notes.isEmpty ? "（无）" : notes)
+
+        ## 已有设定
+        \(canon.isEmpty ? "（暂无设定文档）" : String(canon.prefix(6000)))
+
+        ## 要求（InkOS 规划纪律）
+        1. 先提故事线（propose_storylines）：一条主线 + 至多 3 条重要支线；贯穿全书的主线标 is_through_line。
+        2. 再提事件时间线（propose_outline_events）：8-20 个关键事件，覆盖开篇期(10-15%)→发展期(50-60%)→高潮期(20-25%)→收尾期(5-10%)。
+        3. 每个事件必须写两条：objective_fact 是"作者真相"（客观发生了什么，含隐瞒的底牌）；reader_knowledge 是"读者已知"（读者此刻被告知了什么）。未揭晓的真相 revealed=false——这是悬念管理的基础。
+        4. 主动制造"还没兑现但快要兑现"的缺口；重大反转要有前置伏笔位。
+        5. 赌注递增：每个阶段的核心冲突比上一阶段更重。
+        """
+    }
+
+    // MARK: - 章节骨架（InkOS 规划师 memo 精髓）
+
+    static func chapterSkeletonTask(chapter n: Int, chapterTitle: String, pack: ContextPack, authorDirective: String) -> String {
+        """
+        请为第\(n)章「\(chapterTitle)」搭骨架。你不写正文——你只规划这章要完成什么、兑现什么、不要做什么。
+
+        ## 上下文（宿主已按预算组装，可信）
+        \(pack.asText)
+
+        ## 作者对本章的直接要求（最高优先级）
+        \(authorDirective.isEmpty ? "（无，按大纲与上下文推进）" : authorDirective)
+
+        ## 规划纪律（InkOS）
+        1. 3-6 个节拍；每节拍一句"人话"写清要发生的具体事件，不写字段名。
+        2. 每节拍给功能定位（推进/爽点/埋伏笔/收钩子/情绪/过渡）与建议字数；场景要有"当下目标→阻力→有意义的转折"。
+        3. 万物皆饵：日常/过渡节拍的每一笔也要是未来剧情的伏笔或钩子。
+        4. 揭1埋1：本章每回收一个伏笔，同时至少埋 1 个新钩子。clue_touches 里写清本章对每条活跃伏笔的动作（plant/develop/reveal）与硬要求。
+        5. 章尾钩子：写清收在什么画面、指向哪里（用具体物件/事件，不用"他不知道的是"这类空泛预告）。
+        6. 硬交付（must_deliver）：读者等了最久的那件事，本章必须兑现或明确推进。
+        7. 若上下文之间冲突，信"上一章摘要"（剧情已实际发生）。
+        8. 本节拍表是写给作者看的写前契约：把最值得作者自由发挥的地方在节拍说明里点名"放开写"，把不能碰的写进 must_avoid。
+        9. 叙事架构提示（sepia，挑着用别用满）：最大的揭露放本章后段；因果链允许断一节（某件事自有来历，不全由上一拍推出）；情绪表达行为优先、身体化只留给峰值；must_avoid 里加一条"结尾不要『决定+接纳+成长』三连"或"章末不写主题总结"。
+        """
+    }
+
+    // MARK: - 记忆提取（InkOS 结算铁律）
+
+    static func memoryExtractTask(chapter n: Int, prose: String, knownClues: String, knownFacts: String) -> String {
+        """
+        作者刚写完第\(n)章正文（人写，你是记录员）。请提取记忆包并用 propose_memory 提案。
+
+        ## 正文
+        \(String(prose.prefix(12000)))
+
+        ## 已知伏笔台账（用于判重与识别新钩子）
+        \(knownClues.isEmpty ? "（空）" : String(knownClues.prefix(1500)))
+
+        ## 已有事实（用于归一判重，别重复登记）
+        \(knownFacts.isEmpty ? "（空）" : String(knownFacts.prefix(1500)))
+
+        ## 结算铁律
+        1. 只提取正文中明确描写的事件和状态变化。不要推断、预测、脑补。正文只写到角色走到门口，就不能记"已进入房间"。
+        2. summary 200-500 字；key_events 3-8 条；emotional_tone 一句话。
+        3. facts 用三元组（主语/谓词/宾语），谓词从受控表里选；只登记会跨章影响写作的状态，鸡毛蒜皮不记。
+        4. 作者账本性质的暗线事实（读者视角还不知道的底牌）public_to_reader=false。
+        5. 顺手盘点：正文里新冒出的、值得追踪的钩子/物件/承诺 → new_clues（附种下原文片段）；已有伏笔被推进的，只登记新钩子，推进动作由作者在台账上手动记账。
+        6. 不要把"再次提到"当成新事实。
+        """
+    }
+
+    // MARK: - 验证（NarraCat 五类客观错误）
+
+    static func validationTask(chapter n: Int, prose: String, skeleton: String, pack: ContextPack, draftMode: Bool = false) -> String {
+        let header = draftMode ? "本章文本（流水线草稿，尚未入库）" : "本章正文（作者亲笔）"
+        return """
+        请对第\(n)章做一致性审校，用 propose_validation 提案。
+
+        ## \(header)
+        \(String(prose.prefix(12000)))
+
+        ## 本章骨架
+        \(skeleton.isEmpty ? "（无）" : skeleton)
+
+        ## 台账与状态（取证依据，可用 get_chapter / get_clues / get_facts / get_canon 追查其他章）
+        \(pack.asText)
+
+        ## 审校纪律
+        1. 只查五类客观错误——能指出证据、能被验证的错误：①连续性矛盾（与近章摘要/角色状态/事实冲突）②设定违背（与设定文档冲突）③骨架锚点不可识别（骨架要求的核心戏在正文里找不到，二元判定）④伏笔合同未兑现（clue_touches 要求的 plant/develop/reveal 在正文里没有可定位的兑现段）⑤物理不可能。
+        2. 每条 issue 必须带 evidence（引用正文原句）与 suggestion（怎么修）。引不出证据就不要报。
+        3. 风格、节奏、文笔好坏——一概不评、不提。那是作者的主权。
+        4. 没有问题就返回空列表。审校是找问题，不是验证正确性，但也不能为了凑数硬造问题。
+        """
+    }
+
+    // MARK: - 去AI味（三 pass：叙事架构 → 篇章推进 → 措辞；融合 Humanizer v4.1 / oh-story 7 Gate / sepia 三 pass）
+
+    /// 模型叙事层指纹（sepia model-fingerprints，节选修正面；正文由人写时仅作为审校者自身倾向提示）
+    static func narrativeFingerprint(for model: String) -> String {
+        let m = model.lowercased()
+        if m.contains("claude") {
+            return """
+            Claude 家（实测最易识别）：事件升级最平缓、叙事声音全程均匀——重写建议要让赌注和强度"跳变"；偏好尾声与闪前式收尾、安静的结尾——默认禁尾声，在动作中收束；几乎不写梦；场景氛围易滑向诡异阴郁——换气质；句法层（厂商自述）：爱用"有格调的比喻"代替直白说法——有直白说法时建议直说。
+            """
+        }
+        if m.contains("gpt") {
+            return """
+            GPT 家：八卦式闲笔多（人物登场即互嚼往事）、时间镜头拉得过长；爱加旁白解释自己刚说的话——重写建议砍闲笔、砍自我修正旁白；短句易缺失——补短句制造节奏。
+            """
+        }
+        if m.contains("gemini") {
+            return """
+            Gemini 家：环境与感官描写浓密度偏高、场景易"明信片化"——建议把第三种感官删掉；排比与列表倾向重——拆三连。
+            """
+        }
+        if m.contains("deepseek") {
+            return """
+            DeepSeek 家：前置交代重（信息在故事开动前全部发完）——建议砍简报，让信息在动作中段漏出；因果链过整——建议断一环。
+            """
+        }
+        if m.contains("kimi") || m.contains("moonshot") {
+            return """
+            Kimi 家：情绪身体化密度高、复述式对白多——重写建议把情绪转成行为或直接命名，对白只留推进信息的部分。
+            """
+        }
+        return "未知模型：不套指纹，只按通用三 pass 检查。"
+    }
+
+    static func deslopTask(chapter n: Int, prose: String, lintSummary: LintSummary, model: String) -> String {
+        """
+        作者写完了第\(n)章，请做去AI味诊断并给逐处修改建议，用 propose_deslop 提案。
+
+        ## 正文
+        \(String(prose.prefix(14000)))
+
+        ## 本地扫描已发现（可信，优先处理）
+        \(lintSummary.topIssues.map { "【\($0.kind)】\($0.detail)（\($0.count)处）" }.joined(separator: "\n"))
+        粗判：\(lintSummary.grade)｜禁用词密度 \(String(format: "%.1f", lintSummary.bannedPerKilo))/千字\(lintSummary.sentenceLengthSD.map { "｜句长标准差 \(String(format: "%.1f", $0))" } ?? "")
+
+        ## 执行模型指纹（给出重写建议时，别把你自家家族的默认倾向塞回去）
+        \(narrativeFingerprint(for: model))
+
+        ## 三 pass 流程（sepia：先架构，后篇章，最后措辞；从 deepest layer 开始修）
+
+        **Pass 1 叙事架构（最高优先，逐项核对并给建议）：**
+        1. 主题别解释：查最后三段与叙述者总结句（"这就是…""她终于明白""原来…""所谓…其实是"）——删掉或转成一个具体动作/画面；符号在文内被解释的，删解释留符号。
+        2. 单线因果过整：把本章节拍列出来，若每一拍都被上一拍严丝合缝推着走，砍断一环——把某个原因挪到幕后，或插入一件自有来历的事。回声测试：这个转折若把题材重写二十次还会出现吗（好心的陌生人/矛盾顺利化解/按点和解）？会——就换成本故事独有的转折。
+        3. 结局三脚架：主角"决定+接纳+成长"三连是数据里最强的结局指纹——至少砍掉一条腿；收尾比"感觉完整"早一拍停。
+        4. 情绪模式单一：身体感受独大（81% vs 人类 38%）是重灾区——改为行为优先、直接命名其次（"她怕"是人写的话），身体化只留全章一两个高峰；嗅觉要配给（82% vs 57%）；连续多景"景随情迁"的要拆。
+        5. 揭露后置：最大的信息留到最后；全线性叙事建议把一个场景后挪以 staging 信息。
+
+        **Pass 2 篇章推进：**段落-问题序列模板（每段抛问下段作答）；中段松垮；场景开头方式连续雷同；节奏无长短变化——打乱位置与节奏。
+
+        **Pass 3 措辞（Gate A-G + 中文校准）：**
+        A 禁用词：仿佛/一丝/眼中闪过/心中一动… → 具体动作或白描
+        B 句式：不是A而是B三毒（假靶子/同义替换/无关硬凑）、NNY、二元对比、公式化转折
+        C 情绪落地与上面 Pass1.5 一致
+        D 节奏：句长平坦处（本地扫描已标）拆一长句或并两短句，**挪词不删意思**
+        E 对话：删机械标签；对白吵具体的事（房租、刀、账），不吵哲学
+        F 结尾去升华：动作/场景收，不总结不感慨
+        G 去解释腔：删"他不知道的是""之所以…是因为"
+        中文校准专项：连接词堆叠（和/以及/同时/因此/然而 链式——删连接词让并置承接）；双音节垫话（进行讨论→讨论）；语气词（啊/吧/呢/嘛）可极少量回补（语域允许时）；三连排比留一。
+
+        ## 校准纪律（最重要）
+        - **以人类分布为基准，不要直接反转 AI 分布**：人类各项指标多在中段。每篇只挑 **3-5 种**最有力的手法动刀，其余留着——把每条规则用满会形成新的"人味指纹"。
+        - 过度修正（通篇破碎短句、全程非线性）也是指纹失败模式，发现要单独提示。
+        - 只改"怎么说"不改"说什么"；每条建议 original 必须是正文连续原文（可唯一命中），gate 标 P1架构/P2推进/P3措辞-A~G；拿不准就别报，宁可漏报。
+        - 删改总量：轻度≤15%、中度≤25%、重度≤35%。
+        """
+    }
+
+    // MARK: - 流水线：一键写作 / 按意见修复（NarraCat 任务书形态）
+
+    static func draftTask(chapter n: Int, title: String, targetWords: Int, mainline: String,
+                          skeletonText: String, pack: ContextPack, model: String) -> String {
+        """
+        请亲笔写第\(n)章整章正文，写完用 propose_draft 提交全文。
+
+        ## 一、这次委托
+        第\(n)章「\(title)」。目标字数 \(targetWords) 字左右（±20% 可接受）。
+        作者主线要求（最高优先级）：\(mainline.isEmpty ? "（未填，按骨架与大纲推进）" : mainline)
+
+        ## 二、这章的骨架（写前契约）
+        \(skeletonText.isEmpty ? "（无骨架——按主线与上下文自拟 3-5 拍结构，先在心里列好再写）" : skeletonText)
+
+        ## 三、前情与状态（宿主组装，可信）
+        \(pack.asText)
+
+        ## 四、怎么写（文风主权 + 叙事纪律）
+        文风要求：\(pack.blocks.first { $0.title.contains("文风") }?.content ?? "（作者未填，用平实有力的叙事腔）")
+        叙事纪律（写作时就做对，别留给修订）：
+        1. 情绪行为优先、直接命名其次，身体化描写只留一两个峰值；嗅觉克制。
+        2. 因果链允许断一节；至少留一个不解释的细节或松线头。
+        3. 最大的信息揭露放在本章后段。
+        4. 句长参差：长短句交错，别写等长句串；对白吵具体的事，不吵哲学。
+        5. 章末用动作/画面收，禁止总结、感慨、"他终于明白"。
+        6. 骨架里每个伏笔触点必须有可定位的兑现段（具体场景动作，不是内心提及）。
+
+        ## 五、执行模型自查（别把这些默认带进正文）
+        \(narrativeFingerprint(for: model))
+
+        ## 六、输出
+        propose_draft 一次提交全文；note 里一句话说明本稿要点。不要把正文拆进对话。
+        """
+    }
+
+    static func revisionTask(chapter n: Int, draftText: String, feedback: String,
+                             historyText: String, targetWords: Int, styleNotes: String) -> String {
+        """
+        请按作者修改意见修订第\(n)章草稿，用 propose_draft 提交修订后的完整全文。
+
+        ## 草稿原文（v 当前）
+        \(String(draftText.prefix(14000)))
+
+        ## 历次意见（都已执行过，保持住）
+        \(historyText.isEmpty ? "（无）" : historyText)
+
+        ## 本次作者意见（最高优先级，逐条落实）
+        \(feedback)
+
+        ## 修订纪律
+        1. 意见说的每一条都要落实；意见没碰的部分保持原样——不改不是你写的错，别顺手润色。
+        2. 目标字数 \(targetWords) 字左右，±20%。
+        3. 文风要求：\(styleNotes.isEmpty ? "（沿用原稿语感）" : String(styleNotes.prefix(600)))
+        4. 仍然遵守：章末动作收、不总结；情绪行为优先；句长参差。
+        5. note 一句话说明本稿改了什么。
+        """
+    }
+
+    // MARK: - 召回复忘
+
+    static func recallMemoTask(chapter n: Int, pack: ContextPack, authorDirective: String) -> String {
+        """
+        作者准备写第\(n)章。基于以下上下文包，给作者写一段 2-4 条的写作备忘（人话），用 propose_memo 提案。
+
+        ## 上下文包
+        \(pack.asText)
+
+        ## 作者刚说
+        \(authorDirective.isEmpty ? "（无）" : authorDirective)
+
+        要求：
+        1. 只说"不知道就会写错"的事：最容易踩的连续性雷、必须接住的前章情绪、本章最该兑现的伏笔账、时间线注意点。
+        2. 每条一句话，具体可执行；不要空泛鼓励，不要复述全部上下文。
+        """
+    }
+}
