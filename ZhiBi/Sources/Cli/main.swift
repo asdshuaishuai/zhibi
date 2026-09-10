@@ -30,6 +30,7 @@ if let srcIdx = argv.firstIndex(of: "--merge"), srcIdx + 3 < argv.count, argv[sr
     exit(0)
 }
 
+fputs("[p] start\n", stderr)
 var failures: [String] = []
 var passed = 0
 
@@ -43,13 +44,17 @@ func check(_ name: String, _ condition: Bool, _ detail: String = "") {
     }
 }
 
+fputs("[p] s1\n", stderr)
 // MARK: - 1. 字数统计
 
+fputs("[probe] s1 中文字数\n", stderr)
 let sample = "他捏碎了手中的茶杯，滚烫的茶水流过指缝。"
 check("中文字数统计（含标点，网文口径）", WordStats.chineseCount(sample) == 20, "实际 \(WordStats.chineseCount(sample))")
 
+fputs("[p] s2\n", stderr)
 // MARK: - 2. AI 味确定性扫描
 
+fputs("[probe] s2 AI味扫描\n", stderr)
 let aiFlavored = """
     他知道，这一切都来不及了。他的眼中闪过一丝悲伤，仿佛整个世界都失去了颜色。他的心中涌起一股暖流。
     他缓缓地深吸一口气，声音不大，却带着一种不容置疑的力量。
@@ -72,8 +77,10 @@ let humanProse = """
 let lintHuman = AILint.scan(humanProse)
 check("干净文本不被误伤", lintHuman.grade == "轻度" && lintHuman.bannedPerKilo < 2, "grade=\(lintHuman.grade) 密度=\(lintHuman.bannedPerKilo)")
 
+fputs("[p] s3\n", stderr)
 // MARK: - 3. 章节名解析
 
+fputs("[probe] s3 章节名解析\n", stderr)
 check("解析『第001章_血夜』", ImportService.parseChapterName("第001章_血夜")?.0 == 1 && ImportService.parseChapterName("第001章_血夜")?.1 == "血夜")
 check("解析『第 12 章 风起』", ImportService.parseChapterName("第 12 章 风起")?.0 == 12)
 check("解析全角『第３章』", ImportService.parseChapterName("第３章")?.0 == 3)
@@ -81,6 +88,7 @@ check("非章节名返回 nil", ImportService.parseChapterName("世界观设定"
 
 // MARK: - 4. 容错 JSON（追踪文件里的裸换行）
 
+fputs("[probe] s4 容错JSON\n", stderr)
 let brokenJSON = #"""
 {"a": {"guardian": "无（孤儿）
 }, "b": [1, 2]}
@@ -88,8 +96,10 @@ let brokenJSON = #"""
 let repaired = ImportService.parseTolerantJSON(Data(brokenJSON.utf8)) as? [String: Any]
 check("容错 JSON 解析（未闭合字符串）", repaired?["b"] != nil && ((repaired?["a"] as? [String: Any])?["guardian"] as? String)?.contains("无（孤儿）") == true)
 
+fputs("[p] s5\n", stderr)
 // MARK: - 5. 临时项目：存取 / 快照 / 验证 / 造包 / 导出（全部在临时目录，不碰真实数据）
 
+fputs("[probe] s5 store tests\n", stderr)
 let tmp = FileManager.default.temporaryDirectory.appendingPathComponent("zhibi-cli-\(UUID().uuidString)", isDirectory: true)
 try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
 
@@ -195,8 +205,10 @@ do {
 
 try? FileManager.default.removeItem(at: tmp)
 
+fputs("[p] s6\n", stderr)
 // MARK: - 6. 回退解析器
 
+fputs("[probe] s6 回退解析\n", stderr)
 let fenced = """
     好的，以下是提案。
     ```json
@@ -206,8 +218,10 @@ let fenced = """
 let fb = FallbackProposer.parse(fenced)
 check("围栏 JSON 回退解析", fb?.tool == "propose_memo")
 
+fputs("[p] s7\n", stderr)
 // MARK: - 7. 真实工作区只读扫描（不写入）
 
+fputs("[probe] s7 real workspace\n", stderr)
 let realArgs = CommandLine.arguments
 if let idx = realArgs.firstIndex(of: "--real-workspace"), idx + 1 < realArgs.count {
     let ws = realArgs[idx + 1]
@@ -224,12 +238,12 @@ if let idx = realArgs.firstIndex(of: "--real-workspace"), idx + 1 < realArgs.cou
 
 // MARK: - 8. MarkdownLite 富文本往返
 
-@MainActor
 func markdownLiteTests() {
     let mdSample = "# 第一章\n\n他捏碎了茶杯。**孤星照命**，*命数*在燃烧。\n\n> 古籍有云：命外无命。\n\n---\n\n尾段收束。"
     let rendered = MarkdownLite.render(mdSample, bodyFont: NSFont.systemFont(ofSize: 15), textColor: .textColor)
     let back = MarkdownLite.serialize(rendered)
-    check("md→富文本→md 往返", back == mdSample + "\n", "得到：\(back)")
+    check("md→富文本→md 往返", back == mdSample + "\n", "期望：[\((mdSample + "\n").debugDescription)] 得到：[\(back.debugDescription)]")
+    check("mdSample 每行独立成段", !back.contains("第一章他捏碎"))
     let again = MarkdownLite.serialize(MarkdownLite.render(back, bodyFont: NSFont.systemFont(ofSize: 15), textColor: .textColor))
     check("序列化幂等", again == back)
     // 粗体 traits 确实落在属性上
@@ -243,8 +257,10 @@ func markdownLiteTests() {
     // 引用块回写保留 > 前缀
     check("引用块往返", back.contains("> 古籍有云：命外无命。"))
 }
+fputs("[p] s-markdown done\n", stderr)
 MainActor.assumeIsolated { markdownLiteTests() }
 
+fputs("[p] s12 enter\n", stderr)
 // MARK: - 12. 本轮评审回归：单换行不熔段 / 字面 * 转义 / 无空格标题
 
 MainActor.assumeIsolated {
@@ -265,6 +281,13 @@ MainActor.assumeIsolated {
     let back3 = MarkdownLite.serialize(MarkdownLite.render(nospace, bodyFont: font, textColor: .textColor))
     check("无空格标题识别", back3.hasPrefix("## 第二章"), "得到 [\(back3)]")
 
+    // 表格：渲染后 serialize 原样保留源行（文件零风险）
+    let tableDoc = "| 章节 | 章名 |\n|------|------|\n| 1 | 血夜 |"
+    let tableBack = MarkdownLite.serialize(MarkdownLite.render(tableDoc, bodyFont: font, textColor: .textColor))
+    check("表格行原样保留", tableBack.contains("| 章节 | 章名 |") && tableBack.contains("| 1 | 血夜 |"), "得到 [\(tableBack)]")
+    let tableAgain = MarkdownLite.serialize(MarkdownLite.render(tableBack, bodyFont: font, textColor: .textColor))
+    check("表格往返幂等", tableAgain == tableBack)
+
     // 列表（无序/有序/嵌套）往返
     let listDoc = "- 第一项\n- 第二项\n  - 子项\n1. 数字一\n2. 数字二"
     let listBack = MarkdownLite.serialize(MarkdownLite.render(listDoc, bodyFont: font, textColor: .textColor))
@@ -276,6 +299,7 @@ MainActor.assumeIsolated {
     check("行内代码往返", codeBack.contains("`cachedWords`"), "得到 [\(codeBack)]")
 }
 
+fputs("[p] s11 enter\n", stderr)
 // MARK: - 11. 每日字数账本（写作计入 / 导入不计入 / 删字扣回）
 
 MainActor.assumeIsolated {
@@ -352,6 +376,7 @@ MainActor.assumeIsolated {
     check("落盘文件可再渲染", MarkdownLite.render(saved ?? "", bodyFont: NSFont.systemFont(ofSize: 15), textColor: .textColor).length > 0)
 }
 
+fputs("[p] summary\n", stderr)
 // MARK: - 汇总
 
 print("\n======== 自检结果：通过 \(passed) 项，失败 \(failures.count) 项 ========")

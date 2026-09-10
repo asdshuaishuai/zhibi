@@ -14,12 +14,17 @@ enum MarkdownLite {
         case quote = 2
         case rule = 3
         case listItem = 4
+        case tableRow = 5
     }
 
     static let kindKey = NSAttributedString.Key("zb.md.kind")
     static let levelKey = NSAttributedString.Key("zb.md.level")
     static let markerKey = NSAttributedString.Key("zb.md.marker")
     static let codeKey = NSAttributedString.Key("zb.md.code")
+    /// 表格行：值 = 原始源行（serialize 原样保留）
+    static let tableRowKey = NSAttributedString.Key("zb.md.tablerow")
+    static let boldKey = NSAttributedString.Key("zb.md.bold")
+    static let italicKey = NSAttributedString.Key("zb.md.italic")
 
     // MARK: markdown → 富文本
 
@@ -30,12 +35,29 @@ enum MarkdownLite {
             out.append(NSAttributedString(string: "\n"))
         }
         let lines = markdown.replacingOccurrences(of: "\r\n", with: "\n").components(separatedBy: "\n")
-        for line in lines {
-            // 只剥半角空白判空；全角空格缩进属于正文内容。
-            // 单换行不熔段：每个非空行独立成段（中文 txt 常见单换行分段形态）
+        var i = 0
+        while i < lines.count {
+            let line = lines[i]
             let leadingSpaces = line.prefix(while: { $0 == " " }).count
             let trimmed = line.trimmingCharacters(in: CharacterSet(charactersIn: " \t"))
+
+            // 表格：连续 | 开头的行（GFM 管道表）→ 样式化行块
+            if trimmed.hasPrefix("|") {
+                var tableLines: [String] = []
+                var j = i
+                while j < lines.count {
+                    let t2 = lines[j].trimmingCharacters(in: CharacterSet(charactersIn: " \t"))
+                    if t2.hasPrefix("|") { tableLines.append(t2); j += 1 } else { break }
+                }
+                if tableLines.count >= 2 {
+                    appendTable(tableLines, out: out, baseFont: bodyFont, textColor: textColor)
+                    i = j
+                    continue
+                }
+            }
+
             if trimmed.isEmpty {
+                i += 1
                 continue
             }
             let indentLevel = min(3, leadingSpaces / 2)
@@ -61,6 +83,7 @@ enum MarkdownLite {
                 appendBlock(inline(trimmed, kind: .paragraph, level: 0,
                                    baseFont: bodyFont, textColor: textColor))
             }
+            i += 1
         }
         return out
     }
@@ -109,9 +132,65 @@ enum MarkdownLite {
         return out
     }
 
+    /// 管道表 → 样式化行块：表头朱砂底加粗，正文行浅底，单元格以全角 ｜ 分隔；
+    /// 原始源行存 tableRowKey，serialize 原样保留（文件零风险）
+    private static func appendTable(_ rows: [String], out: NSMutableAttributedString,
+                                    baseFont: NSFont, textColor: NSColor) {
+        var headerPending = true
+        for raw in rows {
+            let cells = raw.dropFirst().dropLast()
+                .components(separatedBy: "|")
+                .map { $0.trimmingCharacters(in: .whitespaces) }
+            let separatorOnly = !cells.isEmpty && cells.allSatisfy { $0.allSatisfy { $0 == "-" || $0 == ":" || $0 == " " } }
+            if separatorOnly { continue }
+
+            let display = cells.joined(separator: " ｜ ")
+            let header = headerPending
+            headerPending = false
+
+            let font = header ? themedFont(base: baseFont, bold: true, size: baseFont.pointSize) : baseFont
+            let ps = NSMutableParagraphStyle()
+            ps.lineSpacing = 2
+            ps.paragraphSpacing = header ? 6 : 3
+            ps.paragraphSpacingBefore = header ? 8 : 2
+            var attrs: [NSAttributedString.Key: Any] = [
+                .font: font,
+                .foregroundColor: textColor,
+                .paragraphStyle: ps,
+                kindKey: BlockKind.tableRow.rawValue,
+                tableRowKey: raw,
+            ]
+            let vermillion = NSColor(red: 0.784, green: 0.298, blue: 0.204, alpha: 1)
+            if header { attrs[.backgroundColor] = vermillion.withAlphaComponent(0.10) }
+            else { attrs[.backgroundColor] = textColor.withAlphaComponent(0.035) }
+            let attr = NSMutableAttributedString(string: display, attributes: attrs)
+            out.append(attr)
+            out.append(NSAttributedString(string: "\n"))
+        }
+    }
+
+    private static var themedCache: [String: NSFont] = [:]
+
+    private static var psCache: [String: NSParagraphStyle] = [:]
+
+    /// 缓存的段落样式（减少 intern 表条目）
+    static func paragraphStyle(kind: BlockKind, level: Int) -> NSParagraphStyle {
+        let key = "\(kind.rawValue)|\(level)"
+        if let ps = psCache[key] { return ps }
+        let ps = NSMutableParagraphStyle()
+        applyParagraphStyle(ps, kind: kind)
+        psCache[key] = ps
+        return ps
+    }
+
     private static func themedFont(base: NSFont, bold: Bool, size: CGFloat) -> NSFont {
-        let descriptor = bold ? base.fontDescriptor.withSymbolicTraits([.bold]) : base.fontDescriptor
-        return NSFont(descriptor: descriptor, size: size) ?? NSFont.boldSystemFont(ofSize: size)
+        // 具体字体构造：绕开 CTFontDescriptorCreateMatchingFontDescriptor
+        // （该调用在部分环境的无窗口 CLI 进程中会死锁）
+        let key = "\(bold)|\(Int(size))"
+        if let f = themedCache[key] { return f }
+        let f = bold ? NSFont.boldSystemFont(ofSize: size) : NSFont.systemFont(ofSize: size)
+        themedCache[key] = f
+        return f
     }
 
     // MARK: 行内解析（token 扫描；定界符不进入输出文本 → 真正所见即所得）
@@ -129,14 +208,15 @@ enum MarkdownLite {
             if bold { traits.insert(.bold) }
             if italic2 { traits.insert(.italic) }
             if !traits.isEmpty, let f = NSFont(descriptor: baseFont.fontDescriptor.withSymbolicTraits(traits), size: baseFont.pointSize) { font = f }
-            let ps = NSMutableParagraphStyle()
-            applyParagraphStyle(ps, kind: kind)
-            let attr = NSAttributedString(string: buffer, attributes: [
+            let ps = MarkdownLite.paragraphStyle(kind: kind, level: level)
+            let attr = NSMutableAttributedString(string: buffer, attributes: [
                 .font: font,
                 .foregroundColor: textColor,
                 .paragraphStyle: ps,
                 kindKey: kind.rawValue,
                 levelKey: level,
+                boldKey: bold,
+                italicKey: italic2,
             ])
             out.append(attr)
             buffer = ""
@@ -238,7 +318,7 @@ enum MarkdownLite {
 
     private static func applyParagraphStyle(_ ps: NSMutableParagraphStyle, kind: BlockKind) {
         switch kind {
-        case .paragraph, .listItem:
+        case .paragraph, .listItem, .tableRow:
             ps.lineSpacing = 4.5
             ps.paragraphSpacing = 11
         case .heading:
@@ -280,6 +360,12 @@ enum MarkdownLite {
             switch kind {
             case .rule:
                 lines.append("---")
+            case .tableRow:
+                if let raw = attributed.attribute(tableRowKey, at: trimmed.location, effectiveRange: nil) as? String {
+                    lines.append(raw)
+                } else {
+                    lines.append(runsMarkdown(attributed, range: trimmed))
+                }
             case .listItem:
                 let marker = attributed.attribute(markerKey, at: trimmed.location, effectiveRange: nil) as? String ?? "- "
                 let indent = String(repeating: "  ", count: max(0, (attributed.attribute(levelKey, at: trimmed.location, effectiveRange: nil) as? Int ?? 0)))
@@ -314,13 +400,9 @@ enum MarkdownLite {
                 out += "~~" + escape(text) + "~~"
                 return
             }
-            guard let font = attrs[.font] as? NSFont, !text.isEmpty else {
-                out += escape(text)
-                return
-            }
-            let traits = font.fontDescriptor.symbolicTraits
-            let bold = traits.contains(.bold)
-            let italic = traits.contains(.italic)
+            // 显式标记优先（编辑器写入的 run 都带）；否则回退字体 traits
+            let bold = (attrs[boldKey] as? Bool) ?? ((attrs[.font] as? NSFont)?.fontDescriptor.symbolicTraits.contains(.bold) ?? false)
+            let italic = (attrs[italicKey] as? Bool) ?? ((attrs[.font] as? NSFont)?.fontDescriptor.symbolicTraits.contains(.italic) ?? false)
             if bold && italic {
                 out += "***" + escape(text) + "***"
             } else if bold {

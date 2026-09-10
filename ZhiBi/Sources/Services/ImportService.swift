@@ -48,6 +48,7 @@ enum ImportService {
         let fm = FileManager.default
 
         // oh-story：四个标准目录
+        FileHandle.standardError.write(("[scan:A]\n").data(using: .utf8)!)
         for (dirName, kind) in [("设定", ImportItem.Kind.canon), ("大纲", ImportItem.Kind.outline)] {
             let dir = url.appendingPathComponent(dirName, isDirectory: true)
             if let files = try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil) {
@@ -59,6 +60,7 @@ enum ImportService {
                 }
             }
         }
+        FileHandle.standardError.write(("[scan:B]\n").data(using: .utf8)!)
         // 递归子目录（如 大纲/第一阶段/）
         if let enumerator = fm.enumerator(at: url, includingPropertiesForKeys: nil) {
             for case let f as URL in enumerator {
@@ -73,6 +75,7 @@ enum ImportService {
                 }
             }
         }
+        FileHandle.standardError.write(("[scan:C]\n").data(using: .utf8)!)
         // 正文
         let proseDir = url.appendingPathComponent("正文", isDirectory: true)
         if let files = try? fm.contentsOfDirectory(at: proseDir, includingPropertiesForKeys: nil) {
@@ -84,6 +87,7 @@ enum ImportService {
                 }
             }
         }
+        FileHandle.standardError.write(("[scan:D]\n").data(using: .utf8)!)
         // 追踪 JSON：结构化提取书名 / 阶段 / 活跃伏笔 / 下一章承诺
         let tracking = url.appendingPathComponent("追踪/_tracking-state.json")
         if let data = try? Data(contentsOf: tracking),
@@ -144,6 +148,7 @@ enum ImportService {
             }
         }
 
+        FileHandle.standardError.write(("[scan:E]\n").data(using: .utf8)!)
         // generic 兜底：根目录下的散文件
         if let files = try? fm.contentsOfDirectory(at: url, includingPropertiesForKeys: nil) {
             for f in files.sorted(by: { $0.lastPathComponent < $1.lastPathComponent }) where ["md", "txt"].contains(f.pathExtension.lowercased()) {
