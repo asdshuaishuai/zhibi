@@ -300,16 +300,10 @@ struct ProposalInboxView: View {
                     }
                     Spacer()
                 }
-                ScrollView {
-                    Text(draft.text)
-                        .font(.callout)
-                        .textSelection(.enabled)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(10)
-                }
-                .frame(height: 260)
-                .background(Color(nsColor: .underPageBackgroundColor))
-                .cornerRadius(8)
+                MarkdownPreview(markdown: draft.text)
+                    .frame(height: 260)
+                    .background(Color(nsColor: .underPageBackgroundColor))
+                    .cornerRadius(8)
                 Text("接受 = 写入本章正文（覆盖前自动存快照，可回滚）。也可在流水线里继续给意见修复。")
                     .font(.caption2).foregroundStyle(.tertiary)
             }

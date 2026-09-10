@@ -72,11 +72,8 @@ struct PipelineSheet: View {
                                 Text("\(draftWords ?? 0) 字").font(.caption2).foregroundStyle(.tertiary)
                                 Spacer()
                             }
-                            Text(draft.text)
-                                .font(.callout)
-                                .textSelection(.enabled)
+                            MarkdownPreview(markdown: draft.text)
                                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-                                .padding(10)
                                 .background(Color(nsColor: .underPageBackgroundColor))
                                 .cornerRadius(8)
                         } else {

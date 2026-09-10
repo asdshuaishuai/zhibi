@@ -1,10 +1,45 @@
 // 执笔 CLI 自检 + 合并导入工具
 // 运行：ZhiBiCli [--real-workspace <path>]
 //       ZhiBiCli --merge <oh-story或通用目录> --into <项目.zhibi目录>   （把外部目录并入已有项目）
+//       ZhiBiCli --render-doc <markdown文件> <输出.png> [宽度]          （渲染排版快照，视觉回归用）
 // 退出码 0 = 全部通过
 
 import Foundation
 import AppKit
+
+// MARK: - 排版快照（视觉回归：真实文档 → PNG）
+
+MainActor.assumeIsolated {
+    let argv = CommandLine.arguments
+    if let rIdx = argv.firstIndex(of: "--render-doc"), rIdx + 2 < argv.count {
+        let mdURL = URL(fileURLWithPath: argv[rIdx + 1])
+        let pngURL = URL(fileURLWithPath: argv[rIdx + 2])
+        let width = argv.indices.contains(rIdx + 3) ? Int(argv[rIdx + 3]) ?? 760 : 760
+        do {
+            let md = try String(contentsOf: mdURL, encoding: .utf8)
+            let rendered = MarkdownLite.render(md, bodyFont: .systemFont(ofSize: 14), textColor: .labelColor)
+            let storage = NSTextStorage(attributedString: rendered)
+            let lm = NSLayoutManager()
+            let container = NSTextContainer(size: NSSize(width: width, height: 200000))
+            lm.addTextContainer(container)
+            storage.addLayoutManager(lm)
+            let tv = NSTextView(frame: NSRect(x: 0, y: 0, width: width, height: 2000), textContainer: container)
+            tv.backgroundColor = .windowBackgroundColor
+            lm.ensureLayout(for: container)
+            let used = lm.usedRect(for: container)
+            let height = max(300, Int(used.height) + 60)
+            tv.frame = NSRect(x: 0, y: 0, width: CGFloat(width), height: CGFloat(height))
+            guard let rep = tv.bitmapImageRepForCachingDisplay(in: tv.bounds) else { exit(2) }
+            tv.cacheDisplay(in: tv.bounds, to: rep)
+            try rep.representation(using: .png, properties: [:])!.write(to: pngURL)
+            print("渲染快照已写出：\(pngURL.path)（\(width)×\(height)）")
+        } catch {
+            print("渲染失败：\(error)")
+            exit(2)
+        }
+        exit(0)
+    }
+}
 
 // MARK: - 合并导入模式（脚本化：外部目录 → 已有项目）
 
@@ -281,12 +316,32 @@ MainActor.assumeIsolated {
     let back3 = MarkdownLite.serialize(MarkdownLite.render(nospace, bodyFont: font, textColor: .textColor))
     check("无空格标题识别", back3.hasPrefix("## 第二章"), "得到 [\(back3)]")
 
-    // 表格：渲染后 serialize 原样保留源行（文件零风险）
+    // 表格：渲染为 NSTextTable（真表格排版），serialize 重建管道语法
     let tableDoc = "| 章节 | 章名 |\n|------|------|\n| 1 | 血夜 |"
     let tableBack = MarkdownLite.serialize(MarkdownLite.render(tableDoc, bodyFont: font, textColor: .textColor))
-    check("表格行原样保留", tableBack.contains("| 章节 | 章名 |") && tableBack.contains("| 1 | 血夜 |"), "得到 [\(tableBack)]")
+    // 首次渲染把分隔行归一化为 |---|；此后往返稳定
+    let expectedTable = "| 章节 | 章名 |\n|---|---|\n| 1 | 血夜 |\n"
+    check("表格重建管道语法", tableBack == expectedTable, "得到 [\(tableBack)]")
     let tableAgain = MarkdownLite.serialize(MarkdownLite.render(tableBack, bodyFont: font, textColor: .textColor))
-    check("表格往返幂等", tableAgain == tableBack)
+    check("表格往返幂等", tableAgain == tableBack, "得到 [\(tableAgain)]")
+    // 单元格挂表格块 + 行号（排版证据）
+    let tableAttr = MarkdownLite.render(tableDoc, bodyFont: font, textColor: .textColor)
+    let anchored = tableAttr.string as NSString
+    let firstCell = anchored.range(of: "章节").location
+    check("单元格挂表格块", firstCell != NSNotFound
+          && (tableAttr.attribute(MarkdownLite.blockKey, at: firstCell, effectiveRange: nil) is NSTextTableBlock)
+          && (tableAttr.attribute(MarkdownLite.tableRowIndexKey, at: firstCell, effectiveRange: nil) as? Int == 0))
+    // 空单元格不可丢列
+    let raggedDoc = "| 甲 | 乙 |\n|---|---|\n| 1 | |\n| | 2 |"
+    let ragged = MarkdownLite.serialize(MarkdownLite.render(raggedDoc, bodyFont: font, textColor: .textColor))
+    check("空单元格保留", ragged.contains("| 1 |  |") && ragged.contains("|  | 2 |"), "得到 [\(ragged)]")
+    // 回归：** 落在串尾（含表格单元格内）不得越界崩溃
+    let tailBold = "收束在**关键点**"
+    let tailBack = MarkdownLite.serialize(MarkdownLite.render(tailBold, bodyFont: font, textColor: .textColor))
+    check("串尾粗体不崩", tailBack.contains("**关键点**"), "得到 [\(tailBack)]")
+    let cellBold = "| 甲 | 乙 |\n|---|---|\n| 丙 | **事件四** |"
+    let cellBack = MarkdownLite.serialize(MarkdownLite.render(cellBold, bodyFont: font, textColor: .textColor))
+    check("单元格串尾粗体不崩", cellBack.contains("| 丙 | **事件四** |"), "得到 [\(cellBack)]")
 
     // 列表（无序/有序/嵌套）往返
     let listDoc = "- 第一项\n- 第二项\n  - 子项\n1. 数字一\n2. 数字二"

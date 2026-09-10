@@ -12,10 +12,26 @@ struct MarkdownPreview: NSViewRepresentable {
     final class Coordinator {
         var lastMarkdown: String?
         var lastFontSize: CGFloat = 0
+        var textStorage: NSTextStorage?
     }
 
     func makeNSView(context: Context) -> NSScrollView {
-        let tv = NSTextView()
+        // TextKit 1 显式栈：表格（NSTextTable）只在 TextKit 1 下排版
+        let storage = NSTextStorage()
+        let layoutManager = NSLayoutManager()
+        let container = NSTextContainer(size: NSSize(width: 0, height: CGFloat.greatestFiniteMagnitude))
+        container.widthTracksTextView = true
+        layoutManager.addTextContainer(container)
+        storage.addLayoutManager(layoutManager)
+
+        let tv = NSTextView(frame: .zero, textContainer: container)
+        tv.minSize = NSSize(width: 0, height: 0)
+        tv.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
+        tv.isVerticallyResizable = true
+        tv.isHorizontallyResizable = false
+        tv.autoresizingMask = [.width]
+        context.coordinator.textStorage = storage
+
         tv.isEditable = false
         tv.isSelectable = true
         tv.drawsBackground = false

@@ -457,7 +457,7 @@ struct SnapshotBrowser: View {
             .frame(width: 300)
             if let preview {
                 let diff = WordStats.chineseCount(preview.text) - (store.chapter(chapterNumber)?.wordCount ?? 0)
-                ScrollView {
+                VStack(spacing: 0) {
                     HStack(spacing: 6) {
                         Text("快照 vs 当前正文：")
                             .font(.caption2).foregroundStyle(.tertiary)
@@ -468,10 +468,7 @@ struct SnapshotBrowser: View {
                     }
                     .padding(.horizontal, 12)
                     .padding(.top, 10)
-                    Text(preview.text)
-                        .font(.callout)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(12)
+                    MarkdownPreview(markdown: preview.text)
                 }
             } else {
                 Text("选择一个快照预览").foregroundStyle(.secondary)
@@ -639,9 +636,13 @@ struct BeatCardView: View {
                         .font(.caption2).foregroundStyle(.orange)
                 }
             }
-            // 骨架填写：人在节拍上写草稿
-            TextEditor(text: binding.draftText)
-                .font(.callout)
+            // 骨架填写：人在节拍上写草稿（渲染视图，不露 markdown 源码）
+            RichProseEditor(
+                markdown: Binding(
+                    get: { current.draftText },
+                    set: { newValue in update { $0.draftText = newValue } }),
+                baseFont: NSFont.systemFont(ofSize: 12),
+                textColor: NSColor.labelColor)
                 .frame(width: 230, height: 70)
                 .overlay(RoundedRectangle(cornerRadius: 5).strokeBorder(Color.secondary.opacity(0.2)))
             HStack {

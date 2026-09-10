@@ -22,7 +22,24 @@ struct RichProseEditor: NSViewRepresentable {
     }
 
     func makeNSView(context: Context) -> NSScrollView {
-        let tv = NSTextView()
+        // TextKit 1 显式栈：NSTextTable（真表格）只在 TextKit 1 下排版，
+        // TextKit 2 会静默忽略表格块、并把临时高亮属性一并吞掉
+        let storage = NSTextStorage()
+        let layoutManager = NSLayoutManager()
+        let container = NSTextContainer(size: NSSize(width: 0, height: CGFloat.greatestFiniteMagnitude))
+        container.widthTracksTextView = true
+        layoutManager.addTextContainer(container)
+        storage.addLayoutManager(layoutManager)
+
+        let tv = NSTextView(frame: .zero, textContainer: container)
+        tv.minSize = NSSize(width: 0, height: 0)
+        tv.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
+        tv.isVerticallyResizable = true
+        tv.isHorizontallyResizable = false
+        tv.autoresizingMask = [.width]
+        context.coordinator.textStorage = storage
+        context.coordinator.layoutManager = layoutManager
+
         tv.isRichText = true
         tv.allowsUndo = true
         tv.isEditable = true
@@ -83,6 +100,8 @@ struct RichProseEditor: NSViewRepresentable {
     final class Coordinator: NSObject, NSTextViewDelegate {
         var parent: RichProseEditor
         weak var textView: NSTextView?
+        var textStorage: NSTextStorage?
+        var layoutManager: NSLayoutManager?
         var lastSerialized: String = ""
         var lastFont: NSFont?
         private var lastNeedles: [String] = []
@@ -96,17 +115,26 @@ struct RichProseEditor: NSViewRepresentable {
 
         func textDidChange(_ notification: Notification) {
             guard let tv = textView, let storage = tv.textStorage else { return }
-            // 新段落回归正文样式，避免标题/引用样式黏连
-            let bodyFont = parent.baseFont
-            let ps = NSMutableParagraphStyle()
-            ps.lineSpacing = 4.5
-            ps.paragraphSpacing = 11
-            tv.typingAttributes = [.font: bodyFont, .foregroundColor: parent.textColor, .paragraphStyle: ps]
+            // 新段落回归正文样式，避免标题/引用样式黏连；
+            // 表格单元格内保留单元格属性，否则打字会脱出表格
+            tv.typingAttributes = Self.typingAttributes(in: tv, baseFont: parent.baseFont, textColor: parent.textColor)
 
             let md = MarkdownLite.serialize(storage)
             lastSerialized = md
             parent.markdown = md
             scheduleHighlights()
+        }
+
+        static func typingAttributes(in tv: NSTextView, baseFont: NSFont, textColor: NSColor) -> [NSAttributedString.Key: Any] {
+            let loc = tv.selectedRange().location - 1
+            if loc >= 0, let storage = tv.textStorage, storage.length > loc,
+               storage.attributes(at: loc, effectiveRange: nil)[MarkdownLite.tableRowIndexKey] != nil {
+                return storage.attributes(at: loc, effectiveRange: nil)
+            }
+            let ps = NSMutableParagraphStyle()
+            ps.lineSpacing = 4.5
+            ps.paragraphSpacing = 11
+            return [.font: baseFont, .foregroundColor: textColor, .paragraphStyle: ps]
         }
 
         // MARK: 高亮（临时属性，不落盘）
@@ -129,7 +157,8 @@ struct RichProseEditor: NSViewRepresentable {
         }
 
         private func applyHighlights() {
-            guard let tv = textView, let lm = tv.layoutManager else { return }
+            // TextKit 1 下 layoutManager 恒有；缺失说明视图未就绪，直接跳过
+            guard let tv = textView, tv.layoutManager != nil else { return }
             let text = tv.string
             let needles = parent.clueNeedles
             // 扫描放后台：完整扫描与高亮词范围一次算完，主线程只落临时属性

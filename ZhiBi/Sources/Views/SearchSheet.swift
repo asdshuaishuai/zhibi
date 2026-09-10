@@ -36,7 +36,7 @@ struct SearchSheet: View {
             if let range = ch.prose.range(of: q, options: .caseInsensitive) {
                 let start = ch.prose.index(range.lowerBound, offsetBy: -18, limitedBy: ch.prose.startIndex) ?? ch.prose.startIndex
                 let end = ch.prose.index(range.upperBound, offsetBy: 22, limitedBy: ch.prose.endIndex) ?? ch.prose.endIndex
-                let snippet = String(ch.prose[start..<end])
+                let snippet = MarkdownLite.stripMarkers(String(ch.prose[start..<end]))
                     .replacingOccurrences(of: "\n", with: " ")
                 let hit = Hit(icon: "text.alignleft", title: "第\(ch.number)章 \(ch.title.isEmpty ? "" : ch.title)",
                               snippet: "…" + snippet + "…", chapterNumber: ch.number)
@@ -61,7 +61,7 @@ struct SearchSheet: View {
             guard let range = section.content.range(of: q, options: .caseInsensitive) else { continue }
             let start = section.content.index(range.lowerBound, offsetBy: -18, limitedBy: section.content.startIndex) ?? section.content.startIndex
             let end = section.content.index(range.upperBound, offsetBy: 22, limitedBy: section.content.endIndex) ?? section.content.endIndex
-            let snippet = String(section.content[start..<end]).replacingOccurrences(of: "\n", with: " ")
+            let snippet = MarkdownLite.stripMarkers(String(section.content[start..<end])).replacingOccurrences(of: "\n", with: " ")
             out.append(Hit(icon: "books.vertical", title: section.title, snippet: "…" + snippet + "…", chapterNumber: nil))
         }
 
