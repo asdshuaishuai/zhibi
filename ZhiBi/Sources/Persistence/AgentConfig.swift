@@ -42,20 +42,14 @@ enum KeychainStore {
     }
 }
 
-/// 传输与模型配置
+/// 传输与模型配置（基座：pi-agent-core 同构核心 + OpenAI 兼容传输；
+/// DeepSeek / MiniMax / GLM / Kimi / Ollama 等第三方全部走同一条兼容通道）
 struct AgentConfig: Codable {
-    enum TransportKind: String, Codable, CaseIterable {
-        case openAICompatible = "OpenAI 兼容（DeepSeek / GLM / Moonshot / OpenAI / Ollama）"
-        case acp = "fx ACP（子进程 fx acp，实验）"
-    }
-
-    var transport: TransportKind = .openAICompatible
-    var baseURL: String = "https://api.deepseek.com/v1"
-    var model: String = "deepseek-chat"
+    var baseURL: String = "https://api.deepseek.com"
+    var model: String = "deepseek-flash"
     var apiKey: String = ""   // 仅内存使用；持久化走钥匙串
     var temperature: Double = 0.5
     var contextTokenBudget: Int = 12000
-    var acpExecutablePath: String = "/usr/local/bin/fx"
     var autoSave: Bool = true
 
     static func load() -> AgentConfig {

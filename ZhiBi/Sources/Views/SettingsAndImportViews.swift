@@ -90,7 +90,10 @@ struct SettingsView: View {
     @ObservedObject var vm: AppViewModel
 
     private let presets: [(name: String, baseURL: String, model: String)] = [
-        ("DeepSeek", "https://api.deepseek.com/v1", "deepseek-chat"),
+        ("DeepSeek", "https://api.deepseek.com", "deepseek-flash"),
+        ("DeepSeek Pro", "https://api.deepseek.com", "deepseek-v4-pro"),
+        ("MiniMax M3", "https://api.minimax.cn/v1", "MiniMax-M3"),
+        ("MiniMax 高速", "https://api.minimax.cn/v1", "MiniMax-M2.7-highspeed"),
         ("智谱 GLM", "https://open.bigmodel.cn/api/paas/v4", "glm-4-flash"),
         ("月之暗面 Kimi", "https://api.moonshot.cn/v1", "moonshot-v1-32k"),
         ("OpenAI", "https://api.openai.com/v1", "gpt-4o-mini"),
@@ -108,18 +111,12 @@ struct SettingsView: View {
                 }
                 .pickerStyle(.segmented)
             }
-            Section("Agent 基座") {
-                Picker("传输", selection: $vm.config.transport) {
-                    ForEach(AgentConfig.TransportKind.allCases, id: \.self) { Text($0.rawValue).tag($0) }
-                }
-                if vm.config.transport == .acp {
-                    TextField("fx 可执行文件路径（fx acp 子进程）", text: $vm.config.acpExecutablePath)
-                    Text("ACP 模式为实验特性：fx 侧 agent 自带工具体系，本应用的提案工具不参与；产出以文本提案回退解析。")
-                        .font(.caption).foregroundStyle(.secondary)
-                }
+            Section("Agent 基座（OpenAgentSDK）") {
+                Text("核心为 OpenAgentSDK：工具循环、流式与供应商传输都在本地进程内跑；模型侧走 OpenAI 兼容通道，DeepSeek / MiniMax / GLM / Kimi / Ollama 换 baseURL 即换。")
+                    .font(.caption).foregroundStyle(.secondary)
             }
             Section("模型服务（OpenAI 兼容）") {
-                HStack {
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 86), spacing: 6)], alignment: .leading, spacing: 6) {
                     ForEach(presets, id: \.name) { p in
                         Button(p.name) {
                             vm.config.baseURL = p.baseURL
@@ -129,13 +126,12 @@ struct SettingsView: View {
                     }
                 }
                 TextField("Base URL", text: $vm.config.baseURL)
-                TextField("模型 ID", text: $vm.config.model)
+                TextField("模型 ID（如 deepseek-v4-pro / MiniMax-M2.5）", text: $vm.config.model)
                 SecureField("API Key（保存到 macOS 钥匙串，不落明文文件）", text: $vm.config.apiKey)
+                Text("MiniMax 的思考内容（<think>）会在运行预览里自动过滤。")
+                    .font(.caption2).foregroundStyle(.tertiary)
             }
             Section("生成与上下文") {
-                Slider(value: $vm.config.temperature, in: 0...1.2, step: 0.1) {
-                    Text("温度：\(String(format: "%.1f", vm.config.temperature))")
-                }
                 Stepper("上下文包预算：≈\(vm.config.contextTokenBudget) tokens", value: $vm.config.contextTokenBudget, in: 2000...32000, step: 1000)
                 Toggle("正文自动保存（永远先落盘）", isOn: $vm.config.autoSave)
             }

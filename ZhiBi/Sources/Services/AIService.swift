@@ -1,7 +1,8 @@
 import Foundation
+import OpenAgentSDK
 
 /// AI 任务编排器。所有能力都走同一通道：
-/// 造包 → 组 prompt → FxAgent.prompt（工具循环）→ 提案落收件箱。
+/// 造包 → 组 prompt → OpenAgentSDK agent（工具循环）→ 提案落收件箱。
 /// 没有"写正文"通道——这是结构保证，不是口头约定。
 @MainActor
 final class AIService: ObservableObject {
@@ -13,18 +14,14 @@ final class AIService: ObservableObject {
     /// 上一次运行新登记的提案数（nil = 本次运行未统计/无新增）
     @Published var lastRunNewProposals: Int?
 
-    func makeTransport(config: AgentConfig) throws -> AgentTransport {
-        switch config.transport {
-        case .openAICompatible:
-            guard !config.apiKey.isEmpty || config.baseURL.contains("localhost") || config.baseURL.contains("127.0.0.1") else {
-                throw AgentError.noAPIKey
-            }
-            return OpenAICompatibleTransport(config: OpenAIConfig(
-                baseURL: config.baseURL, apiKey: config.apiKey,
-                model: config.model, temperature: config.temperature))
-        case .acp:
-            return ACPTransport(executablePath: config.acpExecutablePath)
+    /// 供应商连通性预检（DeepSeek / MiniMax 等都需要 Key；本地 Ollama 豁免）
+    func validateConfig(_ config: AgentConfig) -> String? {
+        if config.apiKey.isEmpty
+            && !config.baseURL.contains("localhost")
+            && !config.baseURL.contains("127.0.0.1") {
+            return AgentError.noAPIKey.localizedDescription
         }
+        return nil
     }
 
     /// 任务 → 该能力可用的工具子集
@@ -70,24 +67,46 @@ final class AIService: ObservableObject {
         }
 
         do {
-            let transport = try makeTransport(config: config)
-            let fx = FxAgent(transport: transport, instruction: PromptLibrary.systemInstruction(for: capability))
+            if let problem = validateConfig(config) {
+                lastError = problem
+                return
+            }
             let toolset = tools(for: capability, store: store, chapter: chapter)
+            let agent = createAgent(options: AgentOptions(
+                apiKey: config.apiKey,
+                model: config.model,
+                baseURL: config.baseURL,
+                provider: .openai,
+                systemPrompt: PromptLibrary.systemInstruction(for: capability),
+                maxTurns: 12,
+                permissionMode: .bypassPermissions,
+                tools: ProposalToolBridge.sdkTools(toolset)))
             let proposalsBefore = store.proposals.count
+            // MiniMax 等模型会把思考内容以 <think>…</think> 内嵌在正文增量里，展示层滤掉
+            var previewFilter = ThinkTagFilter()
+            var runProblems: [String] = []
 
-            for try await event in fx.prompt(userMessage, tools: toolset) {
-                switch event {
-                case .textDelta(let d):
-                    streamPreview += d
+            for await message in agent.stream(userMessage) {
+                switch message {
+                case .partialMessage(let data):
+                    streamPreview += previewFilter.push(data.text)
                     if streamPreview.count > 4000 { streamPreview = String(streamPreview.suffix(4000)) }
-                case .toolCall(let call, let result):
-                    lastToolLog.append("🛠 \(call.name) → \(String(result.prefix(120)))")
-                case .finished:
+                case .toolUse(let data):
+                    lastToolLog.append("🛠 \(data.toolName)")
+                case .toolResult(let data):
+                    lastToolLog.append("↳ \(String(data.content.prefix(120)))")
+                case .result(let data):
+                    streamPreview += previewFilter.flush()
+                    if streamPreview.count > 4000 { streamPreview = String(streamPreview.suffix(4000)) }
+                    if data.subtype != .success {
+                        runProblems.append(data.text)
+                    }
+                default:
                     break
                 }
             }
 
-            // 兜底：若模型没用工具（如 ACP 模式），解析围栏 JSON 并代为登记提案
+            // 兜底：若模型没用工具，解析围栏 JSON 并代为登记提案
             if store.proposals.count == proposalsBefore {
                 if let fallback = FallbackProposer.parse(streamPreview) {
                     try await FallbackProposer.apply(fallback, store: store, chapter: chapter)
@@ -104,11 +123,9 @@ final class AIService: ObservableObject {
                 }
             }
 
-            // checkpoint 持久化（fx：宿主负责存储）
-            if capability == .outlineTimeline {
-                store.saveCheckpoint(fx.checkpoint(), name: "outline-session.json")
+            if !runProblems.isEmpty, store.proposals.count == proposalsBefore {
+                lastError = runProblems.joined(separator: "；")
             }
-            fx.close()
             lastRunNewProposals = max(0, store.proposals.count - proposalsBefore)
         } catch {
             lastError = error.localizedDescription
@@ -160,8 +177,11 @@ final class AIService: ObservableObject {
     }
 
     func runValidation(store: ProjectStore, config: AgentConfig, chapter n: Int, overrideText: String? = nil) async {
-        // 先验证传输可用（Key 等），避免确定性报告先落库成永不合并的孤儿
-        _ = (try? makeTransport(config: config))?.kind
+        // 先做供应商预检（Key 等），避免确定性报告先落库成永不合并的孤儿
+        if let problem = validateConfig(config) {
+            lastError = problem
+            return
+        }
         if let overrideText, !overrideText.isEmpty {
             // 草稿模式：直接审稿本文本（确定性体检跳过——草稿未入库）
             let pack = ContextPackBuilder.build(store: store, forChapter: n, budget: config.contextTokenBudget)

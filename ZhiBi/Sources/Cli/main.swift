@@ -227,7 +227,7 @@ func runStoreTests(tmp: URL) throws {
     check("快照可回滚原文", { store2.restoreSnapshot(chapter: 1, name: (store2.snapshots(chapter: 1).first?.name) ?? ""); return store2.chapter(1)?.prose.contains("指腹蹭过刀刃") == true }())
     _ = originalProse
 
-    // 5.9 checkpoint 存取（fx：宿主负责持久化）
+    // 5.9 checkpoint 存取（pi：宿主负责持久化）
     store2.saveCheckpoint(Data("[]".utf8), name: "t.json")
     check("checkpoint 存取", store2.loadCheckpoint(name: "t.json") != nil)
 }
@@ -342,6 +342,27 @@ MainActor.assumeIsolated {
     let cellBold = "| 甲 | 乙 |\n|---|---|\n| 丙 | **事件四** |"
     let cellBack = MarkdownLite.serialize(MarkdownLite.render(cellBold, bodyFont: font, textColor: .textColor))
     check("单元格串尾粗体不崩", cellBack.contains("| 丙 | **事件四** |"), "得到 [\(cellBack)]")
+
+    // OpenAgentSDK 基座：<think> 展示过滤（MiniMax 内嵌思考）
+    var tf = ThinkTagFilter()
+    check("think 过滤-直通", tf.push("正文一段。") == "正文一段。")
+    tf = ThinkTagFilter()
+    let whole = tf.push("<think>推理过程</think>这是答案") + tf.flush()
+    check("think 过滤-整块", whole == "这是答案", "得到 [\(whole)]")
+    tf = ThinkTagFilter()
+    let split = tf.push("<th") + tf.push("ink>暗线推演</th") + tf.push("ink>可见内容") + tf.flush()
+    check("think 过滤-增量切开", split == "可见内容", "得到 [\(split)]")
+    tf = ThinkTagFilter()
+    let unclosed = tf.push("先想<think>隐藏") + tf.flush()
+    check("think 过滤-未闭合丢弃", unclosed == "先想", "得到 [\(unclosed)]")
+    tf = ThinkTagFilter()
+    let mixed = tf.push("一段") + tf.push("<think>x</think>二段") + tf.flush()
+    check("think 过滤-多段混合", mixed == "一段二段", "得到 [\(mixed)]")
+    // 桥接：提案工具 → SDK 工具（名字与 schema 保留）
+    let probeStore = ProjectStore(rootURL: URL(fileURLWithPath: "/tmp/zhibi-probe-\(UUID().uuidString).zhibi"))
+    let sdkTools = ProposalToolBridge.sdkTools(NovelTools.all(store: probeStore))
+    check("提案工具桥接", sdkTools.count == NovelTools.all(store: probeStore).count
+          && sdkTools.contains { $0.name == "propose_draft" })
 
     // 列表（无序/有序/嵌套）往返
     let listDoc = "- 第一项\n- 第二项\n  - 子项\n1. 数字一\n2. 数字二"

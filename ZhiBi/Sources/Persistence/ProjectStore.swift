@@ -424,7 +424,7 @@ final class ProjectStore: ObservableObject {
         saveSoon()
     }
 
-    // MARK: - Checkpoint（FxAgent 会话状态持久化）
+    // MARK: - Checkpoint（PIAgent 会话状态持久化）
 
     func saveCheckpoint(_ data: Data, name: String) {
         try? Disk.write(data, to: ProjectLayout.checkpointsDir(rootURL).appendingPathComponent(name))

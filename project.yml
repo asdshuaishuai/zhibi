@@ -4,6 +4,15 @@ options:
   deploymentTarget:
     macOS: "14.0"
   createIntermediateGroups: true
+packages:
+  OpenAgentSDK:
+    url: https://github.com/terryso/open-agent-sdk-swift.git
+    from: "0.10.0"
+  # 兼容钉：swift-service-context 1.3.0 把模块改名 ServiceContext，
+  # 而 swift-distributed-tracing 仍要旧产品名 ServiceContextModule
+  swift-service-context:
+    url: https://github.com/apple/swift-service-context.git
+    exactVersion: "1.2.0"
 settings:
   base:
     SWIFT_VERSION: "5.0"
@@ -15,6 +24,8 @@ targets:
   ZhiBi:
     type: application
     platform: macOS
+    dependencies:
+      - package: OpenAgentSDK
     sources:
       - path: ZhiBi/Sources
         excludes:
@@ -33,6 +44,8 @@ targets:
   ZhiBiCli:
     type: tool
     platform: macOS
+    dependencies:
+      - package: OpenAgentSDK
     sources:
       - path: ZhiBi/Sources/Models
       - path: ZhiBi/Sources/Persistence
@@ -51,3 +64,9 @@ schemes:
         ZhiBiCli: all
     run:
       config: Debug
+  ZhiBi:
+    build:
+      targets:
+        ZhiBi: all
+    run:
+      config: Release

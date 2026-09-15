@@ -18,32 +18,31 @@
 		239E7CEDB043898D630BED65 /* ImportService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7CE16A80020F2CF8D1F5A69F /* ImportService.swift */; };
 		2C0E8BB1172B2360ED8510DB /* ZhiBiApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 57A4AC91728475A17315AB76 /* ZhiBiApp.swift */; };
 		35B5154796C621F2C7C03820 /* AppViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1F81B43953D09FE79B3AFE5 /* AppViewModel.swift */; };
-		426DE98DD4581985672AA7A5 /* FxAgent.swift in Sources */ = {isa = PBXBuildFile; fileRef = F22B3EDAB84970F350CC04A1 /* FxAgent.swift */; };
 		433472192499F4DAEAE3447C /* BookCover.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3933594CF3EF48D5DEBBBB80 /* BookCover.swift */; };
-		44DEB014142416A96F2E2E09 /* ACPTransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = E3FD7B064C415C13E1135689 /* ACPTransport.swift */; };
 		4BB1D581F698070BA1B449E9 /* ProposalModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 833C495A26924EEA95D0349B /* ProposalModels.swift */; };
 		4DC6E2169166C132F6F51D13 /* ProposalInboxView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3BEB47B14ECC33122D955875 /* ProposalInboxView.swift */; };
 		5987939CE74E150C6122652A /* ContextPackBuilder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 73B9D0F5C5D85313593997D8 /* ContextPackBuilder.swift */; };
-		5FA45C4ADA9659A860055E7D /* FxAgent.swift in Sources */ = {isa = PBXBuildFile; fileRef = F22B3EDAB84970F350CC04A1 /* FxAgent.swift */; };
+		62EFF2317968E72F9280C76E /* OpenAgentSDK in Frameworks */ = {isa = PBXBuildFile; productRef = 8F3FC4D48CF491100AEE6C40 /* OpenAgentSDK */; };
 		634C28C59B79835D21C0C261 /* NovelModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 53617B78CC33949FDE07B49A /* NovelModels.swift */; };
 		637B1C40C347EC0F8E3AAF6C /* PipelineSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5BA7AC83AAEEDF034F757095 /* PipelineSheet.swift */; };
 		643AA41784E708A0DE135BE9 /* NovelModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 53617B78CC33949FDE07B49A /* NovelModels.swift */; };
 		6A044353D365F658DF719D54 /* ChapterEditorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3CA77D9DB47DD6623FCBB11F /* ChapterEditorView.swift */; };
-		6AA390C301F93626536DEED1 /* OpenAICompatibleTransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0B6A4FA051F55D8ABD4BC63D /* OpenAICompatibleTransport.swift */; };
 		6B224B0EFF7BBC6B98E6CFA8 /* ProjectWorkspaceView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 87A12625DCE6F7B9BE81EC20 /* ProjectWorkspaceView.swift */; };
+		6DA35BEA61F006059FCFF065 /* AgentKernel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 62FF6B74E24958613D5696CD /* AgentKernel.swift */; };
 		7DBBADB280EC84C8E8F57516 /* ContextPackBuilder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 73B9D0F5C5D85313593997D8 /* ContextPackBuilder.swift */; };
 		82DFFE8EEFDD871CA85072C8 /* AILint.swift in Sources */ = {isa = PBXBuildFile; fileRef = D24109F8BBBFCE15821A35F3 /* AILint.swift */; };
 		8492FC3B1853AB61FBC0CD27 /* MemoryHub.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9E48C84DAF0F5A6EB9F9E370 /* MemoryHub.swift */; };
 		874CDCA30631C6766CAC34A4 /* ChapterModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3F918D5AC25FBF1D7AA91135 /* ChapterModels.swift */; };
 		8AF11B4F365558786EB55430 /* ImportService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7CE16A80020F2CF8D1F5A69F /* ImportService.swift */; };
+		8D5D6BDA3321CC4060E29FD0 /* OpenAgentSDK in Frameworks */ = {isa = PBXBuildFile; productRef = A427089507128EF5D327F39C /* OpenAgentSDK */; };
 		8FE4E04E1860B8D029B4EA7E /* AIService.swift in Sources */ = {isa = PBXBuildFile; fileRef = EC2627A25E1F0210583F89DC /* AIService.swift */; };
 		9236453E9ED90D4A18C65E85 /* main.swift in Sources */ = {isa = PBXBuildFile; fileRef = A241F6146041ED18813AEC2E /* main.swift */; };
 		978D4CE3DCF8EE956C20F0D4 /* ProjectStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = D8564138587ABEAC002A4B68 /* ProjectStore.swift */; };
 		9DDD01BC626DC50427855A12 /* MarkdownLite.swift in Sources */ = {isa = PBXBuildFile; fileRef = E8E6FC94C615F6565E9B5E29 /* MarkdownLite.swift */; };
+		9E6745BC9D48773D735A3815 /* AgentKernel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 62FF6B74E24958613D5696CD /* AgentKernel.swift */; };
 		9E75DEA6D836A6735C20784A /* ClueModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = EFCBDCBAA19FAB8D89D65B31 /* ClueModels.swift */; };
 		9ED465DF57D44700E5013DFB /* AgentConfig.swift in Sources */ = {isa = PBXBuildFile; fileRef = 461F6D985A8108A1CF0D6383 /* AgentConfig.swift */; };
 		9F7D0324476FBAFF5969D1AE /* MemoryHub.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9E48C84DAF0F5A6EB9F9E370 /* MemoryHub.swift */; };
-		A00955E9D29B2158F999332B /* OpenAICompatibleTransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0B6A4FA051F55D8ABD4BC63D /* OpenAICompatibleTransport.swift */; };
 		A99B6A43B772FE084B32A37B /* AILint.swift in Sources */ = {isa = PBXBuildFile; fileRef = D24109F8BBBFCE15821A35F3 /* AILint.swift */; };
 		AB8591C069D58B2C19539266 /* RichProseEditor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3BA63BC407E376DCFA025E74 /* RichProseEditor.swift */; };
 		AB9D5A256B2867D6A625D74F /* ClueModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = EFCBDCBAA19FAB8D89D65B31 /* ClueModels.swift */; };
@@ -55,7 +54,6 @@
 		C44B0777BC19321584C216E1 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 6DB83B74530C22BF08101346 /* Assets.xcassets */; };
 		CDF6804260C7C35D14DB9915 /* ProjectLayout.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E60E6A8D23C7AC0D1A6018B /* ProjectLayout.swift */; };
 		CEB1869E42E4E0C52975B354 /* WelcomeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B9CE04392D2377DF0DD0AE8E /* WelcomeView.swift */; };
-		CF588E868A0C9D3B3F1D4A2A /* ACPTransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = E3FD7B064C415C13E1135689 /* ACPTransport.swift */; };
 		D69D9664576E6A677860FDFA /* ChapterModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3F918D5AC25FBF1D7AA91135 /* ChapterModels.swift */; };
 		D8AFEF334526DAA579FCCC46 /* MarkdownLite.swift in Sources */ = {isa = PBXBuildFile; fileRef = E8E6FC94C615F6565E9B5E29 /* MarkdownLite.swift */; };
 		DD34AEA31B6171EA8B241D1E /* PromptLibrary.swift in Sources */ = {isa = PBXBuildFile; fileRef = 325E50520695455EBE751F5C /* PromptLibrary.swift */; };
@@ -74,7 +72,6 @@
 
 /* Begin PBXFileReference section */
 		0AB87DF6723082F1EAB19FBC /* DesignSystem.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DesignSystem.swift; sourceTree = "<group>"; };
-		0B6A4FA051F55D8ABD4BC63D /* OpenAICompatibleTransport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OpenAICompatibleTransport.swift; sourceTree = "<group>"; };
 		18BE0A1A384184798A139F4B /* ExportService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExportService.swift; sourceTree = "<group>"; };
 		1CD9D1C3F2192B1CC43C7F1A /* MemoryAndCanonViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MemoryAndCanonViews.swift; sourceTree = "<group>"; };
 		325E50520695455EBE751F5C /* PromptLibrary.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PromptLibrary.swift; sourceTree = "<group>"; };
@@ -91,6 +88,7 @@
 		5BA7AC83AAEEDF034F757095 /* PipelineSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PipelineSheet.swift; sourceTree = "<group>"; };
 		5D46957F415F882445FDCCE3 /* ZhiBiCli */ = {isa = PBXFileReference; includeInIndex = 0; path = ZhiBiCli; sourceTree = BUILT_PRODUCTS_DIR; };
 		5E60E6A8D23C7AC0D1A6018B /* ProjectLayout.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProjectLayout.swift; sourceTree = "<group>"; };
+		62FF6B74E24958613D5696CD /* AgentKernel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentKernel.swift; sourceTree = "<group>"; };
 		636E894AA41D2F164868F6DE /* Validator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Validator.swift; sourceTree = "<group>"; };
 		6DB83B74530C22BF08101346 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		73B9D0F5C5D85313593997D8 /* ContextPackBuilder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContextPackBuilder.swift; sourceTree = "<group>"; };
@@ -109,15 +107,32 @@
 		C478AA9297450472AC802936 /* OutlineView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OutlineView.swift; sourceTree = "<group>"; };
 		D24109F8BBBFCE15821A35F3 /* AILint.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AILint.swift; sourceTree = "<group>"; };
 		D8564138587ABEAC002A4B68 /* ProjectStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProjectStore.swift; sourceTree = "<group>"; };
-		E3FD7B064C415C13E1135689 /* ACPTransport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPTransport.swift; sourceTree = "<group>"; };
 		E8E6FC94C615F6565E9B5E29 /* MarkdownLite.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownLite.swift; sourceTree = "<group>"; };
 		EC2627A25E1F0210583F89DC /* AIService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AIService.swift; sourceTree = "<group>"; };
 		ED1008100FF4B150910026A2 /* CharactersView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CharactersView.swift; sourceTree = "<group>"; };
 		EFCBDCBAA19FAB8D89D65B31 /* ClueModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClueModels.swift; sourceTree = "<group>"; };
-		F22B3EDAB84970F350CC04A1 /* FxAgent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FxAgent.swift; sourceTree = "<group>"; };
 		F6615822875FE4D9E8C09829 /* MarkdownPreview.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownPreview.swift; sourceTree = "<group>"; };
 		FC177BEC977F220E191AF37A /* ZhiBi.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = ZhiBi.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		4FD4F840557130D5A09710C0 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				8D5D6BDA3321CC4060E29FD0 /* OpenAgentSDK in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		72EE06C966F4CD510A025C08 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				62EFF2317968E72F9280C76E /* OpenAgentSDK in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
 		1EBC96432465328F8526C32D /* Products */ = {
@@ -175,10 +190,8 @@
 		84A1308F66D9ED49D92CA834 /* AgentCore */ = {
 			isa = PBXGroup;
 			children = (
-				E3FD7B064C415C13E1135689 /* ACPTransport.swift */,
-				F22B3EDAB84970F350CC04A1 /* FxAgent.swift */,
+				62FF6B74E24958613D5696CD /* AgentKernel.swift */,
 				384048615E641AE7BD6EA09E /* NovelTools.swift */,
-				0B6A4FA051F55D8ABD4BC63D /* OpenAICompatibleTransport.swift */,
 			);
 			path = AgentCore;
 			sourceTree = "<group>";
@@ -266,6 +279,7 @@
 			buildConfigurationList = C9E5BD34983B8CEEB7D76F42 /* Build configuration list for PBXNativeTarget "ZhiBiCli" */;
 			buildPhases = (
 				0B1FF1170C30001E7A01857C /* Sources */,
+				72EE06C966F4CD510A025C08 /* Frameworks */,
 			);
 			buildRules = (
 			);
@@ -273,6 +287,7 @@
 			);
 			name = ZhiBiCli;
 			packageProductDependencies = (
+				8F3FC4D48CF491100AEE6C40 /* OpenAgentSDK */,
 			);
 			productName = ZhiBiCli;
 			productReference = 5D46957F415F882445FDCCE3 /* ZhiBiCli */;
@@ -284,6 +299,7 @@
 			buildPhases = (
 				ADF6B61E4575016EB8C9D231 /* Sources */,
 				BB7849A692022F3B49ADAD2B /* Resources */,
+				4FD4F840557130D5A09710C0 /* Frameworks */,
 			);
 			buildRules = (
 			);
@@ -291,6 +307,7 @@
 			);
 			name = ZhiBi;
 			packageProductDependencies = (
+				A427089507128EF5D327F39C /* OpenAgentSDK */,
 			);
 			productName = ZhiBi;
 			productReference = FC177BEC977F220E191AF37A /* ZhiBi.app */;
@@ -316,6 +333,10 @@
 			);
 			mainGroup = 8BCA080E38798A3FE7F732F7;
 			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				80B634BC66D517A3209BFC7F /* XCRemoteSwiftPackageReference "open-agent-sdk-swift" */,
+				34AA05750F2694EE019D7DD6 /* XCRemoteSwiftPackageReference "swift-service-context" */,
+			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 1EBC96432465328F8526C32D /* Products */;
 			projectDirPath = "";
@@ -343,22 +364,20 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				44DEB014142416A96F2E2E09 /* ACPTransport.swift in Sources */,
 				82DFFE8EEFDD871CA85072C8 /* AILint.swift in Sources */,
 				8FE4E04E1860B8D029B4EA7E /* AIService.swift in Sources */,
 				9ED465DF57D44700E5013DFB /* AgentConfig.swift in Sources */,
+				6DA35BEA61F006059FCFF065 /* AgentKernel.swift in Sources */,
 				B186F80F3353BF8013631F65 /* AppearanceMode.swift in Sources */,
 				D69D9664576E6A677860FDFA /* ChapterModels.swift in Sources */,
 				AB9D5A256B2867D6A625D74F /* ClueModels.swift in Sources */,
 				5987939CE74E150C6122652A /* ContextPackBuilder.swift in Sources */,
 				F54387575F51B636DF68B6C9 /* ExportService.swift in Sources */,
-				5FA45C4ADA9659A860055E7D /* FxAgent.swift in Sources */,
 				239E7CEDB043898D630BED65 /* ImportService.swift in Sources */,
 				D8AFEF334526DAA579FCCC46 /* MarkdownLite.swift in Sources */,
 				8492FC3B1853AB61FBC0CD27 /* MemoryHub.swift in Sources */,
 				643AA41784E708A0DE135BE9 /* NovelModels.swift in Sources */,
 				B08F1F2A046E7EBC95C4F833 /* NovelTools.swift in Sources */,
-				6AA390C301F93626536DEED1 /* OpenAICompatibleTransport.swift in Sources */,
 				CDF6804260C7C35D14DB9915 /* ProjectLayout.swift in Sources */,
 				E1351ED3A8C94BBC93C62EFE /* ProjectStore.swift in Sources */,
 				DD34AEA31B6171EA8B241D1E /* PromptLibrary.swift in Sources */,
@@ -372,10 +391,10 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				CF588E868A0C9D3B3F1D4A2A /* ACPTransport.swift in Sources */,
 				A99B6A43B772FE084B32A37B /* AILint.swift in Sources */,
 				AC710ED36EF8B57F165FDE88 /* AIService.swift in Sources */,
 				FC9A113F6ECF94FF3926BE3C /* AgentConfig.swift in Sources */,
+				9E6745BC9D48773D735A3815 /* AgentKernel.swift in Sources */,
 				35B5154796C621F2C7C03820 /* AppViewModel.swift in Sources */,
 				B2E17B5856E8F85FAF4B2176 /* AppearanceMode.swift in Sources */,
 				433472192499F4DAEAE3447C /* BookCover.swift in Sources */,
@@ -387,7 +406,6 @@
 				7DBBADB280EC84C8E8F57516 /* ContextPackBuilder.swift in Sources */,
 				01FB9B604C2857A0508A2428 /* DesignSystem.swift in Sources */,
 				1AF963D9595D18CEF3DFF486 /* ExportService.swift in Sources */,
-				426DE98DD4581985672AA7A5 /* FxAgent.swift in Sources */,
 				169192E9D97F7D3E12DB4517 /* GlassTheme.swift in Sources */,
 				8AF11B4F365558786EB55430 /* ImportService.swift in Sources */,
 				9DDD01BC626DC50427855A12 /* MarkdownLite.swift in Sources */,
@@ -396,7 +414,6 @@
 				9F7D0324476FBAFF5969D1AE /* MemoryHub.swift in Sources */,
 				634C28C59B79835D21C0C261 /* NovelModels.swift in Sources */,
 				B3F7B4250393C91CFBE58573 /* NovelTools.swift in Sources */,
-				A00955E9D29B2158F999332B /* OpenAICompatibleTransport.swift in Sources */,
 				07FBD068BF7E5EA3CCDC83F8 /* OutlineView.swift in Sources */,
 				637B1C40C347EC0F8E3AAF6C /* PipelineSheet.swift in Sources */,
 				F8FBB31A6A36A290662D8A34 /* ProjectLayout.swift in Sources */,
@@ -644,6 +661,38 @@
 			defaultConfigurationName = Debug;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		34AA05750F2694EE019D7DD6 /* XCRemoteSwiftPackageReference "swift-service-context" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/apple/swift-service-context.git";
+			requirement = {
+				kind = exactVersion;
+				version = 1.2.0;
+			};
+		};
+		80B634BC66D517A3209BFC7F /* XCRemoteSwiftPackageReference "open-agent-sdk-swift" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/terryso/open-agent-sdk-swift.git";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 0.10.0;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		8F3FC4D48CF491100AEE6C40 /* OpenAgentSDK */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 80B634BC66D517A3209BFC7F /* XCRemoteSwiftPackageReference "open-agent-sdk-swift" */;
+			productName = OpenAgentSDK;
+		};
+		A427089507128EF5D327F39C /* OpenAgentSDK */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 80B634BC66D517A3209BFC7F /* XCRemoteSwiftPackageReference "open-agent-sdk-swift" */;
+			productName = OpenAgentSDK;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = 5D3A1B89BAEBEAFD09B399AD /* Project object */;
 }
