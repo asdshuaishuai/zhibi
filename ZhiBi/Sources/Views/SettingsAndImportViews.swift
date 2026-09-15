@@ -92,11 +92,14 @@ struct SettingsView: View {
     private let presets: [(name: String, baseURL: String, model: String)] = [
         ("DeepSeek", "https://api.deepseek.com", "deepseek-flash"),
         ("DeepSeek Pro", "https://api.deepseek.com", "deepseek-v4-pro"),
+        ("智谱 GLM", "https://open.bigmodel.cn/api/paas/v4", "glm-5.3"),
+        ("GLM 编程计划", "https://open.bigmodel.cn/api/coding/paas/v4", "glm-5.3"),
         ("MiniMax M3", "https://api.minimax.cn/v1", "MiniMax-M3"),
         ("MiniMax 高速", "https://api.minimax.cn/v1", "MiniMax-M2.7-highspeed"),
-        ("智谱 GLM", "https://open.bigmodel.cn/api/paas/v4", "glm-4-flash"),
+        ("Agnes", "https://apihub.agnes-ai.com/v1", "agnes-2.5-flash"),
+        ("LongCat", "https://api.longcat.chat/openai/v1", "LongCat-2.0"),
+        ("OpenAI", "https://api.openai.com/v1", "gpt-5.2-chat-latest"),
         ("月之暗面 Kimi", "https://api.moonshot.cn/v1", "moonshot-v1-32k"),
-        ("OpenAI", "https://api.openai.com/v1", "gpt-4o-mini"),
         ("本地 Ollama", "http://127.0.0.1:11434/v1", "qwen2.5:14b"),
     ]
 
@@ -116,7 +119,7 @@ struct SettingsView: View {
                     .font(.caption).foregroundStyle(.secondary)
             }
             Section("模型服务（OpenAI 兼容）") {
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: 86), spacing: 6)], alignment: .leading, spacing: 6) {
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 96), spacing: 6)], alignment: .leading, spacing: 6) {
                     ForEach(presets, id: \.name) { p in
                         Button(p.name) {
                             vm.config.baseURL = p.baseURL
@@ -126,9 +129,9 @@ struct SettingsView: View {
                     }
                 }
                 TextField("Base URL", text: $vm.config.baseURL)
-                TextField("模型 ID（如 deepseek-v4-pro / MiniMax-M2.5）", text: $vm.config.model)
+                TextField("模型 ID（如 deepseek-v4-pro / glm-5.3 / LongCat-2.0）", text: $vm.config.model)
                 SecureField("API Key（保存到 macOS 钥匙串，不落明文文件）", text: $vm.config.apiKey)
-                Text("MiniMax 的思考内容（<think>）会在运行预览里自动过滤。")
+                Text("GLM 编程计划用套餐页的 Key 配专用端点；Agnes 只接文本模型；LongCat 只走 OpenAI 格式。MiniMax 的思考内容（<think>）会在运行预览里自动过滤。")
                     .font(.caption2).foregroundStyle(.tertiary)
             }
             Section("生成与上下文") {
