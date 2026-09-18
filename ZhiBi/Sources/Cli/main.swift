@@ -364,6 +364,37 @@ MainActor.assumeIsolated {
     check("提案工具桥接", sdkTools.count == NovelTools.all(store: probeStore).count
           && sdkTools.contains { $0.name == "propose_draft" })
 
+    // ModelHub：models.dev 目录解析 / Anthropic 端点改写 / 工具能力过滤
+    let fixture = """
+    {
+      "deepseek": {"id":"deepseek","name":"DeepSeek","npm":"@ai-sdk/openai-compatible","api":"https://api.deepseek.com","env":["DEEPSEEK_API_KEY"],
+        "models":{"deepseek-flash":{"id":"deepseek-flash","name":"DeepSeek V4 Flash","tool_call":true,"reasoning":true,"structured_output":true,
+          "limit":{"context":1000000,"output":384000},"cost":{"input":0.15,"output":0.6}}}},
+      "minimax-cn": {"id":"minimax-cn","name":"MiniMax (minimaxi.com)","npm":"@ai-sdk/anthropic","api":"https://api.minimaxi.com/anthropic/v1",
+        "models":{"MiniMax-M3":{"id":"MiniMax-M3","name":"MiniMax M3","tool_call":true,"reasoning":true}}},
+      "no-tools": {"id":"no-tools","name":"NoTools","npm":"@ai-sdk/openai-compatible","api":"https://example.com/v1",
+        "models":{"m1":{"id":"m1","name":"M1","tool_call":false}}},
+      "anthropic-unknown": {"id":"anthropic-unknown","name":"Anthropic Only","npm":"@ai-sdk/anthropic","api":"https://x.example/anthropic/v1",
+        "models":{"m2":{"id":"m2","name":"M2","tool_call":true}}}
+    }
+    """
+    let hubProviders = ModelHub.parseCatalog(Data(fixture.utf8))
+    check("目录解析条数", hubProviders.count == 3, "得到 \(hubProviders.map { $0.id })")
+    let ds = hubProviders.first { $0.id == "deepseek" }
+    check("模型字段解析", ds?.models.first?.id == "deepseek-flash"
+          && ds?.models.first?.toolCall == true
+          && ds?.models.first?.contextLimit == 1000000
+          && abs((ds?.models.first?.inputCost ?? 0) - 0.15) < 0.0001)
+    let mm = hubProviders.first { $0.id == "minimax-cn" }
+    check("Anthropic 端点改写为 OpenAI 兼容", mm?.baseURL == "https://api.minimaxi.com/v1")
+    let hubEntries = ModelHub.entries(from: hubProviders)
+    check("无工具模型被过滤", !hubEntries.contains { $0.providerID == "no-tools" }
+          && hubEntries.contains { $0.providerID == "minimax-cn" }
+          && !hubEntries.contains { $0.providerID == "anthropic-unknown" })
+    let allEntries = ModelHub.entries(from: hubProviders, toolCallOnly: false)
+    check("不过滤模式含无工具模型", allEntries.contains { $0.providerID == "no-tools" })
+    check("离线兜底非空", !ModelHub.offlineFallbacks.isEmpty)
+
     // 列表（无序/有序/嵌套）往返
     let listDoc = "- 第一项\n- 第二项\n  - 子项\n1. 数字一\n2. 数字二"
     let listBack = MarkdownLite.serialize(MarkdownLite.render(listDoc, bodyFont: font, textColor: .textColor))

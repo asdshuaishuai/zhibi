@@ -88,20 +88,7 @@ extension AppViewModel {
 
 struct SettingsView: View {
     @ObservedObject var vm: AppViewModel
-
-    private let presets: [(name: String, baseURL: String, model: String)] = [
-        ("DeepSeek", "https://api.deepseek.com", "deepseek-flash"),
-        ("DeepSeek Pro", "https://api.deepseek.com", "deepseek-v4-pro"),
-        ("智谱 GLM", "https://open.bigmodel.cn/api/paas/v4", "glm-5.3"),
-        ("GLM 编程计划", "https://open.bigmodel.cn/api/coding/paas/v4", "glm-5.3"),
-        ("MiniMax M3", "https://api.minimax.cn/v1", "MiniMax-M3"),
-        ("MiniMax 高速", "https://api.minimax.cn/v1", "MiniMax-M2.7-highspeed"),
-        ("Agnes", "https://apihub.agnes-ai.com/v1", "agnes-2.5-flash"),
-        ("LongCat", "https://api.longcat.chat/openai/v1", "LongCat-2.0"),
-        ("OpenAI", "https://api.openai.com/v1", "gpt-5.2-chat-latest"),
-        ("月之暗面 Kimi", "https://api.moonshot.cn/v1", "moonshot-v1-32k"),
-        ("本地 Ollama", "http://127.0.0.1:11434/v1", "qwen2.5:14b"),
-    ]
+    @StateObject private var hub = ModelHubModel()
 
     var body: some View {
         Form {
@@ -114,27 +101,13 @@ struct SettingsView: View {
                 }
                 .pickerStyle(.segmented)
             }
-            Section("Agent 基座（OpenAgentSDK）") {
-                Text("核心为 OpenAgentSDK：工具循环、流式与供应商传输都在本地进程内跑；模型侧走 OpenAI 兼容通道，DeepSeek / MiniMax / GLM / Kimi / Ollama 换 baseURL 即换。")
-                    .font(.caption).foregroundStyle(.secondary)
+            catalogSection
+            Section("自定义端点（不来自目录，如局域网 Ollama）") {
+                TextField("Base URL", text: $vm.config.baseURL, onCommit: { hub.syncSelection(baseURL: vm.config.baseURL, model: vm.config.model) })
+                TextField("模型 ID", text: $vm.config.model)
             }
-            Section("模型服务（OpenAI 兼容）") {
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: 96), spacing: 6)], alignment: .leading, spacing: 6) {
-                    ForEach(presets, id: \.name) { p in
-                        Button(p.name) {
-                            vm.config.baseURL = p.baseURL
-                            vm.config.model = p.model
-                        }
-                        .controlSize(.small)
-                    }
-                }
-                TextField("Base URL", text: $vm.config.baseURL)
-                TextField("模型 ID（如 deepseek-v4-pro / glm-5.3 / LongCat-2.0）", text: $vm.config.model)
+            Section("API Key 与上下文") {
                 SecureField("API Key（保存到 macOS 钥匙串，不落明文文件）", text: $vm.config.apiKey)
-                Text("GLM 编程计划用套餐页的 Key 配专用端点；Agnes 只接文本模型；LongCat 只走 OpenAI 格式。MiniMax 的思考内容（<think>）会在运行预览里自动过滤。")
-                    .font(.caption2).foregroundStyle(.tertiary)
-            }
-            Section("生成与上下文") {
                 Stepper("上下文包预算：≈\(vm.config.contextTokenBudget) tokens", value: $vm.config.contextTokenBudget, in: 2000...32000, step: 1000)
                 Toggle("正文自动保存（永远先落盘）", isOn: $vm.config.autoSave)
             }
@@ -149,6 +122,81 @@ struct SettingsView: View {
         }
         .formStyle(.grouped)
         .padding(0)
-        .frame(width: 560, height: 480)
+        .frame(width: 560, height: 540)
+        .onAppear {
+            hub.onPick = { entry in
+                vm.config.baseURL = entry.baseURL
+                vm.config.model = entry.modelID
+            }
+            hub.loadInitial()
+        }
+        .onChange(of: hub.providers) { _ in
+            hub.syncSelection(baseURL: vm.config.baseURL, model: vm.config.model)
+        }
+    }
+
+    /// 模型目录选择（数据源 models.dev，架构对齐 ai-sdk 的 provider 抽象）
+    private var catalogSection: some View {
+        Section("模型目录（models.dev）") {
+            if hub.providers.isEmpty {
+                // 目录未就绪：离线兜底条目
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(hub.state.summary).font(.caption).foregroundStyle(.secondary)
+                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 96), spacing: 6)], alignment: .leading, spacing: 6) {
+                        ForEach(ModelHub.offlineFallbacks) { entry in
+                            Button(entry.providerName) {
+                                vm.config.baseURL = entry.baseURL
+                                vm.config.model = entry.modelID
+                            }
+                            .controlSize(.small)
+                        }
+                    }
+                    Text("目录拉取失败时可用以上内置条目；联网后点刷新恢复完整目录。")
+                        .font(.caption2).foregroundStyle(.tertiary)
+                }
+            } else {
+                HStack {
+                    Text(hub.state.summary).font(.caption).foregroundStyle(.secondary)
+                    Spacer()
+                    Button {
+                        hub.refresh()
+                    } label: {
+                        Image(systemName: "arrow.clockwise")
+                    }
+                    .controlSize(.small)
+                    .help("刷新模型目录（models.dev）")
+                }
+                Picker("供应商", selection: Binding(
+                    get: { hub.providerID },
+                    set: { hub.selectProvider($0, config: vm.config) })) {
+                    ForEach(hub.providers) { p in
+                        Text("\(p.name)（\(p.models.filter(\.toolCall).count)）").tag(p.id)
+                    }
+                }
+                if !hub.providerID.isEmpty {
+                    Picker("模型", selection: Binding(
+                        get: { hub.modelID },
+                        set: { hub.selectModel($0) })) {
+                        ForEach(hub.modelEntries(toolCallOnly: false)) { m in
+                            Text(m.toolCall ? m.name : "⚠︎ \(m.name)（不支持工具）").tag(m.id)
+                        }
+                    }
+                    if let p = hub.providers.first(where: { $0.id == hub.providerID }),
+                       let m = p.models.first(where: { $0.id == hub.modelID }) {
+                        Text(m.capabilitySummary)
+                            .font(.caption2).foregroundStyle(.secondary)
+                        if !m.toolCall {
+                            Text("该模型不支持工具调用——执笔的提案工具依赖工具调用，请换同供应商其他模型。")
+                                .font(.caption2).foregroundStyle(.orange)
+                        }
+                        Text("端点 \(p.baseURL)").font(.caption2).foregroundStyle(.tertiary)
+                            .textSelection(.enabled)
+                    }
+                } else {
+                    Text("当前为自定义端点配置；从上方选择供应商可一键套用其端点与模型。")
+                        .font(.caption2).foregroundStyle(.tertiary)
+                }
+            }
+        }
     }
 }

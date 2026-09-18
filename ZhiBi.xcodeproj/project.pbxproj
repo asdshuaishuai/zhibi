@@ -22,6 +22,7 @@
 		4BB1D581F698070BA1B449E9 /* ProposalModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 833C495A26924EEA95D0349B /* ProposalModels.swift */; };
 		4DC6E2169166C132F6F51D13 /* ProposalInboxView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3BEB47B14ECC33122D955875 /* ProposalInboxView.swift */; };
 		5987939CE74E150C6122652A /* ContextPackBuilder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 73B9D0F5C5D85313593997D8 /* ContextPackBuilder.swift */; };
+		5AC733D9D033BD9AF267AA88 /* ModelCatalog.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAFDEBB11D2AFBB5C5883C09 /* ModelCatalog.swift */; };
 		62EFF2317968E72F9280C76E /* OpenAgentSDK in Frameworks */ = {isa = PBXBuildFile; productRef = 8F3FC4D48CF491100AEE6C40 /* OpenAgentSDK */; };
 		634C28C59B79835D21C0C261 /* NovelModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 53617B78CC33949FDE07B49A /* NovelModels.swift */; };
 		637B1C40C347EC0F8E3AAF6C /* PipelineSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5BA7AC83AAEEDF034F757095 /* PipelineSheet.swift */; };
@@ -49,8 +50,10 @@
 		AC710ED36EF8B57F165FDE88 /* AIService.swift in Sources */ = {isa = PBXBuildFile; fileRef = EC2627A25E1F0210583F89DC /* AIService.swift */; };
 		B08F1F2A046E7EBC95C4F833 /* NovelTools.swift in Sources */ = {isa = PBXBuildFile; fileRef = 384048615E641AE7BD6EA09E /* NovelTools.swift */; };
 		B186F80F3353BF8013631F65 /* AppearanceMode.swift in Sources */ = {isa = PBXBuildFile; fileRef = A952FE9D52AEF946886C389B /* AppearanceMode.swift */; };
+		B26C27D1DF20DAC39E4BE88E /* ModelHubModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 65D02995A497AD373D2375B1 /* ModelHubModel.swift */; };
 		B2E17B5856E8F85FAF4B2176 /* AppearanceMode.swift in Sources */ = {isa = PBXBuildFile; fileRef = A952FE9D52AEF946886C389B /* AppearanceMode.swift */; };
 		B3F7B4250393C91CFBE58573 /* NovelTools.swift in Sources */ = {isa = PBXBuildFile; fileRef = 384048615E641AE7BD6EA09E /* NovelTools.swift */; };
+		B405A04766DAFF5DB9BE69AA /* ModelHubModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 65D02995A497AD373D2375B1 /* ModelHubModel.swift */; };
 		C44B0777BC19321584C216E1 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 6DB83B74530C22BF08101346 /* Assets.xcassets */; };
 		CDF6804260C7C35D14DB9915 /* ProjectLayout.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E60E6A8D23C7AC0D1A6018B /* ProjectLayout.swift */; };
 		CEB1869E42E4E0C52975B354 /* WelcomeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B9CE04392D2377DF0DD0AE8E /* WelcomeView.swift */; };
@@ -59,6 +62,7 @@
 		DD34AEA31B6171EA8B241D1E /* PromptLibrary.swift in Sources */ = {isa = PBXBuildFile; fileRef = 325E50520695455EBE751F5C /* PromptLibrary.swift */; };
 		DF6702C1317D6401CAB1DFD0 /* PromptLibrary.swift in Sources */ = {isa = PBXBuildFile; fileRef = 325E50520695455EBE751F5C /* PromptLibrary.swift */; };
 		E1351ED3A8C94BBC93C62EFE /* ProjectStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = D8564138587ABEAC002A4B68 /* ProjectStore.swift */; };
+		E536F88635CC983FF79A6C40 /* ModelCatalog.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAFDEBB11D2AFBB5C5883C09 /* ModelCatalog.swift */; };
 		E654F585E3FC2A2FDCA571CD /* MarkdownPreview.swift in Sources */ = {isa = PBXBuildFile; fileRef = F6615822875FE4D9E8C09829 /* MarkdownPreview.swift */; };
 		E9845B8BE95AAE20A37579FA /* ProposalModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 833C495A26924EEA95D0349B /* ProposalModels.swift */; };
 		ED6312FCED64977DC2A4C5CD /* CharactersView.swift in Sources */ = {isa = PBXBuildFile; fileRef = ED1008100FF4B150910026A2 /* CharactersView.swift */; };
@@ -90,6 +94,7 @@
 		5E60E6A8D23C7AC0D1A6018B /* ProjectLayout.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProjectLayout.swift; sourceTree = "<group>"; };
 		62FF6B74E24958613D5696CD /* AgentKernel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentKernel.swift; sourceTree = "<group>"; };
 		636E894AA41D2F164868F6DE /* Validator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Validator.swift; sourceTree = "<group>"; };
+		65D02995A497AD373D2375B1 /* ModelHubModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelHubModel.swift; sourceTree = "<group>"; };
 		6DB83B74530C22BF08101346 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		73B9D0F5C5D85313593997D8 /* ContextPackBuilder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContextPackBuilder.swift; sourceTree = "<group>"; };
 		7CE16A80020F2CF8D1F5A69F /* ImportService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImportService.swift; sourceTree = "<group>"; };
@@ -107,6 +112,7 @@
 		C478AA9297450472AC802936 /* OutlineView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OutlineView.swift; sourceTree = "<group>"; };
 		D24109F8BBBFCE15821A35F3 /* AILint.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AILint.swift; sourceTree = "<group>"; };
 		D8564138587ABEAC002A4B68 /* ProjectStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProjectStore.swift; sourceTree = "<group>"; };
+		DAFDEBB11D2AFBB5C5883C09 /* ModelCatalog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelCatalog.swift; sourceTree = "<group>"; };
 		E8E6FC94C615F6565E9B5E29 /* MarkdownLite.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownLite.swift; sourceTree = "<group>"; };
 		EC2627A25E1F0210583F89DC /* AIService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AIService.swift; sourceTree = "<group>"; };
 		ED1008100FF4B150910026A2 /* CharactersView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CharactersView.swift; sourceTree = "<group>"; };
@@ -212,6 +218,15 @@
 			path = ZhiBi;
 			sourceTree = "<group>";
 		};
+		CEEA9862FA21FD25E09FE661 /* ModelHub */ = {
+			isa = PBXGroup;
+			children = (
+				DAFDEBB11D2AFBB5C5883C09 /* ModelCatalog.swift */,
+				65D02995A497AD373D2375B1 /* ModelHubModel.swift */,
+			);
+			path = ModelHub;
+			sourceTree = "<group>";
+		};
 		D91503361F962DA44BFE7590 /* Cli */ = {
 			isa = PBXGroup;
 			children = (
@@ -267,6 +282,7 @@
 				E8E6FC94C615F6565E9B5E29 /* MarkdownLite.swift */,
 				9E48C84DAF0F5A6EB9F9E370 /* MemoryHub.swift */,
 				636E894AA41D2F164868F6DE /* Validator.swift */,
+				CEEA9862FA21FD25E09FE661 /* ModelHub */,
 			);
 			path = Services;
 			sourceTree = "<group>";
@@ -376,6 +392,8 @@
 				239E7CEDB043898D630BED65 /* ImportService.swift in Sources */,
 				D8AFEF334526DAA579FCCC46 /* MarkdownLite.swift in Sources */,
 				8492FC3B1853AB61FBC0CD27 /* MemoryHub.swift in Sources */,
+				E536F88635CC983FF79A6C40 /* ModelCatalog.swift in Sources */,
+				B26C27D1DF20DAC39E4BE88E /* ModelHubModel.swift in Sources */,
 				643AA41784E708A0DE135BE9 /* NovelModels.swift in Sources */,
 				B08F1F2A046E7EBC95C4F833 /* NovelTools.swift in Sources */,
 				CDF6804260C7C35D14DB9915 /* ProjectLayout.swift in Sources */,
@@ -412,6 +430,8 @@
 				E654F585E3FC2A2FDCA571CD /* MarkdownPreview.swift in Sources */,
 				1242CE501B368FB6F1310BAB /* MemoryAndCanonViews.swift in Sources */,
 				9F7D0324476FBAFF5969D1AE /* MemoryHub.swift in Sources */,
+				5AC733D9D033BD9AF267AA88 /* ModelCatalog.swift in Sources */,
+				B405A04766DAFF5DB9BE69AA /* ModelHubModel.swift in Sources */,
 				634C28C59B79835D21C0C261 /* NovelModels.swift in Sources */,
 				B3F7B4250393C91CFBE58573 /* NovelTools.swift in Sources */,
 				07FBD068BF7E5EA3CCDC83F8 /* OutlineView.swift in Sources */,
