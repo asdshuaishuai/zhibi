@@ -19,6 +19,8 @@
 		2C0E8BB1172B2360ED8510DB /* ZhiBiApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 57A4AC91728475A17315AB76 /* ZhiBiApp.swift */; };
 		35B5154796C621F2C7C03820 /* AppViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1F81B43953D09FE79B3AFE5 /* AppViewModel.swift */; };
 		433472192499F4DAEAE3447C /* BookCover.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3933594CF3EF48D5DEBBBB80 /* BookCover.swift */; };
+		4A4B39EC392AC72AECE5A10D /* MemoryGraphView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 85DCBAAD9C9AD47FD7F3ED1F /* MemoryGraphView.swift */; };
+		4A7C72C09317E30AB197BE6F /* MemoryGraph.swift in Sources */ = {isa = PBXBuildFile; fileRef = D81F3E6470C04EE2F1FB6CB7 /* MemoryGraph.swift */; };
 		4BB1D581F698070BA1B449E9 /* ProposalModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 833C495A26924EEA95D0349B /* ProposalModels.swift */; };
 		4DC6E2169166C132F6F51D13 /* ProposalInboxView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3BEB47B14ECC33122D955875 /* ProposalInboxView.swift */; };
 		5987939CE74E150C6122652A /* ContextPackBuilder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 73B9D0F5C5D85313593997D8 /* ContextPackBuilder.swift */; };
@@ -71,6 +73,7 @@
 		F54387575F51B636DF68B6C9 /* ExportService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 18BE0A1A384184798A139F4B /* ExportService.swift */; };
 		F67EF2EA1BCAD564E8493EBD /* Validator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 636E894AA41D2F164868F6DE /* Validator.swift */; };
 		F8FBB31A6A36A290662D8A34 /* ProjectLayout.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E60E6A8D23C7AC0D1A6018B /* ProjectLayout.swift */; };
+		FA5A0083353B4A695F2D3DCA /* MemoryGraph.swift in Sources */ = {isa = PBXBuildFile; fileRef = D81F3E6470C04EE2F1FB6CB7 /* MemoryGraph.swift */; };
 		FC9A113F6ECF94FF3926BE3C /* AgentConfig.swift in Sources */ = {isa = PBXBuildFile; fileRef = 461F6D985A8108A1CF0D6383 /* AgentConfig.swift */; };
 /* End PBXBuildFile section */
 
@@ -99,6 +102,7 @@
 		73B9D0F5C5D85313593997D8 /* ContextPackBuilder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContextPackBuilder.swift; sourceTree = "<group>"; };
 		7CE16A80020F2CF8D1F5A69F /* ImportService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImportService.swift; sourceTree = "<group>"; };
 		833C495A26924EEA95D0349B /* ProposalModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProposalModels.swift; sourceTree = "<group>"; };
+		85DCBAAD9C9AD47FD7F3ED1F /* MemoryGraphView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MemoryGraphView.swift; sourceTree = "<group>"; };
 		87A12625DCE6F7B9BE81EC20 /* ProjectWorkspaceView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProjectWorkspaceView.swift; sourceTree = "<group>"; };
 		9E48C84DAF0F5A6EB9F9E370 /* MemoryHub.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MemoryHub.swift; sourceTree = "<group>"; };
 		A241F6146041ED18813AEC2E /* main.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = main.swift; sourceTree = "<group>"; };
@@ -111,6 +115,7 @@
 		B9CE04392D2377DF0DD0AE8E /* WelcomeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WelcomeView.swift; sourceTree = "<group>"; };
 		C478AA9297450472AC802936 /* OutlineView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OutlineView.swift; sourceTree = "<group>"; };
 		D24109F8BBBFCE15821A35F3 /* AILint.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AILint.swift; sourceTree = "<group>"; };
+		D81F3E6470C04EE2F1FB6CB7 /* MemoryGraph.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MemoryGraph.swift; sourceTree = "<group>"; };
 		D8564138587ABEAC002A4B68 /* ProjectStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProjectStore.swift; sourceTree = "<group>"; };
 		DAFDEBB11D2AFBB5C5883C09 /* ModelCatalog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelCatalog.swift; sourceTree = "<group>"; };
 		E8E6FC94C615F6565E9B5E29 /* MarkdownLite.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownLite.swift; sourceTree = "<group>"; };
@@ -193,6 +198,14 @@
 			path = Sources;
 			sourceTree = "<group>";
 		};
+		7B7BCDD8BBB4F317A351FDC7 /* MemoryGraph */ = {
+			isa = PBXGroup;
+			children = (
+				D81F3E6470C04EE2F1FB6CB7 /* MemoryGraph.swift */,
+			);
+			path = MemoryGraph;
+			sourceTree = "<group>";
+		};
 		84A1308F66D9ED49D92CA834 /* AgentCore */ = {
 			isa = PBXGroup;
 			children = (
@@ -258,6 +271,7 @@
 				5314F4D05F25C0C7182B41E3 /* GlassTheme.swift */,
 				F6615822875FE4D9E8C09829 /* MarkdownPreview.swift */,
 				1CD9D1C3F2192B1CC43C7F1A /* MemoryAndCanonViews.swift */,
+				85DCBAAD9C9AD47FD7F3ED1F /* MemoryGraphView.swift */,
 				C478AA9297450472AC802936 /* OutlineView.swift */,
 				5BA7AC83AAEEDF034F757095 /* PipelineSheet.swift */,
 				87A12625DCE6F7B9BE81EC20 /* ProjectWorkspaceView.swift */,
@@ -282,6 +296,7 @@
 				E8E6FC94C615F6565E9B5E29 /* MarkdownLite.swift */,
 				9E48C84DAF0F5A6EB9F9E370 /* MemoryHub.swift */,
 				636E894AA41D2F164868F6DE /* Validator.swift */,
+				7B7BCDD8BBB4F317A351FDC7 /* MemoryGraph */,
 				CEEA9862FA21FD25E09FE661 /* ModelHub */,
 			);
 			path = Services;
@@ -391,6 +406,7 @@
 				F54387575F51B636DF68B6C9 /* ExportService.swift in Sources */,
 				239E7CEDB043898D630BED65 /* ImportService.swift in Sources */,
 				D8AFEF334526DAA579FCCC46 /* MarkdownLite.swift in Sources */,
+				FA5A0083353B4A695F2D3DCA /* MemoryGraph.swift in Sources */,
 				8492FC3B1853AB61FBC0CD27 /* MemoryHub.swift in Sources */,
 				E536F88635CC983FF79A6C40 /* ModelCatalog.swift in Sources */,
 				B26C27D1DF20DAC39E4BE88E /* ModelHubModel.swift in Sources */,
@@ -429,6 +445,8 @@
 				9DDD01BC626DC50427855A12 /* MarkdownLite.swift in Sources */,
 				E654F585E3FC2A2FDCA571CD /* MarkdownPreview.swift in Sources */,
 				1242CE501B368FB6F1310BAB /* MemoryAndCanonViews.swift in Sources */,
+				4A7C72C09317E30AB197BE6F /* MemoryGraph.swift in Sources */,
+				4A4B39EC392AC72AECE5A10D /* MemoryGraphView.swift in Sources */,
 				9F7D0324476FBAFF5969D1AE /* MemoryHub.swift in Sources */,
 				5AC733D9D033BD9AF267AA88 /* ModelCatalog.swift in Sources */,
 				B405A04766DAFF5DB9BE69AA /* ModelHubModel.swift in Sources */,

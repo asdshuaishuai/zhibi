@@ -339,6 +339,50 @@ func frameworkTests() async throws {
 
 try await frameworkTests()
 
+// MARK: - 14. 记忆图谱：图引擎派生 + 回溯
+
+MainActor.assumeIsolated {
+    let gStore = ProjectStore(rootURL: URL(fileURLWithPath: "/tmp/zhibi-graph-\(UUID().uuidString).zhibi"))
+    gStore.characterAliases = [CharacterAlias(canonicalName: "紫渊", aliases: ["少年"])]
+    gStore.facts = [
+        MemoryFact(subject: "紫渊", predicate: "状态", object: "无器之人", fromChapter: 1, source: "extracted"),
+        MemoryFact(subject: "紫渊", predicate: "关系", object: "白零", fromChapter: 8, source: "extracted"),
+        MemoryFact(subject: "白零", predicate: "关系", object: "紫渊", fromChapter: 9, source: "extracted"),
+        MemoryFact(subject: "白零", predicate: "状态", object: "半精灵", fromChapter: 5, source: "extracted"),
+    ]
+    gStore.storylines = [Storyline(id: "L01", name: "孤星出逃", kind: .main, isThroughLine: true, status: .active)]
+    gStore.timelineEvents = [
+        TimelineEvent(id: "E01", chapter: 1, objectiveFact: "紫渊觉醒当夜被追杀", readerKnowledge: "少年在逃", revealed: true, storylineIDs: ["L01"]),
+        TimelineEvent(id: "E02", chapter: 8, objectiveFact: "紫渊与白零相遇", readerKnowledge: "雾中照面", revealed: false, storylineIDs: ["L01"]),
+    ]
+    gStore.clues = [Clue(id: "F01", title: "哑叔的脚印", detail: "荒野深处的脚印", scale: .medium, timing: .midArc,
+                         plantedChapter: 3, targetPayoffChapter: 8, status: .planted,
+                         actions: [ClueActionLog(chapter: 5, kind: .develop, note: "又见脚印")])]
+
+    let graph = MemoryGraphEngine.build(from: gStore)
+    check("图-人物节点含别名归一", (graph.byKind[.character] ?? []).contains { $0.key == "紫渊" }
+          && (graph.byKind[.character] ?? []).contains { $0.key == "白零" })
+    let relEdges = graph.edges.filter { $0.kind == .relation }
+    check("图-关系边去重合并", relEdges.count == 1 && relEdges[0].weight == 2)
+    let belongsEdges = graph.edges.filter { $0.kind == .belongs && $0.from.contains("E01") }
+    check("图-事件归属故事线", belongsEdges.contains { $0.to == "\(MemoryNodeKind.storyline.rawValue)/L01" })
+    let coEdges = graph.edges.filter { $0.kind == .coChapter }
+    check("图-同章弱边", coEdges.isEmpty)  // 本例每章单事件，无同章边
+    let clueEdges = graph.edges.filter { $0.kind == .clueInChapter && $0.from.contains("F01") }
+    check("图-伏笔落章连事件", clueEdges.contains { $0.to.contains("E02") })  // 第5章动作+第8章兑现→连到 E02(第8章)
+    let charNode = graph.nodes.first { $0.kind == .character && $0.key == "紫渊" }
+    check("图-人物回溯全链", charNode.map { MemoryRecall.recall(node: $0, store: gStore).count == 2 } ?? false)
+    let eventNode = graph.nodes.first { $0.kind == .event && $0.key == "E02" }
+    check("图-事件回溯含读者视角", eventNode.map {
+        MemoryRecall.recall(node: $0, store: gStore).contains { $0.sub.contains("读者已知") }
+    } ?? false)
+    let clueRecall = graph.nodes.first { $0.kind == .clue }.map { MemoryRecall.recall(node: $0, store: gStore) } ?? []
+    check("图-伏笔回溯含动作日志", clueRecall.count == 2 && clueRecall.contains { $0.text.contains("又见脚印") })
+    let hits = MemoryRecall.search("脚印", store: gStore)
+    check("图-全库关键词回溯", hits.count >= 1 && hits.contains { $0.kind == .clue })
+    check("图-BFS 距离", charNode.map { graph.distance(from: $0.id, to: "\(MemoryNodeKind.event.rawValue)/E01") == 1 } ?? false)
+}
+
 
 
 fputs("[p] s12 enter\n", stderr)

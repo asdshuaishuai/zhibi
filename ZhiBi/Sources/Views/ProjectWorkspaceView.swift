@@ -11,6 +11,7 @@ enum WorkspaceSection: Hashable {
     case canon
     case memory
     case inbox
+    case graph
     case stats
 }
 
@@ -43,6 +44,7 @@ struct ProjectWorkspaceView: View {
                 }
                 Section("账房") {
                     Label("记忆中枢", systemImage: "brain").tag(WorkspaceSection.memory)
+                    Label("记忆图谱", systemImage: "point.3.connected.trianglepath.dotted").tag(WorkspaceSection.graph)
                     Label("提案收件箱", systemImage: "tray.full").badge(pendingCount).tag(WorkspaceSection.inbox)
                 }
             }
@@ -128,6 +130,12 @@ struct ProjectWorkspaceView: View {
             CanonView(store: store)
         case .inbox:
             ProposalInboxView(vm: vm, store: store)
+        case .graph:
+            MemoryGraphView(vm: vm, store: store) { n in
+                selectedChapter = n
+                selection = .chapters
+                if focusMode { focusMode = false }
+            }
         case .stats:
             StatsView(store: store)
         }
