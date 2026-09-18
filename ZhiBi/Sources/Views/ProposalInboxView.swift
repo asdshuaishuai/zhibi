@@ -311,6 +311,26 @@ struct ProposalInboxView: View {
         case .memo(let text):
             MarkdownPreview(markdown: text, fontSize: 13)
                 .frame(minHeight: 100)
+        case .canon(let docs):
+            VStack(alignment: .leading, spacing: 8) {
+                ForEach(docs) { d in
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack {
+                            Text(d.title).font(.callout.bold())
+                            Spacer()
+                            Text(Certainty(rawValue: d.certainty)?.rawValue ?? "暂定")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        }
+                        MarkdownPreview(markdown: d.content, fontSize: 13)
+                            .frame(minHeight: 60)
+                            .background(Color(nsColor: .underPageBackgroundColor))
+                            .cornerRadius(6)
+                    }
+                }
+                Text("采纳 = 写入设定库（同名文档不覆盖，保护你手改过的内容）。设定是作者主权，先读再决定。")
+                    .font(.caption2).foregroundStyle(.tertiary)
+            }
         }
     }
 

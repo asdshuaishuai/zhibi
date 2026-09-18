@@ -67,7 +67,7 @@ final class AppViewModel: ObservableObject {
 
     // MARK: - 项目管理
 
-    func createProject(title: String, genre: String, premise: String, wordTarget: Int) {
+    func createProject(title: String, genre: String, premise: String, wordTarget: Int, buildFramework: Bool = false) {
         let base = ProjectLayout.safeFileName(title)
         var dir = defaultProjectsDir().appendingPathComponent("\(base).zhibi", isDirectory: true)
         var suffix = 2
@@ -80,6 +80,13 @@ final class AppViewModel: ObservableObject {
         store.project = NovelProject(title: title, genre: genre, premise: premise, chapterWordTarget: wordTarget)
         try? store.saveNow()
         open(store: store)
+        if buildFramework {
+            // 创建即搭框架：全部走提案通道（收件箱待审），核心机制不变
+            let g = genre.isEmpty ? "题材待定" : genre
+            let p = premise.isEmpty ? "（作者暂未填写核心，先给保守版本）" : premise
+            Task { await ai.runBootstrapFramework(store: store, config: config,
+                                                  premise: "《\(title)》｜题材：\(g)｜一句话核心：\(p)") }
+        }
     }
 
     func openProject(_ ref: ProjectRef) {

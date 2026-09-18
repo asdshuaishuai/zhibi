@@ -340,6 +340,14 @@ final class ProjectStore: ObservableObject {
             }
             guard let n = chapter else { break }
             updateChapter(n) { $0.summary = summary }
+        case .canon(let docs):
+            // 设定是作者主权：同题不覆盖（作者可能手改过），只追加新题
+            // 确定度用中文 rawValue 存储；AI 侧传英文键，这里映射
+            let certaintyMap: [String: Certainty] = ["canon": .canon, "tentative": .tentative, "blank": .open, "open": .open]
+            for d in docs where !canonSections.contains(where: { $0.title == d.title }) {
+                canonSections.append(CanonSection(title: d.title, content: d.content,
+                                                  certainty: certaintyMap[d.certainty] ?? .tentative))
+            }
         case .report, .deslop, .memo:
             break // 报告类提案已展示在收件箱，无需入库
         }

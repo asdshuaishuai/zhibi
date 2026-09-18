@@ -21,6 +21,8 @@ enum PromptLibrary {
 
     private static func taskBrief(for capability: AICapability) -> String {
         switch capability {
+        case .framework:
+            return "为新书搭建初始框架：主线故事线 + 关键事件时间线 + 背景设定文档。分别用 propose_storylines / propose_outline_events / propose_canon 提案，全部提交给作者审阅。"
         case .outlineTimeline:
             return "构建核心大纲：故事线 + 事件时间线。用 propose_storylines 与 propose_outline_events 提案。"
         case .clueLedger:
@@ -62,6 +64,32 @@ enum PromptLibrary {
         3. 每个事件必须写两条：objective_fact 是"作者真相"（客观发生了什么，含隐瞒的底牌）；reader_knowledge 是"读者已知"（读者此刻被告知了什么）。未揭晓的真相 revealed=false——这是悬念管理的基础。
         4. 主动制造"还没兑现但快要兑现"的缺口；重大反转要有前置伏笔位。
         5. 赌注递增：每个阶段的核心冲突比上一阶段更重。
+        """
+    }
+
+    // MARK: - 新书初始框架（创建即搭）
+
+    static func bootstrapFrameworkTask(premise: String, canon: String, notes: String, targetChapters: Int) -> String {
+        """
+        这是一本刚创建的新书。基于以下最小材料搭建初始框架。你只产出提案——不写正文、不改设定库，作者审阅采纳后才生效。
+
+        ## 书籍信息
+        \(premise)
+        目标体量：约 \(targetChapters) 章
+        作者补充：\(notes.isEmpty ? "（无）" : notes)
+
+        ## 已有设定
+        \(canon.isEmpty ? "（新书，暂无设定）" : String(canon.prefix(6000)))
+
+        ## 三件套（按顺序提案）
+        1. **背景设定框架（propose_canon，2-4 篇）**：先立世界规则——至少覆盖：核心设定/力量体系或规则、主要势力/人物框架、题材惯例与禁区。每篇一个主题，Markdown 可含表格；作者还没定的事标 tentative，有意留白的标 blank。
+        2. **故事线（propose_storylines）**：一条主线（is_through_line）+ 至多 2 条支线；每条写清起止与赌注。
+        3. **关键事件时间线（propose_outline_events，8-16 个）**：覆盖开篇(10-15%)→发展(50-60%)→高潮(20-25%)→收尾(5-10%)。每个事件写 objective_fact（作者真相，含底牌）与 reader_knowledge（读者此刻已知），未揭晓的 revealed=false。
+
+        ## 纪律
+        - 一切从作者的一句话核心出发，不自嗨加戏；一句话没有的信息，用最保守的版本并标 tentative。
+        - 重大反转必须预留前置伏笔位（在事件里点出）。
+        - 语言克制，不要形容词堆砌；设定文档是给作者看的施工图，不是宣传语。
         """
     }
 

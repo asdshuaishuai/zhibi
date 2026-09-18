@@ -3,6 +3,7 @@ import Foundation
 // MARK: - AI 能力清单（注意：不存在"写正文"这个能力，这是产品铁律）
 
 enum AICapability: String, Codable, CaseIterable {
+    case framework = "搭建框架"
     case outlineTimeline = "大纲事件时间线"
     case clueLedger = "线索埋点台账"
     case chapterSkeleton = "章节骨架"
@@ -31,6 +32,15 @@ struct ChapterDraft: Codable {
     var feedbackHistory: [DraftFeedback] = []
 }
 
+// MARK: - 设定文档提案（背景框架落地：AI 只提案，人批准后入设定库）
+
+struct CanonDocProposal: Codable, Identifiable {
+    var id: UUID = UUID()
+    var title: String            // 设定文档标题（世界观 / 势力人物 / 修炼体系…）
+    var content: String = ""     // Markdown 正文（可含表格）
+    var certainty: String = "tentative"  // canon / tentative / blank
+}
+
 // MARK: - 提案负载
 
 enum ProposalPayload: Codable {
@@ -43,6 +53,7 @@ enum ProposalPayload: Codable {
     case report(ValidationReport)
     case deslop(DeslopReport)
     case memo(String)
+    case canon([CanonDocProposal])
 }
 
 enum ProposalStatus: String, Codable {

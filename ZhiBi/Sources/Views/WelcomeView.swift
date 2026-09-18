@@ -45,7 +45,10 @@ struct WelcomeView: View {
     @State private var newTitle = ""
     @State private var newGenre = ""
     @State private var newPremise = ""
-    @State private var newWordTarget = 3000
+    @State private var buildFramework = true
+
+    /// 常用题材快选（点一下填入，可再手改）
+    static let genreChips = ["东方玄幻", "都市异能", "科幻末世", "悬疑推理", "历史权谋", "仙侠修真", "无限流", "言情世情"]
 
     var body: some View {
         HStack(spacing: 0) {
@@ -442,18 +445,45 @@ extension WelcomeView {
     private var createSheet: some View {
         VStack(alignment: .leading, spacing: 14) {
             Text("新建作品").font(.headline)
-            Form {
+            Text("只填书名就能开写。给 AI 的原料越具体，框架越准——但也可以后补。")
+                .font(.caption).foregroundStyle(.secondary)
+
+            VStack(alignment: .leading, spacing: 10) {
                 TextField("书名", text: $newTitle)
-                TextField("题材（如：东方玄幻 / 都市异能）", text: $newGenre)
-                TextField("一句话核心（如：废灵根少年吞噬命数逆天改命）", text: $newPremise)
-                Stepper("每章目标字数：\(newWordTarget)", value: $newWordTarget, in: 1000...10000, step: 500)
+                    .textFieldStyle(.roundedBorder)
+
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("题材").font(.caption).foregroundStyle(.secondary)
+                    FlowChipRow(items: Self.genreChips, selected: $newGenre)
+                    TextField("或自填（如：赛博江湖）", text: $newGenre)
+                        .textFieldStyle(.roundedBorder)
+                        .font(.callout)
+                }
+
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("一句话核心（AI 的第一原料）").font(.caption).foregroundStyle(.secondary)
+                    TextEditor(text: $newPremise)
+                        .font(.callout)
+                        .frame(height: 56)
+                        .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(Color.secondary.opacity(0.25)))
+                }
             }
+
+            Toggle("创建后用 AI 搭建框架（主线大纲 + 背景设定）", isOn: $buildFramework)
+                .font(.callout)
+                .disabled(vm.config.apiKey.isEmpty)
+            Text(vm.config.apiKey.isEmpty
+                 ? "先在「设置」里配置 API Key 才能用 AI 搭框架；也可以先空手创建。"
+                 : "框架全部走提案：AI 只出方案，你在「提案收件箱」逐条审过才算数。")
+                .font(.caption2).foregroundStyle(vm.config.apiKey.isEmpty ? Color.orange : Color.secondary)
+
             HStack {
                 Spacer()
                 Button("取消") { showCreate = false }
                 Button("创建") {
                     let title = newTitle.isEmpty ? "未命名作品" : newTitle
-                    vm.createProject(title: title, genre: newGenre, premise: newPremise, wordTarget: newWordTarget)
+                    vm.createProject(title: title, genre: newGenre, premise: newPremise,
+                                     wordTarget: 3000, buildFramework: buildFramework && !vm.config.apiKey.isEmpty)
                     showCreate = false
                 }
                 .buttonStyle(.borderedProminent)
@@ -461,7 +491,29 @@ extension WelcomeView {
             }
         }
         .padding(22)
-        .frame(width: 480)
+        .frame(width: 520)
+    }
+}
+
+/// 换行流式 chips（自适应网格，选中态高亮）
+struct FlowChipRow: View {
+    let items: [String]
+    @Binding var selected: String
+
+    private let columns = [GridItem(.adaptive(minimum: 76), spacing: 6)]
+
+    var body: some View {
+        LazyVGrid(columns: columns, alignment: .leading, spacing: 6) {
+            ForEach(items, id: \.self) { item in
+                Button(item) {
+                    selected = (selected == item) ? "" : item
+                }
+                .font(.caption)
+                .controlSize(.small)
+                .buttonStyle(.bordered)
+                .tint(selected == item ? Color.accentColor : Color.secondary)
+            }
+        }
     }
 }
 

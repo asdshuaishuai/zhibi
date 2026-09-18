@@ -295,6 +295,52 @@ func markdownLiteTests() {
 fputs("[p] s-markdown done\n", stderr)
 MainActor.assumeIsolated { markdownLiteTests() }
 
+// MARK: - 13. 框架搭建：propose_canon 提案登记 → 采纳落设定库
+
+@MainActor
+func frameworkTests() async throws {
+    // propose_canon：提案登记 → 采纳落设定库（人批准制不变）
+    let canonProbe = ProjectStore(rootURL: URL(fileURLWithPath: "/tmp/zhibi-canon-\(UUID().uuidString).zhibi"))
+    let canonTool = NovelTools.all(store: canonProbe).first { $0.name == "propose_canon" }
+    if let canonTool {
+        // JSON 里换行用 \\n 转义（\n 会变成字面换行导致非法 JSON）
+        let canonArgs = """
+        {"docs":[{"title":"世界观","content":"力量体系：命数九层，每层十格。\\n主要势力：曜辰氏与森罗殿。","certainty":"canon"}]}
+        """
+        _ = try? await canonTool.handler(canonArgs)
+        let pendingCanon = canonProbe.proposals.filter { $0.status == .pending }
+        check("propose_canon 登记提案", pendingCanon.count == 1)
+        if case .canon(let docs) = pendingCanon.first?.payload {
+            check("提案负载为设定文档", docs.count == 1 && docs[0].title == "世界观" && docs[0].certainty == "canon")
+        } else {
+            check("提案负载为设定文档", false)
+        }
+        check("采纳前不入库", canonProbe.canonSections.isEmpty)
+        if let id = pendingCanon.first?.id {
+            canonProbe.acceptProposal(id)
+            check("采纳后落设定库", canonProbe.canonSections.contains { $0.title == "世界观" }
+                  && canonProbe.canonSections.first?.certainty == .canon)
+            // 同名不覆盖（保护作者手改）
+            canonProbe.canonSections[0].content = "作者手改版"
+            let dupArgs = """
+            {"docs":[{"title":"世界观","content":"AI 又一份","certainty":"tentative"}]}
+            """
+            _ = try? await canonTool.handler(dupArgs)
+            canonProbe.acceptProposal(canonProbe.proposals.last!.id)
+            check("同名设定不覆盖", canonProbe.canonSections.count == 1
+                  && canonProbe.canonSections[0].content == "作者手改版")
+        }
+        check("框架工具面完整", NovelTools.all(store: canonProbe).contains { $0.name == "propose_canon" }
+              && AICapability.framework.rawValue == "搭建框架")
+    } else {
+        check("propose_canon 已注册", false)
+    }
+}
+
+try await frameworkTests()
+
+
+
 fputs("[p] s12 enter\n", stderr)
 // MARK: - 12. 本轮评审回归：单换行不熔段 / 字面 * 转义 / 无空格标题
 
@@ -394,6 +440,8 @@ MainActor.assumeIsolated {
     let allEntries = ModelHub.entries(from: hubProviders, toolCallOnly: false)
     check("不过滤模式含无工具模型", allEntries.contains { $0.providerID == "no-tools" })
     check("离线兜底非空", !ModelHub.offlineFallbacks.isEmpty)
+
+
 
     // 列表（无序/有序/嵌套）往返
     let listDoc = "- 第一项\n- 第二项\n  - 子项\n1. 数字一\n2. 数字二"

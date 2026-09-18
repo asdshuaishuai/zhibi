@@ -29,6 +29,8 @@ final class AIService: ObservableObject {
         let all = NovelTools.all(store: store)
         let needed: Set<String>
         switch capability {
+        case .framework:
+            needed = ["propose_storylines", "propose_outline_events", "propose_canon", "get_canon"]
         case .outlineTimeline:
             needed = ["propose_storylines", "propose_outline_events", "get_outline", "get_canon"]
         case .clueLedger:
@@ -133,6 +135,16 @@ final class AIService: ObservableObject {
     }
 
     // MARK: - 具体能力入口
+
+    /// 新书创建即触发：基于最小输入（书名/题材/一句话核心）搭主线 + 背景框架。
+    /// 全部走提案通道，作者在收件箱审过才算数——机制与其它能力完全一致。
+    func runBootstrapFramework(store: ProjectStore, config: AgentConfig, premise: String, notes: String = "") async {
+        let canon = store.canonSections.map { "《\($0.title)》\($0.content)" }.joined(separator: "\n\n")
+        await run(capability: .framework, store: store, config: config, chapter: nil,
+                  userMessage: PromptLibrary.bootstrapFrameworkTask(
+                      premise: premise, canon: canon, notes: notes,
+                      targetChapters: store.project.targetChapters))
+    }
 
     func runOutlineTimeline(store: ProjectStore, config: AgentConfig, notes: String) async {
         let canon = store.canonSections.map { "《\($0.title)》\($0.content)" }.joined(separator: "\n\n")

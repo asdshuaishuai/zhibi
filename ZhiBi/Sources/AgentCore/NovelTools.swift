@@ -18,6 +18,7 @@ enum NovelTools {
             proposeValidation(store: store, chapter: chapter),
             proposeDeslop(store: store, chapter: chapter),
             proposeMemo(store: store),
+            proposeCanon(store: store),
             getChapter(store: store),
             getClues(store: store),
             getOutline(store: store),
@@ -357,6 +358,27 @@ enum NovelTools {
             let p = try decode(Payload.self, args)
             await store.addProposal(AIProposal(capability: .recallMemo, title: "写作备忘", note: p.note ?? "", payload: .memo(p.text)))
             return "已登记为提案「写作备忘」。"
+        }
+    }
+
+    static func proposeCanon(store: ProjectStore) -> AgentTool {
+        AgentTool(
+            name: "propose_canon",
+            description: "提交设定文档提案（背景框架：世界观 / 势力人物 / 修炼体系 / 题材规则等）。设定是作者主权：你只提案，作者审阅采纳后才写入设定库。每篇文档是 Markdown，可以含表格；每篇聚焦一个主题，合计不超过 6 篇。",
+            parametersJSON: """
+            {"type":"object","properties":{"docs":{"type":"array","items":{"type":"object","properties":{"title":{"type":"string"},"content":{"type":"string"},"certainty":{"type":"string","enum":["canon","tentative","blank"],"description":"canon=已定正典 tentative=暂定 blank=有意留白"}},"required":["title","content"]}}},"required":["docs"]}
+            """
+        ) { args in
+            struct D: Decodable { let title: String; let content: String; let certainty: String? }
+            struct P: Decodable { let docs: [D] }
+            let p = try decode(P.self, args)
+            let docs = p.docs.map { CanonDocProposal(title: $0.title, content: $0.content, certainty: $0.certainty ?? "tentative") }
+            await store.addProposal(AIProposal(
+                capability: .framework,
+                title: "背景设定框架（\(docs.count) 篇）",
+                note: "设定主权在你：采纳后写入设定库，同题不会覆盖你手改过的文档。",
+                payload: .canon(docs)))
+            return "已登记设定提案 \(docs.count) 篇，等待作者审阅。"
         }
     }
 

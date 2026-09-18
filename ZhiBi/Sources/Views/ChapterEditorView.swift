@@ -15,6 +15,8 @@ struct ChapterEditorView: View {
     @State private var showSnapshots = false
     @State private var showRecall = false
     @State private var showPipeline = false
+    @State private var showInbox = false
+    @State private var bannerDismissed = false
 
     @AppStorage("focusMode") private var focusMode = false
     @AppStorage("dailyGoal") private var dailyGoal = 2000
@@ -254,6 +256,48 @@ struct ChapterEditorView: View {
             .help(lint.topIssues.map { "【\($0.kind)】\($0.detail)" }.joined(separator: "\n") + "\n（本地零成本扫描，随打字更新）")
     }
 
+    // MARK: 新书引导条（还没开写时：要么去审框架提案，要么让 AI 搭一个）
+
+    private var onboardingBanner: some View {
+        let hasAnyProse = store.chapters.contains { !$0.prose.isEmpty }
+        let pending = store.proposals.filter { $0.status == .pending }.count
+        return Group {
+            if !hasAnyProse && !bannerDismissed {
+                HStack(spacing: 10) {
+                    Image(systemName: "sparkles").foregroundStyle(ZB.vermillion)
+                    if pending > 0 {
+                        Text("AI 已搭好框架：\(pending) 条提案待你审（主线/背景设定/时间线）。")
+                            .font(.caption)
+                        Button("查看提案") { showInbox = true }
+                            .controlSize(.small).buttonStyle(.borderedProminent)
+                    } else if vm.config.apiKey.isEmpty {
+                        Text("这本还是空的。先去「设置」配 API Key，回来一句话搭框架；或者直接开写第一章。")
+                            .font(.caption)
+                    } else {
+                        Text("这本还是空的。")
+                            .font(.caption)
+                        Button("用 AI 搭框架") {
+                            let g = store.project.genre.isEmpty ? "题材待定" : store.project.genre
+                            let p = store.project.premise.isEmpty ? "（作者暂未填写核心，先给保守版本）" : store.project.premise
+                            Task { await vm.ai.runBootstrapFramework(
+                                store: store, config: vm.config,
+                                premise: "《\(store.project.title)》｜题材：\(g)｜一句话核心：\(p)") }
+                        }
+                        .controlSize(.small).buttonStyle(.borderedProminent)
+                        .disabled(vm.ai.running)
+                    }
+                    Spacer()
+                    Button {
+                        bannerDismissed = true
+                    } label: { Image(systemName: "xmark") }
+                        .buttonStyle(.borderless).controlSize(.small)
+                }
+                .padding(.horizontal, 14).padding(.vertical, 8)
+                .background(ZB.vermillion.opacity(0.06))
+            }
+        }
+    }
+
     // MARK: 正文编辑器（人的领地）
 
     private var proseEditor: some View {
@@ -294,9 +338,37 @@ struct ChapterEditorView: View {
                 .background(ZB.paper.opacity(0.6))
             }
             .padding(.bottom, 8)
+            onboardingBanner
 
             // 右栏：作者速记 + AI 运行预览（专注模式下隐藏）
             VStack(alignment: .leading, spacing: 8) {
+                // 提案收件箱常驻入口：写作时一键处理提案，不用离开正文去侧栏
+                Button {
+                    showInbox = true
+                } label: {
+                    HStack {
+                        Image(systemName: "tray.full")
+                        Text("提案收件箱")
+                        let pending = store.proposals.filter { $0.status == .pending }.count
+                        if pending > 0 {
+                            Text("\(pending)")
+                                .font(.caption2.bold())
+                                .padding(.horizontal, 6).padding(.vertical, 1)
+                                .background(Color.orange.opacity(0.9))
+                                .foregroundStyle(.white)
+                                .clipShape(Capsule())
+                        }
+                        Spacer()
+                        Image(systemName: "chevron.right").font(.caption2).foregroundStyle(.tertiary)
+                    }
+                    .font(.caption.bold())
+                    .padding(.vertical, 5).padding(.horizontal, 8)
+                    .background(Color.accentColor.opacity(0.08))
+                    .cornerRadius(6)
+                }
+                .buttonStyle(.borderless)
+                .help("AI 的所有产出都在这里等你审过才算数")
+
                 Text("给 AI 的本章指令（可选）").font(.caption.bold()).foregroundStyle(.secondary)
                 TextEditor(text: $directive)
                     .font(.callout)
