@@ -3,6 +3,7 @@ import SwiftUI
 // MARK: - 提案收件箱：AI 的一切产出在这里被作者裁决（接受 / 修改后接受 / 拒绝）
 
 struct ProposalInboxView: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @ObservedObject var vm: AppViewModel
     @ObservedObject var store: ProjectStore
     @State private var filterPendingOnly = true
@@ -48,7 +49,7 @@ struct ProposalInboxView: View {
                         }
                     }
                     .padding(12)
-                    .animation(.snappy(duration: 0.25), value: store.proposals.map(\.id))
+                    .animation(ZBMotion.standard(reduceMotion: reduceMotion), value: store.proposals.map(\.id))
                 }
             }
         }

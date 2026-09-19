@@ -80,20 +80,24 @@ struct ChapterEditorView: View {
             }
             proseEditor
         }
-        .animation(reduceMotion ? .easeOut(duration: 0.15) : .snappy(duration: 0.3), value: showSkeletonEditor)
+        .animation(ZBMotion.standard(reduceMotion: reduceMotion), value: showSkeletonEditor)
         .onAppear { store.autoSaveEnabled = vm.config.autoSave }
         .sheet(isPresented: $showSnapshots) {
             SnapshotBrowser(store: store, chapterNumber: chapterNumber)
         }
-        .sheet(isPresented: $showRecall) {
-            RecallSheetView(vm: vm, store: store, chapterNumber: chapterNumber, directive: directive)
-        }
         .sheet(isPresented: $showPipeline) {
             PipelineSheet(vm: vm, store: store, chapterNumber: chapterNumber)
+                // AI 运行中禁止交互关闭：关掉就看不到流式预览与错误，容易以为卡死
+                //（任务本身在 vm 里继续，关不关都不影响提案落箱；但默认拦一下）
+                .interactiveDismissDisabled(vm.ai.running)
         }
         .sheet(isPresented: $showInbox) {
             ProposalInboxView(vm: vm, store: store)
-                .frame(minWidth: 620, minHeight: 480)
+                .frame(minWidth: ZBSpace.Sheet.wide, minHeight: 480)
+        }
+        .sheet(isPresented: $showRecall) {
+            RecallSheetView(vm: vm, store: store, chapterNumber: chapterNumber, directive: directive)
+                .frame(minWidth: ZBSpace.Sheet.wide, minHeight: 520)
         }
     }
 
@@ -295,7 +299,7 @@ struct ChapterEditorView: View {
                     } label: { Image(systemName: "xmark") }
                         .buttonStyle(.borderless).controlSize(.small)
                 }
-                .padding(.horizontal, 14).padding(.vertical, 8)
+                .padding(.horizontal, ZBSpace.md).padding(.vertical, ZBSpace.sm)
                 .background(ZB.vermillion.opacity(0.06))
             }
         }
@@ -423,7 +427,7 @@ struct ChapterEditorView: View {
 
                 Spacer()
             }
-            .padding(10)
+            .padding(ZBSpace.sm)
             .opacity(focusMode ? 0 : 1)
                     .frame(minWidth: 250, maxWidth: 330)
                     .frame(width: focusMode ? 0 : nil)

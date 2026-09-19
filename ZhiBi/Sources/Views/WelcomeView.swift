@@ -50,6 +50,14 @@ struct WelcomeView: View {
     /// 常用题材快选（点一下填入，可再手改）
     static let genreChips = ["东方玄幻", "都市异能", "科幻末世", "悬疑推理", "历史权谋", "仙侠修真", "无限流", "言情世情"]
 
+    /// 新建书表单复位（关窗后调用；下次打开是一张干净的表）
+    func resetCreateForm() {
+        newTitle = ""
+        newGenre = ""
+        newPremise = ""
+        buildFramework = true
+    }
+
     var body: some View {
         HStack(spacing: 0) {
             // 左侧品牌区：墨色渐变 + 朱砂印
@@ -135,9 +143,9 @@ struct WelcomeView: View {
                         }
                         .zbGlassButton()
                     }
-                    .padding(.horizontal, 26)
-                    .padding(.top, 18)
-                    .padding(.bottom, 12)
+                    .padding(.horizontal, ZBSpace.lg)
+                    .padding(.top, ZBSpace.lg)
+                    .padding(.bottom, ZBSpace.sm)
 
                     if vm.projects.isEmpty {
                         VStack(spacing: 12) {
@@ -157,6 +165,10 @@ struct WelcomeView: View {
         }
         .sheet(isPresented: $showCreate) {
             createSheet
+        }
+        // 关窗即清空表单：残留的书名/一句话核心最容易让人误建一本书
+        .onChange(of: showCreate) { _, showing in
+            if !showing { resetCreateForm() }
         }
         .confirmationDialog("删除《\(projectPendingDelete?.title ?? "")》？", isPresented: Binding(
             get: { projectPendingDelete != nil },
@@ -299,7 +311,7 @@ struct ShelfBookCard: View {
         }
         .contentShape(Rectangle())
         .scaleEffect(hovering && !reduceMotion ? 1.035 : 1)
-        .animation(reduceMotion ? nil : .snappy(duration: 0.25), value: hovering)
+        .animation(ZBMotion.curve(ZBMotion.standard, reduceMotion: reduceMotion), value: hovering)
         .onTapGesture { onOpen() }
         .onHover { hovering = $0 }
         .contextMenu {
@@ -462,9 +474,13 @@ extension WelcomeView {
             Text("只填书名就能开写。给 AI 的原料越具体，框架越准——但也可以后补。")
                 .font(.caption).foregroundStyle(.secondary)
 
-            VStack(alignment: .leading, spacing: 10) {
+            VStack(alignment: .leading, spacing: ZBSpace.sm) {
+                @FocusState var titleFocused: Bool
                 TextField("书名", text: $newTitle)
                     .textFieldStyle(.roundedBorder)
+                    .focused($titleFocused)
+                    .onSubmit { titleFocused = false }
+                    .onAppear { titleFocused = true }
 
                 VStack(alignment: .leading, spacing: 6) {
                     Text("题材").font(.caption).foregroundStyle(.secondary)
@@ -504,8 +520,8 @@ extension WelcomeView {
                 .disabled(newTitle.isEmpty)
             }
         }
-        .padding(22)
-        .frame(width: 520)
+        .padding(ZBSpace.lg)
+        .frame(width: ZBSpace.Sheet.standard)
     }
 }
 

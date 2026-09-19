@@ -70,8 +70,8 @@ struct ImportPreviewSheet: View {
                 .buttonStyle(.borderedProminent)
             }
         }
-        .padding(18)
-        .frame(width: 780, height: 560)
+        .padding(ZBSpace.lg)
+        .frame(width: ZBSpace.Sheet.wide, height: 560)
     }
 }
 
@@ -133,7 +133,7 @@ struct SettingsView: View {
         }
         .formStyle(.grouped)
         .padding(0)
-        .frame(width: 560, height: 540)
+        .frame(width: ZBSpace.Sheet.standard, height: 560)
         .onAppear {
             hub.onPick = { entry in
                 vm.config.baseURL = entry.baseURL

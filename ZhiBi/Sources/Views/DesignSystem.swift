@@ -38,6 +38,51 @@ enum ZB {
         dark: NSColor(srgbRed: 0.125, green: 0.123, blue: 0.128, alpha: 1))
 }
 
+// MARK: - 间距刻度（全应用唯一来源：出现魔法数就换令牌）
+
+enum ZBSpace {
+    static let xxs: CGFloat = 4
+    static let xs: CGFloat = 8
+    static let sm: CGFloat = 12
+    static let md: CGFloat = 16
+    static let lg: CGFloat = 20
+    static let xl: CGFloat = 28
+
+    /// 侧栏列宽（工作区/书架统一）
+    enum Column {
+        static let min: CGFloat = 176
+        static let ideal: CGFloat = 200
+        static let max: CGFloat = 260
+    }
+
+    /// 二级窗口（sheet）统一尺寸
+    enum Sheet {
+        static let narrow: CGFloat = 420
+        static let standard: CGFloat = 560
+        static let wide: CGFloat = 760
+    }
+}
+
+// MARK: - 动画令牌（时长统一；reduce motion 时全部退化为无动画）
+
+enum ZBMotion {
+    /// 微反馈（hover/选中变色）
+    static let quick: Double = 0.18
+    /// 标准（展开/收起/列表变化）
+    static let standard: Double = 0.28
+    /// 结构性（布局切换/整页过渡）
+    static let layout: Double = 0.38
+
+    /// 尊重「减弱动态效果」：reduce 时返回 nil（调用处 .animation(x, value:)）
+    static func curve(_ duration: Double, reduceMotion: Bool) -> Animation? {
+        reduceMotion ? nil : .snappy(duration: duration)
+    }
+
+    /// 常用：标准 snappy（reduce 时空操作）
+    static func standard(reduceMotion: Bool) -> Animation? { curve(standard, reduceMotion: reduceMotion) }
+    static func quick(reduceMotion: Bool) -> Animation? { curve(quick, reduceMotion: reduceMotion) }
+}
+
 // MARK: - 卡片修饰符
 
 struct ZBCardStyle: ViewModifier {

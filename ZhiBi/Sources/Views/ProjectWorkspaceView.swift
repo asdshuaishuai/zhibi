@@ -49,7 +49,7 @@ struct ProjectWorkspaceView: View {
                 }
             }
             .listStyle(.sidebar)
-            .navigationSplitViewColumnWidth(min: 180, ideal: 200, max: 280)
+            .navigationSplitViewColumnWidth(min: ZBSpace.Column.min, ideal: ZBSpace.Column.ideal, max: ZBSpace.Column.max)
         } detail: {
             VStack(spacing: 0) {
                 detailView
@@ -345,7 +345,7 @@ struct AgentStatusStrip: View {
                     Text(saveErr).font(.caption)
                     Spacer()
                 }
-                .padding(8)
+                .padding(ZBSpace.sm)
                 .background(Color.red.opacity(0.1))
             }
         }
@@ -368,7 +368,7 @@ struct AgentStatusStrip: View {
             }
             Spacer()
         }
-        .padding(10)
+        .padding(ZBSpace.sm)
         .background(Color.accentColor.opacity(0.06))
     }
 
@@ -389,7 +389,7 @@ struct AgentStatusStrip: View {
             .controlSize(.small)
             .buttonStyle(.borderless)
         }
-        .padding(8)
+        .padding(ZBSpace.sm)
         .background(Color.green.opacity(0.08))
     }
 

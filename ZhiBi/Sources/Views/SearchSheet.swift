@@ -151,7 +151,7 @@ struct SearchSheet: View {
                 .listStyle(.inset)
             }
         }
-        .frame(width: 620, height: 560)
+        .frame(width: ZBSpace.Sheet.wide, height: 560)
     }
 
     private func openFirst() {
