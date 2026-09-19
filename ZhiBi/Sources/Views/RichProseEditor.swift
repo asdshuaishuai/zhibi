@@ -197,13 +197,20 @@ struct RichProseEditor: NSViewRepresentable {
         static func highlightRanges(text: String, clueNeedles: [String]) -> [(NSRange, Bool)] {
             let ns = text as NSString
             var out: [(NSRange, Bool)] = []
+            // 词表去重（ banned/adverbs/tells/teasers 有交叉）+ clue needles 合并成一张表一趟扫
+            var seen = Set<String>()
             var needles: [(String, Bool)] = []
-            for w in AILint.bannedLevel1 + AILint.stackingAdverbs + AILint.threeCharTells + AILint.foreshadowTeasers {
+            for w in AILint.bannedLevel1 + AILint.stackingAdverbs + AILint.threeCharTells + AILint.foreshadowTeasers
+            where !seen.contains(w) {
+                seen.insert(w)
                 needles.append((w, true))
             }
-            for n in clueNeedles where n.count >= 2 {
+            for n in clueNeedles where n.count >= 2 && !seen.contains(n) {
+                seen.insert(n)
                 needles.append((n, false))
             }
+            // 长 needle 优先：短词命中不吞掉长词（「不由得」vs「由」）
+            needles.sort { $0.0.count > $1.0.count }
             for (needle, isAITell) in needles {
                 var searchStart = 0
                 while searchStart < ns.length {

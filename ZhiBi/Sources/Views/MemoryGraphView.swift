@@ -72,7 +72,9 @@ struct MemoryGraphView: View {
             }
             ToolbarItem(placement: .primaryAction) {
                 Button {
-                    pan = .zero; scale = 1.0
+                    pan = .zero
+                    panStart = .zero
+                    scale = 1.0
                 } label: { Image(systemName: "arrow.up.left.and.arrow.down.right") }
                 .help("复位视图")
             }
@@ -87,6 +89,9 @@ struct MemoryGraphView: View {
             let positions = layoutPositions(mode: mode, graph: graph, in: size)
 
             ZStack {
+                // 滚轮缩放的桥接视图（透明、不吃事件，只把 scrollWheel 转成 scale）
+                ScrollWheelZoom(scale: $scale)
+                    .allowsHitTesting(false)
                 Canvas { context, _ in
                     drawEdges(context: context, mode: mode, graph: graph, positions: positions)
                     drawNodes(context: context, mode: mode, graph: graph, positions: positions)
@@ -102,10 +107,15 @@ struct MemoryGraphView: View {
                 )
                 .simultaneousGesture(
                     MagnificationGesture()
-                        .onChanged { scale = max(0.4, min(3.0, $0)) }
+                        .onChanged { s in
+                            let clamped = max(0.4, min(3.0, s))
+                            // 以视图中心为锚缩放，避免节点飞出
+                            scale = clamped
+                        }
                 )
                 .onTapGesture { loc in
-                    let hit = nearestNode(loc, positions: positions, threshold: 22)
+                    let hit = nearestNode(toGraphPoint(loc, size: geo.size), positions: positions,
+                                          threshold: 22 / scale)
                     selectedID = hit
                 }
 
@@ -138,11 +148,27 @@ struct MemoryGraphView: View {
     // MARK: - 布局（确定性：无物理模拟，任何输入都给稳定画面）
 
     private func layoutPositions(mode: GraphMode, graph: MemoryGraph, in size: CGSize) -> [String: CGPoint] {
+        // 布局算「图坐标」，再统一过屏幕变换（缩放+平移）——手势改的是变换参数
+        let raw: [String: CGPoint]
         switch mode {
-        case .characters: return layoutCharacters(graph: graph, in: size)
-        case .plot: return layoutPlot(graph: graph, in: size)
-        case .events: return layoutEvents(graph: graph, in: size)
+        case .characters: raw = layoutCharacters(graph: graph, in: size)
+        case .plot: raw = layoutPlot(graph: graph, in: size)
+        case .events: raw = layoutEvents(graph: graph, in: size)
         }
+        let cx = size.width / 2, cy = size.height / 2
+        var out: [String: CGPoint] = [:]
+        for (id, p) in raw {
+            out[id] = CGPoint(x: (p.x - cx) * scale + cx + pan.width,
+                              y: (p.y - cy) * scale + cy + pan.height)
+        }
+        return out
+    }
+
+    /// 屏幕坐标 → 图坐标（命中测试用；与 layoutPositions 的变换互逆）
+    private func toGraphPoint(_ p: CGPoint, size: CGSize) -> CGPoint {
+        let cx = size.width / 2, cy = size.height / 2
+        return CGPoint(x: (p.x - pan.width - cx) / scale + cx,
+                       y: (p.y - pan.height - cy) / scale + cy)
     }
 
     /// 人物关系图：圆环布局，边粗细=关系事实数
@@ -467,3 +493,44 @@ struct MemoryGraphView: View {
 }
 
 
+
+// MARK: - 滚轮缩放（SwiftUI 无原生滚轮事件，用桥接视图把事件转成 scale 绑定）
+
+private struct ScrollWheelZoom: View {
+    @Binding var scale: CGFloat
+
+    var body: some View {
+        ScrollWheelBridge { delta in
+            let factor = delta > 0 ? 1.12 : 1 / 1.12
+            scale = max(0.4, min(3.0, scale * factor))
+        }
+    }
+}
+
+private struct ScrollWheelBridge: NSViewRepresentable {
+    let onZoom: (CGFloat) -> Void
+
+    final class HostView: NSView {
+        var onZoom: (CGFloat) -> Void = { _ in }
+        override func scrollWheel(with event: NSEvent) {
+            // 触控板双指是 phaseChanged 捏合（已由 MagnificationGesture 处理），
+            // 这里只接鼠标滚轮的精确滚动增量
+            if event.phase == .changed || event.momentumPhase == .changed { return }
+            onZoom(event.scrollingDeltaY + event.scrollingDeltaX)
+        }
+        override var acceptsFirstResponder: Bool { true }
+    }
+
+    func makeNSView(context: Context) -> NSView {
+        let v = HostView()
+        v.onZoom = onZoom
+        return v
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        (nsView as? HostView)?.onZoom = onZoom
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
+    final class Coordinator {}
+}

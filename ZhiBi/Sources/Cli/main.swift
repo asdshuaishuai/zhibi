@@ -139,7 +139,7 @@ let tmp = FileManager.default.temporaryDirectory.appendingPathComponent("zhibi-c
 try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
 
 @MainActor
-func runStoreTests(tmp: URL) throws {
+func runStoreTests(tmp: URL) async throws {
     let store = ProjectStore(rootURL: tmp)
     store.project = NovelProject(title: "测试书", genre: "玄幻", premise: "测试", chapterWordTarget: 2000)
 
@@ -186,9 +186,9 @@ func runStoreTests(tmp: URL) throws {
     check("快照回滚", store2.chapter(2)?.prose.contains("夜风很冷") == true)
 
     // 5.3 确定性验证：章1 伏笔合同应通过；章2 应检出跨章重复
-    let report1 = Validator.deterministicReport(store: store2, chapter: 1)
+    let report1 = await Validator.deterministicReport(store: store2, chapter: 1)
     check("章1伏笔合同无 blocker", !report1.allIssues.contains { $0.category == "伏笔合同" && $0.severity == .blocker })
-    let report2 = Validator.deterministicReport(store: store2, chapter: 2)
+    let report2 = await Validator.deterministicReport(store: store2, chapter: 2)
     check("章2检出跨章重复", report2.allIssues.contains { $0.category == "跨章重复" })
 
     // 5.4 上下文造包
@@ -430,6 +430,114 @@ func reviewFixTests() async throws {
 }
 
 try await reviewFixTests()
+
+// MARK: - 16. 二轮审查回归（四路新角度：性能/闭环/阻塞/一致性）
+
+MainActor.assumeIsolated {
+    // P0-A: meta.json 用瘦身结构解（含 cachedWords + iso8601），不再 keyNotFound
+    let metaJSON = """
+    {"id":"E0B0B0B0-1B1B-4B1B-8B1B-1B1B1B1B1B1B","number":1,"title":"血夜","status":"初稿完成","cachedWords":3238,"updatedAt":"2026-09-19T10:50:29Z"}
+    """
+    let metaURL = URL(fileURLWithPath: "/tmp/zhibi-meta-\(UUID().uuidString).json")
+    try? metaJSON.data(using: .utf8)?.write(to: metaURL)
+    let decodedMeta = try? Disk.readJSON(ChapterMeta.self, from: metaURL)
+    check("meta 瘦身结构可解", decodedMeta?.number == 1 && decodedMeta?.cachedWords == 3238)
+    let chapterDecodeFailed = (try? JSONDecoder().decode(Chapter.self, from: Data(metaJSON.utf8))) == nil
+    check("老路径（Chapter 直解 meta）确实会失败", chapterDecodeFailed)
+
+    // P0-B: canon 幽灵节——先算真实落盘名再导入孤儿，循环切断
+    let phantom = ProjectStore(rootURL: URL(fileURLWithPath: "/tmp/zhibi-ph-\(UUID().uuidString).zhibi"))
+    phantom.ensureChapter(1)
+    phantom.canonSections = [CanonSection(title: "世界观", content: "甲", certainty: .canon),
+                             CanonSection(title: "世界观", content: "乙", certainty: .canon)]
+    try? phantom.saveNow()
+    let afterFirst = phantom.canonSections.count
+    try? phantom.saveNow()
+    try? phantom.saveNow()
+    check("同名 canon 节不自复制", phantom.canonSections.count == afterFirst, "首次 \(afterFirst) → 三次保存后 \(phantom.canonSections.count)")
+    // 与 UI 删除路径一致：内存移除 + 磁盘 md 同步删
+    let removedTitles = phantom.canonSections.filter { $0.title == "世界观" }.map(\.title)
+    phantom.canonSections.removeAll { $0.title == "世界观" }
+    for t in removedTitles { phantom.deleteCanonMarkdown(title: t) }
+    try? phantom.saveNow()
+    try? phantom.saveNow()
+    check("删除设定不留孤儿复活", phantom.canonSections.allSatisfy { $0.title != "世界观" }, "剩余 \(phantom.canonSections.map(\.title))")
+    let canonFiles = (try? FileManager.default.contentsOfDirectory(atPath: ProjectLayout.canonDir(phantom.rootURL).path))?.filter { $0.hasSuffix(".md") } ?? []
+    check("删除后磁盘无残留 md", !canonFiles.contains("世界观.md") && !canonFiles.contains("世界观-x.md"), "文件 \(canonFiles)")
+
+    // P0-D: 中文数字溢出保护（19+ 汉字数字不再 trap 崩进程）
+    check("中文数字病态输入不崩", ImportService.chineseNumeral(String(repeating: "一", count: 30)) >= 0)
+    check("中文数字正常解析", ImportService.chineseNumeral("十二") == 12)
+
+
+    // P1-10: dedup 保留有效事实（已失效的不该挤掉有效的）
+    let facts = [
+        MemoryFact(subject: "紫渊", predicate: "状态", object: "无器", fromChapter: 1, invalidatedAtChapter: 5, source: "extracted"),
+        MemoryFact(subject: "紫渊", predicate: "状态", object: "无器", fromChapter: 1, source: "extracted"),
+    ]
+    let deduped = MemoryHub.deduplicate(facts)
+    check("dedup 保留有效事实", deduped.kept.count == 1 && deduped.kept[0].invalidatedAtChapter == nil,
+          "kept inv=\(deduped.kept[0].invalidatedAtChapter.map { String($0) } ?? "nil")")
+
+    // P1-12: 快照同名不覆盖
+    let snapStore = ProjectStore(rootURL: URL(fileURLWithPath: "/tmp/zhibi-sp-\(UUID().uuidString).zhibi"))
+    snapStore.ensureChapter(1)
+    snapStore.updateChapter(1) { $0.prose = "第一版内容" }
+    let s1 = snapStore.snapshotProse(chapter: 1, tag: "手动")
+    snapStore.updateChapter(1) { $0.prose = "第二版内容" }
+    let s2 = snapStore.snapshotProse(chapter: 1, tag: "手动")
+    check("快照同名加序号", s1 != s2 && (s2 ?? "").contains("-2"), "\(s1 ?? "-") vs \(s2 ?? "-")")
+    let snaps = snapStore.snapshots(chapter: 1)
+    check("两次快照都在盘上", snaps.count == 2 && snaps.contains { $0.text.contains("第一版") })
+}
+
+// P1-13 旧版表格（块间空行）兼容 + P0-F 隔离 + P1-7/skeleton 台账联动
+MainActor.assumeIsolated {
+    let font = NSFont.systemFont(ofSize: 14)
+    let legacyTable = "| 人物 | 年龄 |\n\n| --- | --- |\n\n| 张三 | 二十 |"
+    let rendered = MarkdownLite.render(legacyTable, bodyFont: font, textColor: .textColor)
+    check("旧版空行表格仍识别", (rendered.string as NSString).range(of: "|").location == NSNotFound
+          && rendered.string.contains("张三"), "得到 [\(rendered.string.prefix(60))]")
+    check("旧版空行表格可序列化回管道", {
+        let back = MarkdownLite.serialize(rendered)
+        return back.contains("| 人物 | 年龄 |") && back.contains("| 张三 | 二十 |")
+    }())
+}
+
+// P1-7 skeleton 采纳 → 伏笔台账落动作 + P1-9 状态变更记日志
+@MainActor
+func roundTwoStoreTests() async throws {
+    let st = ProjectStore(rootURL: URL(fileURLWithPath: "/tmp/zhibi-r2-\(UUID().uuidString).zhibi"))
+    st.ensureChapter(3)
+    var touch = ClueTouch(clueID: "F01", action: .reveal, requirement: "本章揭示灰白光来历")
+    var sk = ChapterSkeleton(beats: [Beat(summary: "巷战", purpose: "推进", suggestedWords: 2000)], clueTouches: [touch])
+    await st.addProposal(AIProposal(capability: .chapterSkeleton, chapterNumber: 3, title: "骨架",
+                                    payload: .skeleton(sk)))
+    st.clues = [Clue(id: "F01", title: "灰白光", detail: "刀上的光", plantedChapter: 1)]
+    if let id = st.proposals.first(where: { $0.chapterNumber == 3 })?.id {
+        let ok = st.applyPayload(st.proposals.first { $0.id == id }!.payload, chapter: 3)
+        check("骨架采纳返回成功", ok)
+        let f = st.clues.first { $0.id == "F01" }
+        check("骨架采纳联动伏笔台账", f?.lastActionChapter == 3 && !(f?.actions.isEmpty ?? true),
+              "lastAction=\(f?.lastActionChapter ?? -1) actions=\(f?.actions.count ?? -1)")
+        // P1-15: reject 可恢复
+        let rp = ProjectStore(rootURL: URL(fileURLWithPath: "/tmp/zhibi-rp-\(UUID().uuidString).zhibi"))
+        rp.ensureChapter(1)
+        await rp.addProposal(AIProposal(capability: .recallMemo, title: "备忘", payload: .memo("x")))
+        let pid = rp.proposals[0].id
+        rp.rejectProposal(pid)
+        check("拒绝后入已拒绝", rp.proposals[0].status == .rejected)
+        rp.reopenProposal(pid)
+        check("恢复待审", rp.proposals[0].status == .pending)
+    }
+    // P1-9: 状态菜单式变更也写动作日志
+    st.logClueAction(clueID: "F01", chapter: 5, kind: .resolve, note: "状态改为「已回收」")
+    let afterStatus = st.clues.first { $0.id == "F01" }
+    check("状态变更记动作日志", afterStatus?.lastActionChapter == 5 && afterStatus?.actions.count == 2)
+}
+
+try await roundTwoStoreTests()
+
 
 
 // MARK: - 14. 记忆图谱：图引擎派生 + 回溯

@@ -162,7 +162,8 @@ enum AILint {
         hit("章末预告", teaser.isEmpty ? "" : "章末空泛预告「\(teaser)」——用具体钩子物件/事件收束", teaser, teaser.isEmpty ? 0 : 1)
 
         // 9. 段落等长（变异系数 < 0.15）
-        let lengths = text.paragraphs.map { WordStats.chineseCount($0) }.filter { $0 > 20 }
+        let paragraphs = text.paragraphs   // 一次切分，第 10 项复用（原先各切一遍全文）
+        let lengths = paragraphs.map { WordStats.chineseCount($0) }.filter { $0 > 20 }
         var cv = 1.0
         if lengths.count >= 5 {
             let mean = Double(lengths.reduce(0, +)) / Double(lengths.count)
@@ -174,7 +175,7 @@ enum AILint {
         }
 
         // 10. 对话标签密度（"说道/问道"类标签占对话段比例）
-        let dialogueParas = text.paragraphs.filter { $0.contains("“") || $0.contains("「") }
+        let dialogueParas = paragraphs.filter { $0.contains("“") || $0.contains("「") }
         let tagged = dialogueParas.filter { p in ["说道", "问道", "答道", "喊道", "说道：", "说：", "道："].contains { p.occurrences(of: $0) > 0 } }
         let tagRatio = dialogueParas.isEmpty ? 0 : Double(tagged.count) / Double(dialogueParas.count)
         if tagRatio > 0.5 {

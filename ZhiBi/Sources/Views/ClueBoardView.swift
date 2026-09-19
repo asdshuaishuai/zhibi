@@ -119,10 +119,19 @@ struct ClueBoardView: View {
         Menu {
             ForEach(ClueStatus.allCases, id: \.self) { s in
                 Button(s.rawValue) {
-                    if let idx = store.clues.firstIndex(where: { $0.id == c.id }) {
-                        store.clues[idx].status = s
-                        store.saveSoon()
+                    guard let idx = store.clues.firstIndex(where: { $0.id == c.id }) else { return }
+                    store.clues[idx].status = s
+                    // 状态变更也是「一次动作」：不记日志的话 lastActionChapter 停在埋设章，
+                    // 「最近动作」列与过期提示会失真
+                    let kind: ClueActionKind
+                    switch s {
+                    case .resolved: kind = .resolve
+                    case .deferred: kind = .defer
+                    case .abandoned: kind = .resolve
+                    default: kind = .develop
                     }
+                    store.logClueAction(clueID: c.id, chapter: currentChapter, kind: kind,
+                                        note: "状态改为「\(s.rawValue)」")
                 }
             }
             Divider()

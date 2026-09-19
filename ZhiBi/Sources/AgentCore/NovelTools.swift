@@ -327,7 +327,10 @@ enum NovelTools {
                 DeslopSuggestion(gate: s.gate ?? "", original: s.original, replacement: s.replacement, reason: s.reason ?? "")
             }
             var report = DeslopReport(chapter: chapter, grade: p.grade, suggestions: suggestions)
-            report.lint = await MainActor.run { AILint.scan(store.chapter(chapter)?.prose ?? "") }
+            // AILint.scan 是纯函数：文本在主线程取，扫描扔后台——全章 10 万字时
+            // 这一步原先要卡主线程 ~0.5s（AI 工具链上每调一次卡一次）
+            let prose = await MainActor.run { store.chapter(chapter)?.prose ?? "" }
+            report.lint = await Task.detached(priority: .utility) { AILint.scan(prose) }.value
             await store.addProposal(AIProposal(capability: .deslop, chapterNumber: chapter,
                                                title: "第\(chapter)章 去AI味建议（\(suggestions.count) 处，\(p.grade)）",
                                                note: p.note ?? "", payload: .deslop(report)))

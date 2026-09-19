@@ -48,7 +48,6 @@ enum ImportService {
         let fm = FileManager.default
 
         // oh-story：四个标准目录
-        FileHandle.standardError.write(("[scan:A]\n").data(using: .utf8)!)
         for (dirName, kind) in [("设定", ImportItem.Kind.canon), ("大纲", ImportItem.Kind.outline)] {
             let dir = url.appendingPathComponent(dirName, isDirectory: true)
             if let files = try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil) {
@@ -60,7 +59,6 @@ enum ImportService {
                 }
             }
         }
-        FileHandle.standardError.write(("[scan:B]\n").data(using: .utf8)!)
         // 递归子目录（如 大纲/第一阶段/）
         if let enumerator = fm.enumerator(at: url, includingPropertiesForKeys: nil) {
             for case let f as URL in enumerator {
@@ -75,7 +73,6 @@ enum ImportService {
                 }
             }
         }
-        FileHandle.standardError.write(("[scan:C]\n").data(using: .utf8)!)
         // 正文
         let proseDir = url.appendingPathComponent("正文", isDirectory: true)
         if let files = try? fm.contentsOfDirectory(at: proseDir, includingPropertiesForKeys: nil) {
@@ -87,7 +84,6 @@ enum ImportService {
                 }
             }
         }
-        FileHandle.standardError.write(("[scan:D]\n").data(using: .utf8)!)
         // 追踪 JSON：结构化提取书名 / 阶段 / 活跃伏笔 / 下一章承诺
         let tracking = url.appendingPathComponent("追踪/_tracking-state.json")
         if let data = try? Data(contentsOf: tracking),
@@ -148,7 +144,6 @@ enum ImportService {
             }
         }
 
-        FileHandle.standardError.write(("[scan:E]\n").data(using: .utf8)!)
         // generic 兜底：根目录下的散文件
         if let files = try? fm.contentsOfDirectory(at: url, includingPropertiesForKeys: nil) {
             for f in files.sorted(by: { $0.lastPathComponent < $1.lastPathComponent }) where ["md", "txt"].contains(f.pathExtension.lowercased()) {
@@ -279,23 +274,26 @@ enum ImportService {
     /// 中文数字 → 阿拉伯数字（第十二章 → 12；一百二十三 → 123）
     static func chineseNumeral(_ input: String) -> Int {
         let digits: [Character: Int] = ["零": 0, "两": 2, "一": 1, "二": 2, "三": 3, "四": 4, "五": 5, "六": 6, "七": 7, "八": 8, "九": 9]
+        // 病态文件名保护：超长汉字数字串（第壹零壹…×19）会让算术 trap（SIGTRAP 崩进程），
+        // 先限长，其余一律溢出安全运算（&* / &+ 不回滚、不崩）
+        guard input.count <= 12 else { return 0 }
         var total = 0
         var section = 0      // 当前"十/百"段
         var current = 0
         for ch in input {
             if let d = digits[ch] {
-                current = current * 10 + d
+                current = current &* 10 &+ d
             } else if ch == "十" {
-                section += (current == 0 ? 1 : current) * 10
+                section = section &+ (current == 0 ? 1 : current) &* 10
                 current = 0
             } else if ch == "百" {
-                section += (current == 0 ? 1 : current) * 100
+                section = section &+ (current == 0 ? 1 : current) &* 100
                 current = 0
-                total += section
+                total = total &+ section
                 section = 0
             }
         }
-        return total + section + current
+        return total &+ section &+ current
     }
 
     /// 解析「第001章_血夜」「第 12 章 风起」类文件名

@@ -59,6 +59,24 @@ struct ChapterSkeleton: Codable {
     var approvedAt: Date?
 }
 
+// MARK: - 章节 meta（磁盘权威：正文在 prose.md，meta.json 只存这个瘦身结构）
+//
+// saveNow 写入与书架/统计读取必须都用它——直接用 Chapter 解码 meta.json 会因
+// 缺 prose 键（keyNotFound）与日期策略不匹配（deferredToDate vs iso8601）而
+// 静默丢掉每一章（上轮书架统计恒 0 的根因）。
+
+struct ChapterMeta: Codable {
+    var id: UUID = UUID()
+    var number: Int
+    var title: String = ""
+    var status: ChapterStatus = .empty
+    var skeleton: ChapterSkeleton?
+    var summary: ChapterSummary?
+    var notes: [String]?
+    var cachedWords: Int?
+    var updatedAt: Date = Date()
+}
+
 // MARK: - 章节
 
 struct Chapter: Codable, Identifiable {

@@ -9,7 +9,6 @@ struct ChapterEditorView: View {
 
     @State private var directive = ""
     @State private var showSkeletonEditor = true
-    @State private var beatDraftFor: UUID?
     @State private var lintResult: LintSummary?
     @State private var newNote = ""
     @State private var showSnapshots = false

@@ -80,6 +80,9 @@ struct ProjectWorkspaceView: View {
                 selectedChapter = n
                 selection = .chapters
                 if focusMode { focusMode = false }
+            }, onSelectSection: { sec in
+                vm.navigateToSection = sec
+                if focusMode { focusMode = false }
             })
         }
         .onChange(of: focusMode) { focused in

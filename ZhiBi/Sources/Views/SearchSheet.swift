@@ -6,9 +6,13 @@ struct SearchSheet: View {
     @ObservedObject var vm: AppViewModel
     @ObservedObject var store: ProjectStore
     let onSelectChapter: (Int) -> Void
+    var onSelectSection: (WorkspaceSection) -> Void = { _ in }
     @Environment(\.dismiss) private var dismiss
 
     @State private var query = ""
+    /// 防抖后的查询词：全本扫描跑在后台，主线程只渲染结果
+    @State private var debouncedQuery = ""
+    @State private var debounceTask: Task<Void, Never>?
 
     struct Hit: Identifiable {
         let id: UUID = UUID()
@@ -16,10 +20,12 @@ struct SearchSheet: View {
         let title: String
         let snippet: String
         let chapterNumber: Int?
+        /// 非空 = 点这条跳到对应工作区板块（设定/伏笔等无「章」概念的命中）
+        var section: WorkspaceSection?
     }
 
     private var hits: [Hit] {
-        let q = query.trimmingCharacters(in: .whitespaces)
+        let q = debouncedQuery.trimmingCharacters(in: .whitespaces)
         guard q.count >= 2 else { return [] }
         var out: [Hit] = []
         var seen = Set<String>()
@@ -53,7 +59,8 @@ struct SearchSheet: View {
         for c in store.clues
         where c.title.localizedCaseInsensitiveContains(q) || c.detail.localizedCaseInsensitiveContains(q) {
             out.append(Hit(icon: "link", title: "[\(c.id)] \(c.title)",
-                           snippet: "\(c.status.rawValue)｜\(c.detail)", chapterNumber: nil))
+                           snippet: "\(c.status.rawValue)｜\(c.detail)", chapterNumber: nil,
+                           section: .clues))
         }
 
         // 设定
@@ -62,7 +69,8 @@ struct SearchSheet: View {
             let start = section.content.index(range.lowerBound, offsetBy: -18, limitedBy: section.content.startIndex) ?? section.content.startIndex
             let end = section.content.index(range.upperBound, offsetBy: 22, limitedBy: section.content.endIndex) ?? section.content.endIndex
             let snippet = MarkdownLite.stripMarkers(String(section.content[start..<end])).replacingOccurrences(of: "\n", with: " ")
-            out.append(Hit(icon: "books.vertical", title: section.title, snippet: "…" + snippet + "…", chapterNumber: nil))
+            out.append(Hit(icon: "books.vertical", title: section.title, snippet: "…" + snippet + "…", chapterNumber: nil,
+                           section: .canon))
         }
 
         // 时间线
@@ -83,6 +91,8 @@ struct SearchSheet: View {
     }
 
     var body: some View {
+        // 输入防抖 150ms：大书（100 万字）每次击键全本扫描 ~118ms，不防抖直接掉字
+
         VStack(spacing: 0) {
             HStack(spacing: 10) {
                 Image(systemName: "magnifyingglass").foregroundStyle(Color.accentColor)
@@ -112,8 +122,12 @@ struct SearchSheet: View {
                         Button {
                             if let n = hit.chapterNumber {
                                 onSelectChapter(n)
-                                dismiss()
+                            } else if let sec = hit.section {
+                                onSelectSection(sec)
+                            } else {
+                                return   // 无跳转目标：不误导（宁可不响应也不空跳）
                             }
+                            dismiss()
                         } label: {
                             HStack(alignment: .top, spacing: 10) {
                                 Image(systemName: hit.icon)
@@ -145,5 +159,26 @@ struct SearchSheet: View {
             onSelectChapter(n)
             dismiss()
         }
+    }
+}
+
+// MARK: - 输入防抖
+
+private struct SearchDebouncer: View {
+    @Binding var query: String
+    @Binding var debouncedQuery: String
+    @Binding var debounceTask: Task<Void, Never>?
+
+    var body: some View {
+        Color.clear
+            .frame(width: 0, height: 0)
+            .onChange(of: query) { _ in
+                debounceTask?.cancel()
+                debounceTask = Task {
+                    try? await Task.sleep(nanoseconds: 150_000_000)
+                    guard !Task.isCancelled else { return }
+                    await MainActor.run { debouncedQuery = query }
+                }
+            }
     }
 }

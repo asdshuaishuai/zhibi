@@ -214,7 +214,7 @@ final class AIService: ObservableObject {
             lastError = "第\(n)章还没有正文，无法验证。"
             return
         }
-        var report = Validator.deterministicReport(store: store, chapter: n)
+        var report = await Validator.deterministicReport(store: store, chapter: n)
         report.checkedAt = Date()
         // 确定性报告先落一份（AI 审校提案会合并它）
         await store.addProposal(AIProposal(

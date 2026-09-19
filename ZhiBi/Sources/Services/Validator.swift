@@ -5,7 +5,7 @@ import Foundation
 
 enum Validator {
     @MainActor
-    static func deterministicReport(store: ProjectStore, chapter n: Int) -> ValidationReport {
+    static func deterministicReport(store: ProjectStore, chapter n: Int) async -> ValidationReport {
         var report = ValidationReport(chapter: n)
         guard let ch = store.chapter(n) else { return report }
 
@@ -55,8 +55,8 @@ enum Validator {
                 evidence: c.detail, suggestion: "本章推进、显式搁置、或放弃。"))
         }
 
-        // 4. AI 味确定性扫描
-        let lint = AILint.scan(ch.prose)
+        // 4. AI 味确定性扫描：纯函数挪后台（10 万字章节约省主线程 ~0.5s）
+        let lint: LintSummary = await Task.detached(priority: .utility) { AILint.scan(ch.prose) }.value
         report.lintSummary = lint
         for h in lint.topIssues {
             let sev: Severity = (h.kind == "禁用词" && lint.bannedPerKilo > 15) ? .warning : .note
@@ -170,7 +170,7 @@ extension String {
 @MainActor
 extension ProjectStore {
     /// AI 审校提案会合并到这份确定性报告之上
-    func draftValidationReport(for chapter: Int) -> ValidationReport {
-        Validator.deterministicReport(store: self, chapter: chapter)
+    func draftValidationReport(for chapter: Int) async -> ValidationReport {
+        await Validator.deterministicReport(store: self, chapter: chapter)
     }
 }

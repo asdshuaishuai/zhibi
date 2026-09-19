@@ -44,13 +44,25 @@ enum MarkdownLite {
             let leadingSpaces = line.prefix(while: { $0 == " " }).count
             let trimmed = line.trimmingCharacters(in: CharacterSet(charactersIn: " \t"))
 
-            // 表格：连续 | 开头的行（GFM 管道表）→ 样式化行块
+            // 表格：连续 | 开头的行（GFM 管道表）→ 样式化行块。
+            // 兼容旧版：块间可能被插入单个空行（老 serialize 用 \n\n 连接），
+            // 空行在表格 run 内跳过但不结束表格；连续两个空行才结束。
             if trimmed.hasPrefix("|") {
                 var tableLines: [String] = []
                 var j = i
+                var pendingBlank = 0
                 while j < lines.count {
                     let t2 = lines[j].trimmingCharacters(in: CharacterSet(charactersIn: " \t"))
-                    if t2.hasPrefix("|") { tableLines.append(t2); j += 1 } else { break }
+                    if t2.hasPrefix("|") {
+                        if pendingBlank > 0 { tableLines.append(t2); pendingBlank = 0 }
+                        else { tableLines.append(t2) }
+                        j += 1
+                    } else if t2.isEmpty, pendingBlank == 0 {
+                        pendingBlank = 1
+                        j += 1
+                    } else {
+                        break
+                    }
                 }
                 if tableLines.count >= 2 {
                     appendTable(tableLines, out: out, baseFont: bodyFont, textColor: textColor)

@@ -58,14 +58,27 @@ final class ProjectStore: ObservableObject {
         proposals = (try? Disk.readJSON([AIProposal].self, from: ProjectLayout.proposalsFile(rootURL))) ?? []
 
         var loaded: [Chapter] = []
+        var quarantineNotes: [String] = []
         let fm = FileManager.default
         if let dirs = try? fm.contentsOfDirectory(at: ProjectLayout.chaptersDir(rootURL), includingPropertiesForKeys: nil) {
             for dir in dirs.sorted(by: { $0.lastPathComponent < $1.lastPathComponent }) where dir.lastPathComponent.hasPrefix("ch-") {
                 guard let num = Int(dir.lastPathComponent.dropFirst(3)) else { continue }
                 var ch = (try? Disk.readJSON(Chapter.self, from: chapterMetaURL(num))) ?? Chapter(number: num)
-                ch.prose = Disk.readText(ProjectLayout.proseFile(rootURL, number: num))
+                // 正文读不了（非 UTF-8 等）：原稿隔离为 .corrupt，绝不静默清空后覆盖
+                let proseFile = ProjectLayout.proseFile(rootURL, number: num)
+                if fm.fileExists(atPath: proseFile.path) {
+                    let (text, quarantined) = Disk.readTextOrQuarantine(proseFile)
+                    ch.prose = text
+                    if let q = quarantined {
+                        quarantineNotes.append("第\(num)章正文不是 UTF-8 文本，已保留为 \(q.lastPathComponent)（未丢失）。")
+                        Disk.invalidateSignature(proseFile)
+                    }
+                }
                 loaded.append(ch)
             }
+        }
+        if !quarantineNotes.isEmpty {
+            lastSaveError = quarantineNotes.joined(separator: " ")
         }
         loaded.sort { $0.number < $1.number }
         chapters = loaded
@@ -123,31 +136,41 @@ final class ProjectStore: ObservableObject {
         }
         try Disk.writeJSON(project, to: ProjectLayout.projectFile(rootURL))
         // canon 每节同步导出为可手改的 md（派生视图）；孤儿 md（用户手工放入）自动导入为新节。
-        // 孤儿导入必须发生在写 sections.json 之前——否则本次保存里导入的节点要等下一次保存才可见。
+        // 顺序：先算「本次将写出的真实文件名集合」（含同名 -x 后缀），再导入孤儿
+        // （排除这些名字），再写 sections.json，最后写 md。否则同名节会每次保存
+        // 把 -x 副本当孤儿吃回来，节数无限 +1。
         let canonDir = ProjectLayout.canonDir(rootURL)
-        var usedNames = Set<String>()
+        var writtenNames = Set<String>()
+        var nameByTitle: [String: String] = [:]
         for section in canonSections {
-            usedNames.insert(ProjectLayout.safeFileName(section.title) + ".md")
+            var name = ProjectLayout.safeFileName(section.title)
+            while writtenNames.contains(name + ".md") { name += "-x" }
+            writtenNames.insert(name + ".md")
+            nameByTitle[section.title] = name
         }
         if let existing = try? FileManager.default.contentsOfDirectory(at: canonDir, includingPropertiesForKeys: nil) {
             for f in existing.sorted(by: { $0.lastPathComponent < $1.lastPathComponent })
-            where f.pathExtension == "md" && !usedNames.contains(f.lastPathComponent) {
+            where f.pathExtension == "md" && !writtenNames.contains(f.lastPathComponent) {
                 if let text = try? String(contentsOf: f, encoding: .utf8) {
-                    canonSections.append(CanonSection(title: f.deletingPathExtension().lastPathComponent,
-                                                      content: text, certainty: .tentative))
+                    let title = f.deletingPathExtension().lastPathComponent
+                    canonSections.append(CanonSection(title: title, content: text, certainty: .tentative))
+                    var name = title
+                    while writtenNames.contains(name + ".md") { name += "-x" }
+                    writtenNames.insert(name + ".md")
+                    nameByTitle[title] = name
                 }
             }
         }
         try Disk.writeJSON(canonSections, to: canonDir.appendingPathComponent("sections.json"))
-        // 每节 md 单节写失败不中断保存（其余账本还要落盘）
+        // 每节 md：内容没变就跳过写（省 iCloud 上传/主线程）；单节失败不中断保存
         var canonWriteFailed = false
-        usedNames.removeAll()
         for section in canonSections {
-            var name = ProjectLayout.safeFileName(section.title)
-            while usedNames.contains(name + ".md") { name += "-x" }
-            usedNames.insert(name + ".md")
+            let name = nameByTitle[section.title] ?? ProjectLayout.safeFileName(section.title)
+            let url = canonDir.appendingPathComponent(name + ".md")
             do {
-                try Disk.write(Data(section.content.utf8), to: canonDir.appendingPathComponent(name + ".md"))
+                let existing = try? String(contentsOf: url, encoding: .utf8)
+                if existing == section.content { continue }
+                try Disk.write(Data(section.content.utf8), to: url)
             } catch {
                 canonWriteFailed = true
                 lastSaveError = "设定「\(section.title)」的 md 导出失败：\(error.localizedDescription)"
@@ -307,6 +330,14 @@ final class ProjectStore: ObservableObject {
         saveSoon()
     }
 
+    /// 误拒绝恢复：重新待审（拒绝是不可逆操作里唯一必须给撤销口子的）
+    func reopenProposal(_ id: UUID) {
+        guard let idx = proposals.firstIndex(where: { $0.id == id }) else { return }
+        proposals[idx].status = .pending
+        proposals[idx].decidedAt = nil
+        saveSoon()
+    }
+
     /// 采纳提案 = 把 payload 写入权威状态（宿主裁决的唯一入口）
     /// 返回 false = 未入库（调用方应保持提案 pending 而不是标记已采纳）
     @discardableResult
@@ -335,6 +366,8 @@ final class ProjectStore: ObservableObject {
         case .skeleton(let sk):
             guard let n = chapter else { return false }
             updateChapter(n) { $0.skeleton = sk; if $0.status == .empty { $0.status = .skeletoned } }
+            // 骨架里的伏笔触点合同落到台账（AI 骨架声明 F03 本章揭示 → 台账记一笔）
+            applyClueActions(chapter: n, touches: sk.clueTouches)
         case .draft(let draft):
             // 作者采纳草稿才走到这里；覆盖前自动快照，快照失败则中止采纳（旧稿保住，提案保持待审）
             guard let n = chapter else { return false }
@@ -420,7 +453,13 @@ final class ProjectStore: ObservableObject {
         guard let ch = chapter(n), !ch.prose.isEmpty else { return nil }
         let dir = ProjectLayout.chapterDir(rootURL, number: n).appendingPathComponent("snapshots", isDirectory: true)
         let stamp = Self.fileStamp()
-        let name = "\(stamp)-\(tag).md"
+        // 同名（同秒 + 固定 tag）会静默覆盖旧备份：叠加序号保证每次都留住
+        var name = "\(stamp)-\(tag).md"
+        var seq = 2
+        while FileManager.default.fileExists(atPath: dir.appendingPathComponent(name).path) {
+            name = "\(stamp)-\(tag)-\(seq).md"
+            seq += 1
+        }
         do {
             try Disk.write(Data(ch.prose.utf8), to: dir.appendingPathComponent(name))
             return name
@@ -443,6 +482,8 @@ final class ProjectStore: ObservableObject {
         let text = Disk.readText(url)
         guard !text.isEmpty else { return }
         _ = snapshotProse(chapter: n, tag: "回滚前")   // 回滚不毁当前稿
+        // 外部写过的文件：让写签名失效，强制本次回滚内容真正落盘
+        Disk.invalidateSignature(ProjectLayout.proseFile(rootURL, number: n))
         updateChapter(n) { $0.prose = text }
     }
 
@@ -450,6 +491,14 @@ final class ProjectStore: ObservableObject {
         let f = DateFormatter()
         f.dateFormat = "yyyyMMdd-HHmmss"
         return f.string(from: date)
+    }
+
+    /// 删除设定的磁盘 md（删除/改名时调用，避免孤儿导入把它复活成新节）
+    func deleteCanonMarkdown(title: String) {
+        let dir = ProjectLayout.canonDir(rootURL)
+        for suffix in ["", "-x", "-x-x"] {
+            try? FileManager.default.removeItem(at: dir.appendingPathComponent(ProjectLayout.safeFileName(title) + suffix + ".md"))
+        }
     }
 
     /// 作者手动登记伏笔动作（写完一章后的对账）

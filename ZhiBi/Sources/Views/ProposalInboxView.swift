@@ -75,6 +75,10 @@ struct ProposalInboxView: View {
                     Label("已采纳", systemImage: "checkmark.circle.fill").font(.caption2).foregroundStyle(.green)
                 case .rejected:
                     Label("已拒绝", systemImage: "xmark.circle").font(.caption2).foregroundStyle(.secondary)
+                    Button("恢复待审") { store.reopenProposal(p.id) }
+                        .font(.caption2)
+                        .buttonStyle(.link)
+                        .help("误拒绝可恢复——拒绝不可逆，只留这一个撤销口子")
                 }
                 Button {
                     if expanded.contains(p.id) { expanded.remove(p.id) } else { expanded.insert(p.id) }
@@ -254,12 +258,19 @@ struct ProposalInboxView: View {
                     Spacer()
                     Button("全部采纳") {
                         var snapshotted = false
+                        var failed = 0
                         for s in report.suggestions where !s.applied {
-                            _ = vm.applyDeslopSuggestion(s, chapter: report.chapter,
-                                                         snapshotTag: snapshotted ? nil : "deslop前")
-                            snapshotted = true
+                            let ok = vm.applyDeslopSuggestion(s, chapter: report.chapter,
+                                                              snapshotTag: snapshotted ? nil : "deslop前")
+                            if ok { snapshotted = true } else { failed += 1 }
                         }
-                        store.acceptProposal(p.id)
+                        // 有任一建议没落地（原文对不上）就不标已采纳——否则提案从待审列表
+                        // 消失、状态却停在未应用，作者永远不知道哪条没改
+                        if failed == 0 {
+                            store.acceptProposal(p.id)
+                        } else {
+                            vm.ai.lastError = "\(failed) 条建议的原文对不上（可能已被你手改），已落地的保持落地；其余保持待审。"
+                        }
                     }
                     .controlSize(.small)
                 }

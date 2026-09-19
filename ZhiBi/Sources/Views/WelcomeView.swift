@@ -396,9 +396,10 @@ struct ShelfBookCard: View {
         for dir in dirs where dir.lastPathComponent.hasPrefix("ch-") {
             let meta = dir.appendingPathComponent("meta.json")
             guard let data = try? Data(contentsOf: meta),
-                  let ch = try? JSONDecoder().decode(Chapter.self, from: data) else { continue }
-            if ch.wordCount > 0 { result.chapters += 1 }
-            result.words += ch.wordCount
+                  let ch = try? Disk.readJSON(ChapterMeta.self, from: meta) else { continue }
+            let words = ch.cachedWords ?? 0
+            if words > 0 { result.chapters += 1 }
+            result.words += words
         }
         return result
     }

@@ -35,19 +35,23 @@ enum MemoryHub {
     // MARK: 完全重复（三元组 + 起始章都一致）
 
     static func deduplicate(_ facts: [MemoryFact]) -> (kept: [MemoryFact], removed: Int) {
-        var seen = Set<String>()
+        // 同主语同谓词同对象同章去重；key 不含失效态，但**保留时优先未失效**——
+        // 否则「作者把第一条标失效、AI 又提取一条有效的」会丢掉有效事实（上轮事故）。
+        var firstIndexByKey: [String: Int] = [:]
         var kept: [MemoryFact] = []
-        var removed = 0
-        for f in facts {
+        for (i, f) in facts.enumerated() {
             let key = "\(f.subject)|\(f.predicate)|\(f.object)|\(f.fromChapter)"
-            if seen.contains(key) {
-                removed += 1
+            if let existingIdx = firstIndexByKey[key] {
+                let existing = kept[existingIdx]
+                if existing.invalidatedAtChapter != nil, f.invalidatedAtChapter == nil {
+                    kept[existingIdx] = f   // 用有效的替换已失效的
+                }
             } else {
-                seen.insert(key)
+                firstIndexByKey[key] = kept.count
                 kept.append(f)
             }
         }
-        return (kept, removed)
+        return (kept, facts.count - kept.count)
     }
 
     // MARK: 矛盾体检：同主语同谓词、对象不同、同时有效（读者可见层面）
@@ -126,16 +130,26 @@ enum MemoryHub {
         }
     }
 
+    /// 单趟遍历统计（原 6 次全表 filter：body 每次求值重算，大账本上明显）
     @MainActor
     static func ledgerStats(store: ProjectStore) -> LedgerStats {
         let chapters = store.chapters.filter { $0.summary != nil }.count
+        var active = 0, invalidated = 0, hidden = 0, authored = 0
+        var subjects = Set<String>()
+        for f in store.facts {
+            let valid = f.isValid(atChapter: 9999)
+            if valid { active += 1 } else { invalidated += 1 }
+            if valid && !f.publicToReader { hidden += 1 }
+            if f.source == "authored" { authored += 1 }
+            subjects.insert(f.subject)
+        }
         return LedgerStats(
             totalFacts: store.facts.count,
-            activeFacts: store.facts.filter { $0.isValid(atChapter: 9999) }.count,
-            invalidated: store.facts.filter { !$0.isValid(atChapter: 9999) }.count,
-            hiddenFromReader: store.facts.filter { !$0.publicToReader && $0.isValid(atChapter: 9999) }.count,
-            authoredCount: store.facts.filter { $0.source == "authored" }.count,
-            subjects: Set(store.facts.map(\.subject)).count,
+            activeFacts: active,
+            invalidated: invalidated,
+            hiddenFromReader: hidden,
+            authoredCount: authored,
+            subjects: subjects.count,
             summaries: chapters)
     }
 }

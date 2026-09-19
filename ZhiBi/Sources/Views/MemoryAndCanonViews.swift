@@ -310,8 +310,13 @@ struct MemoryView: View {
         }
     }
 
+    /// 字典预查：Table 每行多列调用它，逐行 first(where:) 是 O(n²)
+    private var factIndex: [UUID: MemoryFact] {
+        Dictionary(store.facts.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+    }
+
     private func factByID(_ id: UUID) -> MemoryFact? {
-        store.facts.first { $0.id == id }
+        factIndex[id]
     }
 
     private func mutate(_ id: UUID, _ change: (inout MemoryFact) -> Void) {
@@ -348,6 +353,11 @@ struct CanonView: View {
                         .font(.caption)
                     Button("加") {
                         guard !newTitle.isEmpty else { return }
+                        if let existing = store.canonSections.first(where: { $0.title == newTitle }) {
+                            selectedSection = existing.id   // 同题不新建（否则与磁盘 md 撞名）
+                            newTitle = ""
+                            return
+                        }
                         let s = CanonSection(title: newTitle)
                         store.canonSections.append(s)
                         selectedSection = s.id
@@ -377,8 +387,9 @@ struct CanonView: View {
                         .controlSize(.small)
                         Button(role: .destructive) {
                             guard store.canonSections.indices.contains(idx) else { return }
-                            _ = store.canonSections.remove(at: idx)
+                            let removed = store.canonSections.remove(at: idx)
                             selectedSection = nil
+                            store.deleteCanonMarkdown(title: removed.title)
                             store.saveSoon()
                         } label: { Image(systemName: "trash") }
                         .controlSize(.small)

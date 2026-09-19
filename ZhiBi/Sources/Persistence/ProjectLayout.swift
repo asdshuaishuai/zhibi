@@ -68,12 +68,29 @@ struct ProjectRef: Codable, Identifiable {
 
 /// 磁盘原子写
 enum Disk {
+    /// 内容签名缓存：同一 URL 写过相同字节就不再落盘。
+    /// saveNow 每次保存都重写全部结构文件——大书（数百 canon 节）时这是主线程
+    /// 上最大的无谓 I/O（还会触发 FileProvider/iCloud 协调）。
+    private static let signatureLock = NSLock()
+    private static var signatures: [String: Int] = [:]
+
     static func write(_ data: Data, to url: URL) throws {
+        let key = url.path
+        let sig = data.hashValue
+        signatureLock.lock(); defer { signatureLock.unlock() }
+        if signatures[key] == sig { return }   // 内容没变：跳过（磁盘上已是这份）
         let dir = url.deletingLastPathComponent()
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         let tmp = dir.appendingPathComponent("." + url.lastPathComponent + ".tmp")
         try data.write(to: tmp, options: [.atomic])
         _ = try FileManager.default.replaceItemAt(url, withItemAt: tmp)
+        signatures[key] = sig
+    }
+
+    /// 外部改动（导入/用户手改/回滚）后让签名失效，强制下次写入落盘
+    static func invalidateSignature(_ url: URL) {
+        signatureLock.lock(); defer { signatureLock.unlock() }
+        signatures.removeValue(forKey: url.path)
     }
 
     static func writeJSON<T: Encodable>(_ value: T, to url: URL) throws {
@@ -87,6 +104,21 @@ enum Disk {
         let dec = JSONDecoder()
         dec.dateDecodingStrategy = .iso8601
         return try dec.decode(type, from: try Data(contentsOf: url))
+    }
+
+    /// 读文本。读取失败（含非 UTF-8 编码）时：**把原文件备份为 .corrupt 并返回空串**，
+    /// 绝不静默返回空——否则作者第一次敲键盘就会用 saveNow 把原稿覆盖掉。
+    /// 返回的第二元素是备份路径（nil = 正常读到的文本）。
+    static func readTextOrQuarantine(_ url: URL) -> (text: String, quarantined: URL?) {
+        if let text = try? String(contentsOf: url, encoding: .utf8) {
+            return (text, nil)
+        }
+        // latin1 总能解码：作为兜底显示（不丢内容），同时把原文隔离保留
+        let salvage = (try? String(contentsOf: url, encoding: .isoLatin1)) ?? ""
+        let quarantine = url.appendingPathExtension("corrupt")
+        try? FileManager.default.removeItem(at: quarantine)
+        try? FileManager.default.moveItem(at: url, to: quarantine)
+        return (salvage, quarantine)
     }
 
     static func readText(_ url: URL) -> String {

@@ -13,18 +13,26 @@ enum KeychainStore {
             kSecAttrService as String: service,
             kSecAttrAccount as String: "default",
         ]
-        SecItemDelete(query as CFDictionary)
-        guard !key.isEmpty else { return true }
+        // 清空 key = 删除语义（前置是安全的：没有「删成功、加失败」的中间态）
+        guard !key.isEmpty else {
+            SecItemDelete(query as CFDictionary)
+            return true
+        }
         var attrs = query
         attrs[kSecValueData as String] = data
         // 本机专用：不随整机备份迁移到他人设备
         attrs[kSecAttrAccessible as String] = kSecAttrAccessibleWhenUnlockedThisDeviceOnly
-        let status = SecItemAdd(attrs as CFDictionary, nil)
-        if status != errSecSuccess {
-            assertionFailure("Keychain 写入失败：\(status)")
+        // update-first：先尝试更新；只有不存在才 add。
+        // （旧实现先 Delete 再 Add——add 失败就把旧 key 弄丢了。）
+        let updateStatus = SecItemUpdate(query as CFDictionary,
+                                         [kSecValueData as String: data] as CFDictionary)
+        if updateStatus == errSecSuccess { return true }
+        if updateStatus == errSecItemNotFound {
+            let addStatus = SecItemAdd(attrs as CFDictionary, nil)
+            if addStatus == errSecSuccess { return true }
             return false
         }
-        return true
+        return false
     }
 
     static func load() -> String {
