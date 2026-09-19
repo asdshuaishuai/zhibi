@@ -39,17 +39,109 @@ final class ProjectStore: ObservableObject {
         return url
     }
 
+    /// 同步加载（CLI/导入用；主线程 UI 请用 loadAsync）
     func load() throws {
-        project = try Disk.readJSON(NovelProject.self, from: ProjectLayout.projectFile(rootURL))
+        try applySnapshot(LoadSnapshot.capture(rootURL: rootURL))
+    }
+
+    /// 异步加载：读盘全部在后台执行，主线程只做组装与赋值。
+    /// FileProvider/网络卷上逐个同步读会无限期卡住界面（必须异步化）。
+    func loadAsync() async throws {
+        let snapshot = try await Task.detached(priority: .userInitiated) {
+            try LoadSnapshot.capture(rootURL: self.rootURL)
+        }.value
+        try applySnapshot(snapshot)
+    }
+
+    /// 读盘快照：只读、可整体放后台（不触碰 @MainActor 的 self）
+    struct LoadSnapshot {
+        var project: NovelProject
+        var canonSections: [CanonSection]
+        var storylines: [Storyline]
+        var timelineEvents: [TimelineEvent]
+        var stages: [Stage]
+        var clues: [Clue]
+        var memory: MemoryFile?
+        var proposals: [AIProposal]
+        var chapters: [Chapter]
+        var quarantineNotes: [String]
+
+        static func capture(rootURL: URL) throws -> LoadSnapshot {
+            let project = try Disk.readJSON(NovelProject.self, from: ProjectLayout.projectFile(rootURL))
+            let sectionsFile = ProjectLayout.canonDir(rootURL).appendingPathComponent("sections.json")
+            let canon: [CanonSection]
+            if FileManager.default.fileExists(atPath: sectionsFile.path) {
+                canon = (try? Disk.readJSON([CanonSection].self, from: sectionsFile)) ?? []
+            } else {
+                canon = ProjectStore.loadCanonFromDisk(rootURL: rootURL)
+            }
+            let storylines = (try? Disk.readJSON([Storyline].self, from: ProjectLayout.storylinesFile(rootURL))) ?? []
+            let timelineEvents = (try? Disk.readJSON([TimelineEvent].self, from: ProjectLayout.eventsFile(rootURL))) ?? []
+            let stages = (try? Disk.readJSON([Stage].self, from: ProjectLayout.stagesFile(rootURL))) ?? []
+            let clues = (try? Disk.readJSON([Clue].self, from: ProjectLayout.cluesFile(rootURL))) ?? []
+            let memory = try? Disk.readJSON(MemoryFile.self, from: ProjectLayout.memoryFile(rootURL))
+            let proposals = (try? Disk.readJSON([AIProposal].self, from: ProjectLayout.proposalsFile(rootURL))) ?? []
+
+            var loaded: [Chapter] = []
+            var quarantineNotes: [String] = []
+            let fm = FileManager.default
+            if let dirs = try? fm.contentsOfDirectory(at: ProjectLayout.chaptersDir(rootURL), includingPropertiesForKeys: nil) {
+                for dir in dirs.sorted(by: { $0.lastPathComponent < $1.lastPathComponent }) where dir.lastPathComponent.hasPrefix("ch-") {
+                    guard let num = Int(dir.lastPathComponent.dropFirst(3)) else { continue }
+                    var ch = (try? Disk.readJSON(Chapter.self, from: ProjectStore.chapterMetaURL(rootURL, num))) ?? Chapter(number: num)
+                    // 正文读不了（非 UTF-8 等）：原稿隔离为 .corrupt，绝不静默清空后覆盖
+                    let proseFile = ProjectLayout.proseFile(rootURL, number: num)
+                    if fm.fileExists(atPath: proseFile.path) {
+                        let (text, quarantined) = Disk.readTextOrQuarantine(proseFile)
+                        ch.prose = text
+                        if quarantined != nil {
+                            quarantineNotes.append("第\(num)章正文不是 UTF-8 文本，已保留为 .corrupt（未丢失）。")
+                        }
+                    }
+                    loaded.append(ch)
+                }
+            }
+            return LoadSnapshot(project: project, canonSections: canon, storylines: storylines,
+                                timelineEvents: timelineEvents, stages: stages, clues: clues, memory: memory,
+                                proposals: proposals, chapters: loaded, quarantineNotes: quarantineNotes)
+        }
+    }
+
+    /// 主线程应用快照（唯一的 store 变更点）
+    @discardableResult
+    func applySnapshot(_ snapshot: LoadSnapshot) throws -> Bool {
+        self.project = snapshot.project
+        self.canonSections = snapshot.canonSections
+        self.storylines = snapshot.storylines
+        self.timelineEvents = snapshot.timelineEvents
+        self.stages = snapshot.stages
+        self.clues = snapshot.clues
+        self.facts = snapshot.memory?.facts ?? []
+        self.characterAliases = snapshot.memory?.aliases ?? []
+        self.dismissedConflicts = snapshot.memory?.dismissedConflicts ?? []
+        self.proposals = snapshot.proposals
+        self.chapters = snapshot.chapters.sorted { $0.number < $1.number }
+        dirtyChapters.removeAll()
+        if !snapshot.quarantineNotes.isEmpty {
+            lastSaveError = snapshot.quarantineNotes.joined(separator: " ")
+            // 隔离过的正文：写签名失效，强制下次保存真正落盘
+            for ch in snapshot.chapters where ch.prose.isEmpty {
+                Disk.invalidateSignature(ProjectLayout.proseFile(rootURL, number: ch.number))
+            }
+        }
+        return true
+    }
+
+    func loadSync() throws {
         let sectionsFile = ProjectLayout.canonDir(rootURL).appendingPathComponent("sections.json")
         if FileManager.default.fileExists(atPath: sectionsFile.path) {
             canonSections = (try? Disk.readJSON([CanonSection].self, from: sectionsFile)) ?? []
         } else {
-            canonSections = loadCanonFromDisk()
+            canonSections = Self.loadCanonFromDisk(rootURL: rootURL)
         }
-        storylines = (try? Disk.readJSON([Storyline].self, from: ProjectLayout.outlineFile(rootURL).appendingPathComponent("storylines.json"))) ?? []
-        timelineEvents = (try? Disk.readJSON([TimelineEvent].self, from: ProjectLayout.outlineFile(rootURL).appendingPathComponent("events.json"))) ?? []
-        stages = (try? Disk.readJSON([Stage].self, from: ProjectLayout.outlineFile(rootURL).appendingPathComponent("stages.json"))) ?? []
+        storylines = (try? Disk.readJSON([Storyline].self, from: ProjectLayout.storylinesFile(rootURL))) ?? []
+        timelineEvents = (try? Disk.readJSON([TimelineEvent].self, from: ProjectLayout.eventsFile(rootURL))) ?? []
+        stages = (try? Disk.readJSON([Stage].self, from: ProjectLayout.stagesFile(rootURL))) ?? []
         clues = (try? Disk.readJSON([Clue].self, from: ProjectLayout.cluesFile(rootURL))) ?? []
         let mem = try? Disk.readJSON(MemoryFile.self, from: ProjectLayout.memoryFile(rootURL))
         facts = mem?.facts ?? []
@@ -63,7 +155,7 @@ final class ProjectStore: ObservableObject {
         if let dirs = try? fm.contentsOfDirectory(at: ProjectLayout.chaptersDir(rootURL), includingPropertiesForKeys: nil) {
             for dir in dirs.sorted(by: { $0.lastPathComponent < $1.lastPathComponent }) where dir.lastPathComponent.hasPrefix("ch-") {
                 guard let num = Int(dir.lastPathComponent.dropFirst(3)) else { continue }
-                var ch = (try? Disk.readJSON(Chapter.self, from: chapterMetaURL(num))) ?? Chapter(number: num)
+                var ch = (try? Disk.readJSON(Chapter.self, from: ProjectStore.chapterMetaURL(rootURL, num))) ?? Chapter(number: num)
                 // 正文读不了（非 UTF-8 等）：原稿隔离为 .corrupt，绝不静默清空后覆盖
                 let proseFile = ProjectLayout.proseFile(rootURL, number: num)
                 if fm.fileExists(atPath: proseFile.path) {
@@ -86,7 +178,7 @@ final class ProjectStore: ObservableObject {
     }
 
     /// canon 目录下的人写 markdown（人可手改的设定文件）
-    private func loadCanonFromDisk() -> [CanonSection] {
+    nonisolated private static func loadCanonFromDisk(rootURL: URL) -> [CanonSection] {
         let fm = FileManager.default
         guard let files = try? fm.contentsOfDirectory(at: ProjectLayout.canonDir(rootURL), includingPropertiesForKeys: nil) else { return [] }
         return files.filter { $0.pathExtension == "md" }.sorted { $0.lastPathComponent < $1.lastPathComponent }
@@ -131,7 +223,7 @@ final class ProjectStore: ObservableObject {
             let meta = MetaChapter(id: ch.id, number: ch.number, title: ch.title, status: ch.status,
                                    skeleton: ch.skeleton, summary: ch.summary, notes: ch.notes,
                                    cachedWords: ch.cachedWords, updatedAt: ch.updatedAt)
-            try Disk.writeJSON(meta, to: chapterMetaURL(ch.number))
+            try Disk.writeJSON(meta, to: Self.chapterMetaURL(rootURL, ch.number))
             try Disk.write(Data(ch.prose.utf8), to: ProjectLayout.proseFile(rootURL, number: ch.number))
         }
         try Disk.writeJSON(project, to: ProjectLayout.projectFile(rootURL))
@@ -176,10 +268,9 @@ final class ProjectStore: ObservableObject {
                 lastSaveError = "设定「\(section.title)」的 md 导出失败：\(error.localizedDescription)"
             }
         }
-        let outlineDir = ProjectLayout.outlineFile(rootURL).deletingLastPathComponent()
-        try Disk.writeJSON(storylines, to: outlineDir.appendingPathComponent("storylines.json"))
-        try Disk.writeJSON(timelineEvents, to: outlineDir.appendingPathComponent("events.json"))
-        try Disk.writeJSON(stages, to: outlineDir.appendingPathComponent("stages.json"))
+        try Disk.writeJSON(storylines, to: ProjectLayout.storylinesFile(rootURL))
+        try Disk.writeJSON(timelineEvents, to: ProjectLayout.eventsFile(rootURL))
+        try Disk.writeJSON(stages, to: ProjectLayout.stagesFile(rootURL))
         try Disk.writeJSON(clues, to: ProjectLayout.cluesFile(rootURL))
         try Disk.writeJSON(MemoryFile(facts: facts, aliases: characterAliases, dismissedConflicts: dismissedConflicts), to: ProjectLayout.memoryFile(rootURL))
         try Disk.writeJSON(proposals, to: ProjectLayout.proposalsFile(rootURL))
@@ -191,8 +282,8 @@ final class ProjectStore: ObservableObject {
         }
     }
 
-    private func chapterMetaURL(_ n: Int) -> URL {
-        ProjectLayout.chapterDir(rootURL, number: n).appendingPathComponent("meta.json")
+    nonisolated private static func chapterMetaURL(_ root: URL, _ n: Int) -> URL {
+        ProjectLayout.chapterDir(root, number: n).appendingPathComponent("meta.json")
     }
 
     // MARK: - 章节操作

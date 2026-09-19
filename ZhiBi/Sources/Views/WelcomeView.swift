@@ -278,6 +278,7 @@ struct ShelfBookCard: View {
     @State private var stats: ShelfStats?
     @State private var style: Int?
     @State private var hovering = false
+    @State private var openingFlag = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var resolvedStyle: Int { style ?? CoverStyle.defaultIndex(for: ref.title) }
@@ -414,6 +415,7 @@ struct ShelfListRow: View {
     let onDelete: () -> Void
 
     @State private var stats: ShelfStats?
+    @State private var openingFlag = false
 
     var body: some View {
         HStack(spacing: 12) {
@@ -444,8 +446,12 @@ struct ShelfListRow: View {
         .padding(10)
         .zbGlass(cornerRadius: 12, interactive: true)
         .contentShape(Rectangle())
-        .onTapGesture { onOpen() }
+        .onTapGesture {
+            openingFlag = true
+            onOpen()
+        }
         .task { stats = await Task.detached { ShelfBookCard.loadStats(url: ref.url) }.value }
+        .opacity(openingFlag ? 0.5 : 1)
     }
 }
 

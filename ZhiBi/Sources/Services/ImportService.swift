@@ -26,9 +26,39 @@ struct ImportSummary {
     /// 从 oh-story 追踪 JSON 结构化提取
     var stages: [Stage] = []
     var clues: [Clue] = []
+    /// 执笔自己的导出（含机器可读字段）→ 结构化回读，等价还原
+    var storylines: [Storyline] = []
+    var timelineEvents: [TimelineEvent] = []
+    var facts: [MemoryFact] = []
+    var characterAliases: [CharacterAlias] = []
+    var dismissedConflicts: [String] = []
+    var dailyWords: [String: Int] = [:]
+    var projectGenre: String = ""
+    var projectPremise: String = ""
+    var targetChapters: Int?
+    var chapterWordTarget: Int?
+    var authorIntent: String = ""
+    var currentFocus: String = ""
+    var styleNotes: String = ""
+    /// 每章结构化 meta（摘要/随手记/骨架），apply 时按章写入
+    var chapterMeta: [Int: ImportedChapter] = [:]
+    /// 目录是执笔导出的（大纲 md 是派生视图，跳过以免与结构化数据重复）
+    var fromZhiBiExport = false
+
     var chapters: Int { items.filter { $0.kind == .chapter }.count }
     var canon: Int { items.filter { $0.kind == .canon }.count }
     var outlines: Int { items.filter { $0.kind == .outline }.count }
+}
+
+/// 导入的每章结构化 meta
+struct ImportedChapter {
+    var title: String = ""
+    var summaryText: String = ""
+    var keyEvents: [String] = []
+    var emotionalTone: String = ""
+    var notes: [String] = []
+    var skeleton: ChapterSkeleton?
+    var status: String = ""
 }
 
 enum ImportService {
@@ -47,8 +77,17 @@ enum ImportService {
         var summary = ImportSummary(detectedLayout: detectLayout(url) == .ohStory ? "oh-story 规范（追踪/_tracking-state.json 已识别）" : "通用目录")
         let fm = FileManager.default
 
+        // 执笔导出的目录：大纲 md 是派生视图，结构化数据从追踪 JSON 回读，跳过以免重复
+        if let trackingData = try? Data(contentsOf: url.appendingPathComponent("追踪/_tracking-state.json")),
+           let trackingObj = parseTolerantJSON(trackingData) as? [String: Any],
+           let proj = trackingObj["project"] as? [String: Any],
+           (proj["exported_from"] as? String) == "zhibi" {
+            summary.fromZhiBiExport = true
+        }
+
         // oh-story：四个标准目录
         for (dirName, kind) in [("设定", ImportItem.Kind.canon), ("大纲", ImportItem.Kind.outline)] {
+            if dirName == "大纲" && summary.fromZhiBiExport { continue }
             let dir = url.appendingPathComponent(dirName, isDirectory: true)
             if let files = try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil) {
                 for f in files.sorted(by: { $0.lastPathComponent < $1.lastPathComponent }) where ["md", "txt"].contains(f.pathExtension.lowercased()) {
@@ -64,7 +103,7 @@ enum ImportService {
             for case let f as URL in enumerator {
                 if (try? f.resourceValues(forKeys: [.isSymbolicLinkKey]))?.isSymbolicLink == true { continue }
                 let rel = f.path.replacingOccurrences(of: url.path, with: "")
-                if rel.contains("/大纲/") && f.pathExtension.lowercased() == "md" {
+                if rel.contains("/大纲/") && f.pathExtension.lowercased() == "md" && !summary.fromZhiBiExport {
                     let relPath = String(rel.dropFirst())
                     if !summary.items.contains(where: { $0.sourceName == relPath }) {
                         summary.items.append(ImportItem(kind: .outline, title: relPath.replacingOccurrences(of: ".md", with: ""),
@@ -142,6 +181,156 @@ enum ImportService {
                                                     sourceName: "追踪/_tracking-state.json#next_chapter_commitments"))
                 }
             }
+
+            // 全量结构化回读（执笔导出；同时兼容旧格式中已有的 storylines/facts 键）
+            if let lines = obj["storylines"] as? [[String: Any]] {
+                for l in lines {
+                    guard let name = l["name"] as? String else { continue }
+                    var sl = Storyline(id: (l["id"] as? String) ?? "", name: name)
+                    if let k = l["kind"] as? String {
+                        sl.kind = ["main": StorylineKind.main, "growth": .growth, "romance": .romance,
+                                   "faction": .faction, "mystery": .mystery, "rivalry": .rivalry,
+                                   "world": .world, "other": .other,
+                                   "主线": .main, "成长线": .growth, "感情线": .romance, "势力线": .faction,
+                                   "悬疑线": .mystery, "对抗线": .rivalry, "世界线": .world][k] ?? .other
+                    }
+                    sl.isThroughLine = (l["through_line"] as? Bool) ?? false
+                    summary.storylines.append(sl)
+                }
+            }
+            if let evs = obj["timeline_events"] as? [[String: Any]] {
+                for e in evs {
+                    var ev = TimelineEvent(id: (e["id"] as? String) ?? "",
+                                           chapter: (e["chapter"] as? Int) ?? 0)
+                    ev.objectiveFact = (e["objective_fact"] as? String) ?? ""
+                    ev.readerKnowledge = (e["reader_knowledge"] as? String) ?? ""
+                    ev.revealed = (e["revealed"] as? Bool) ?? false
+                    ev.revealChapter = e["reveal_chapter"] as? Int
+                    ev.storylineIDs = (e["storyline_ids"] as? [String]) ?? []
+                    summary.timelineEvents.append(ev)
+                }
+            }
+            if let fs = obj["facts"] as? [[String: Any]] {
+                for f in fs {
+                    guard let subject = f["subject"] as? String,
+                          let predicate = f["predicate"] as? String,
+                          let object = f["object"] as? String else { continue }
+                    let fact = MemoryFact(subject: subject, predicate: predicate, object: object,
+                                          fromChapter: (f["from_chapter"] as? Int) ?? 0,
+                                          invalidatedAtChapter: f["invalidated_at_chapter"] as? Int,
+                                          publicToReader: (f["public_to_reader"] as? Bool) ?? true,
+                                          source: "imported")
+                    summary.facts.append(fact)
+                }
+            }
+            if let aliases = obj["character_aliases"] as? [[String: Any]] {
+                for a in aliases {
+                    guard let canonical = a["canonical"] as? String else { continue }
+                    summary.characterAliases.append(CharacterAlias(canonicalName: canonical,
+                                                                   aliases: (a["aliases"] as? [String]) ?? []))
+                }
+            }
+            summary.dismissedConflicts = (obj["dismissed_conflicts"] as? [String]) ?? []
+            if let dw = obj["daily_words"] as? [String: Int] { summary.dailyWords = dw }
+            // 兼容：执笔导出放在 project_meta 里
+            if let pm = obj["project_meta"] as? [String: Any] {
+                summary.projectGenre = (pm["genre"] as? String) ?? ""
+                summary.projectPremise = (pm["premise"] as? String) ?? ""
+                summary.targetChapters = pm["target_chapters"] as? Int
+                summary.chapterWordTarget = pm["chapter_word_target"] as? Int
+                summary.authorIntent = (pm["author_intent"] as? String) ?? ""
+                summary.currentFocus = (pm["current_focus"] as? String) ?? ""
+                summary.styleNotes = (pm["style_notes"] as? String) ?? ""
+                if summary.dailyWords.isEmpty, let dw = pm["daily_words"] as? [String: Int] {
+                    summary.dailyWords = dw
+                }
+            }
+            // 全量伏笔（含已回收等终态）；旧格式没有 clues 键，退回 active_foreshadowing
+            if let allClues = obj["clues"] as? [[String: Any]] {
+                for c in allClues {
+                    guard let name = c["name"] as? String else { continue }
+                    var clue = Clue(id: (c["id"] as? String) ?? "", title: name)
+                    clue.detail = (c["detail"] as? String) ?? ""
+                    // 枚举在盘上是中文 rawValue（执笔自己的导出）；兼容旧 oh-story 英文键
+                    let scaleName = (c["scale"] as? String) ?? ""
+                    clue.scale = ["small": ClueScale.small, "medium": .medium, "major": .major][scaleName]
+                        ?? ["小（本弧内）": ClueScale.small, "中（本卷内）": .medium, "大（跨卷）": .major][scaleName] ?? .medium
+                    let timingName = (c["timing"] as? String) ?? ""
+                    clue.timing = ["immediate": ClueTiming.immediate, "near_term": .nearTerm, "mid_arc": .midArc,
+                                   "slow_burn": .slowBurn, "endgame": .endgame][timingName]
+                        ?? ["即刻（约3章）": ClueTiming.immediate, "近期（约5章）": .nearTerm, "中程（约8章）": .midArc,
+                            "慢热（约12章）": .slowBurn, "终局（16章+）": .endgame][timingName] ?? .midArc
+                    clue.importance = (c["importance"] as? String) ?? "中"
+                    clue.plantedChapter = (c["planted_chapter"] as? Int) ?? 0
+                    clue.lastActionChapter = (c["last_action_chapter"] as? Int) ?? clue.plantedChapter
+                    clue.plantedQuote = (c["planted_quote"] as? String) ?? ""
+                    clue.targetPayoffChapter = c["target_payoff_chapter"] as? Int
+                    if let st = c["status"] as? String {
+                        clue.status = ["planted": ClueStatus.planted, "developing": .developing,
+                                       "resolved": .resolved, "deferred": .deferred, "abandoned": .abandoned,
+                                       "已埋": .planted, "推进中": .developing, "已回收": .resolved,
+                                       "已搁置": .deferred, "已放弃": .abandoned][st] ?? .planted
+                    }
+                    if let acts = c["actions"] as? [[String: Any]] {
+                        clue.actions = acts.compactMap { a in
+                            guard let ch = a["chapter"] as? Int, let kind = a["kind"] as? String else { return nil }
+                            let k: ClueActionKind = ["plant": .plant, "develop": .develop, "reveal": .reveal,
+                                                     "resolve": .resolve, "defer": .defer,
+                                                     "埋设": .plant, "推进": .develop, "揭示": .reveal,
+                                                     "回收": .resolve, "搁置": .defer][kind] ?? .plant
+                            return ClueActionLog(chapter: ch, kind: k, note: (a["note"] as? String) ?? "")
+                        }
+                    }
+                    summary.clues.append(clue)
+                }
+            }
+            if let cms = obj["chapter_meta"] as? [[String: Any]] {
+                for c in cms {
+                    guard let num = c["number"] as? Int else { continue }
+                    var ic = ImportedChapter()
+                    ic.title = (c["title"] as? String) ?? ""
+                    ic.status = (c["status"] as? String) ?? ""
+                    ic.notes = (c["notes"] as? [String]) ?? []
+                    if let sum = c["summary"] as? [String: Any] {
+                        ic.summaryText = (sum["text"] as? String) ?? ""
+                        ic.keyEvents = (sum["key_events"] as? [String]) ?? []
+                        ic.emotionalTone = (sum["emotional_tone"] as? String) ?? ""
+                    }
+                    if let sk = c["skeleton"] as? [String: Any] {
+                        var skeleton = ChapterSkeleton()
+                        if let beats = sk["beats"] as? [[String: Any]] {
+                            skeleton.beats = beats.map { b in
+                                var beat = Beat(summary: (b["summary"] as? String) ?? "",
+                                                purpose: (b["purpose"] as? String) ?? "",
+                                                suggestedWords: (b["suggested_words"] as? Int) ?? 0)
+                                beat.done = (b["done"] as? Bool) ?? false
+                                beat.clueIDs = (b["clue_ids"] as? [String]) ?? []
+                                if let idStr = b["id"] as? String { beat.id = UUID(uuidString: idStr) ?? UUID() }
+                                return beat
+                            }
+                        }
+                        skeleton.endHook = (sk["end_hook"] as? String) ?? ""
+                        skeleton.mustDeliver = (sk["must_deliver"] as? [String]) ?? []
+                        skeleton.mustAvoid = (sk["must_avoid"] as? [String]) ?? []
+                        if let touches = sk["clue_touches"] as? [[String: Any]] {
+                            skeleton.clueTouches = touches.compactMap { t in
+                                guard let cid = t["clue_id"] as? String,
+                                      let action = t["action"] as? String,
+                                      let req = t["requirement"] as? String else { return nil }
+                                let act: ClueActionKind = ["plant": .plant, "develop": .develop, "reveal": .reveal,
+                                                           "resolve": .resolve, "defer": .defer,
+                                                           "埋设": .plant, "推进": .develop, "揭示": .reveal,
+                                                           "回收": .resolve, "搁置": .defer][action] ?? .plant
+                                return ClueTouch(clueID: cid, action: act, requirement: req)
+                            }
+                        }
+                        skeleton.humanApproved = (sk["human_approved"] as? Bool) ?? false
+                        skeleton.proposedByAI = true
+                        ic.skeleton = skeleton
+                    }
+                    summary.chapterMeta[num] = ic
+                }
+            }
         }
 
         // generic 兜底：根目录下的散文件
@@ -190,8 +379,9 @@ enum ImportService {
                     $0.status = .written
                 }
             case .canon, .outline:
+                let (certainty, body) = Self.certaintyFromHeader(item.content)
                 let section = CanonSection(title: item.kind == .outline ? "大纲·\(item.title)" : item.title,
-                                           content: item.content, certainty: .tentative)
+                                           content: body, certainty: certainty)
                 if !store.canonSections.contains(where: { $0.title == section.title }) {
                     store.canonSections.append(section)
                 }
@@ -212,8 +402,70 @@ enum ImportService {
             store.clues.append(clue)
         }
         store.clues.sort { $0.id < $1.id }
-        store.project.title = store.project.title == "未命名作品" ? titleGuess(from: summary) : store.project.title
+        // 故事线 / 事件时间线（按 id 去重，不覆盖已有）
+        for l in summary.storylines where !l.id.isEmpty && !store.storylines.contains(where: { $0.id == l.id }) {
+            store.storylines.append(l)
+        }
+        for e in summary.timelineEvents where !e.id.isEmpty && !store.timelineEvents.contains(where: { $0.id == e.id }) {
+            store.timelineEvents.append(e)
+        }
+        // 双时态事实（按 主/谓/宾/起始章 去重；别名与忽略矛盾一并回读）
+        for f in summary.facts where !store.facts.contains(where: {
+            $0.subject == f.subject && $0.predicate == f.predicate && $0.object == f.object && $0.fromChapter == f.fromChapter
+        }) {
+            store.facts.append(f)
+        }
+        for a in summary.characterAliases where !store.characterAliases.contains(where: { $0.canonicalName == a.canonicalName }) {
+            store.characterAliases.append(a)
+        }
+        var dismissed = store.dismissedConflicts ?? []
+        for key in summary.dismissedConflicts where !dismissed.contains(key) {
+            dismissed.append(key)
+        }
+        store.dismissedConflicts = dismissed
+        // 项目级元数据：空书（未命名）才接管，避免覆盖作者已填的
+        if store.project.title == "未命名作品" { store.project.title = titleGuess(from: summary) }
+        if store.project.genre.isEmpty { store.project.genre = summary.projectGenre }
+        if store.project.premise.isEmpty { store.project.premise = summary.projectPremise }
+        if !summary.authorIntent.isEmpty { store.project.authorIntent = summary.authorIntent }
+        if !summary.currentFocus.isEmpty { store.project.currentFocus = summary.currentFocus }
+        if !summary.styleNotes.isEmpty { store.project.styleNotes = summary.styleNotes }
+        if let tc = summary.targetChapters { store.project.targetChapters = tc }
+        if let cwt = summary.chapterWordTarget { store.project.chapterWordTarget = cwt }
+        if !summary.dailyWords.isEmpty {
+            var daily = store.project.dailyWords ?? [:]
+            for (k, v) in summary.dailyWords { daily[k] = max(daily[k] ?? 0, v) }
+            store.project.dailyWords = daily
+        }
+        // 每章结构化 meta：摘要/随手记/骨架（正文 md 之外的权威副本）
+        for (num, ic) in summary.chapterMeta {
+            _ = store.ensureChapter(num)
+            store.updateChapter(num, countWords: false) { ch in
+                if ch.title.isEmpty { ch.title = ic.title }
+                if ch.summary == nil, !ic.summaryText.isEmpty {
+                    ch.summary = ChapterSummary(chapter: num, summary: ic.summaryText,
+                                                keyEvents: ic.keyEvents, emotionalTone: ic.emotionalTone)
+                }
+                if let sk = ic.skeleton, ch.skeleton == nil { ch.skeleton = sk }
+                if ch.notes == nil || ch.notes?.isEmpty == true, !ic.notes.isEmpty { ch.notes = ic.notes }
+            }
+        }
         try? store.saveNow()
+    }
+
+    /// 从导出 md 首行 HTML 注释读回确定度（<!-- zhibi:certainty=canon|tentative|blank -->）
+    static func certaintyFromHeader(_ content: String) -> (Certainty, String) {
+        var body = content
+        guard content.hasPrefix("<!-- zhibi:certainty=") else { return (.tentative, content) }
+        let firstLine = String(content.prefix(while: { $0 != "\n" }))
+        guard let range = firstLine.range(of: "certainty=") else { return (.tentative, content) }
+        let value = String(firstLine[range.upperBound...]).replacingOccurrences(of: " -->", with: "")
+        body = String(String(content.dropFirst(firstLine.count)).drop(while: { $0 == "\n" }))
+        switch value {
+        case "canon": return (.canon, body)
+        case "blank": return (.open, body)
+        default: return (.tentative, body)
+        }
     }
 
     /// 容错解析：oh-story 追踪 JSON 常含字符串内裸换行等非法控制字符，

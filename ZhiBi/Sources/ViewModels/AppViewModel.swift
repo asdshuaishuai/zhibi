@@ -34,6 +34,7 @@ final class AppViewModel: ObservableObject {
 
     /// AI 状态条触发的跨视图跳转（如"查看提案"→收件箱）
     @Published var projectOpenError: String?
+    @Published var openingProject = false
     @Published var navigateToSection: WorkspaceSection?
 
     let ai = AIService()
@@ -90,19 +91,25 @@ final class AppViewModel: ObservableObject {
         }
     }
 
+    /// 打开项目：读盘在后台（大书/iCloud 卷上不再卡死界面），完成后回主线程切换。
     func openProject(_ ref: ProjectRef) {
+        guard !openingProject else { return }
+        openingProject = true
         let store = ProjectStore(rootURL: ref.url)
-        do {
-            try store.load()
-            open(store: store)
-        } catch {
-            // 空目录（project.json 不存在）= 正常新书路径；文件在但解析失败 = 损坏，
-            // 不能静默开空 store——否则退出时保存会用默认值覆盖整个账本
-            let projectFile = ProjectLayout.projectFile(ref.url)
-            if FileManager.default.fileExists(atPath: projectFile.path) {
-                projectOpenError = "项目文件损坏，已中止打开（原文件未被改动）。\(projectFile.path) 可手动检查该 JSON，或从备份恢复。"
-            } else {
+        Task {
+            defer { openingProject = false }
+            do {
+                try await store.loadAsync()
                 open(store: store)
+            } catch {
+                // 空目录（project.json 不存在）= 正常新书路径；文件在但解析失败 = 损坏，
+                // 不能静默开空 store——否则退出时保存会用默认值覆盖整个账本
+                let projectFile = ProjectLayout.projectFile(ref.url)
+                if FileManager.default.fileExists(atPath: projectFile.path) {
+                    projectOpenError = "项目文件损坏，已中止打开（原文件未被改动）。\(projectFile.path) 可手动检查该 JSON，或从备份恢复。"
+                } else {
+                    open(store: store)
+                }
             }
         }
     }

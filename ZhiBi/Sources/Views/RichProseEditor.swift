@@ -65,6 +65,12 @@ struct RichProseEditor: NSViewRepresentable {
         context.coordinator.textView = tv
         context.coordinator.lastSerialized = markdown
         context.coordinator.reload(markdown: markdown, baseFont: baseFont, textColor: textColor)
+        context.coordinator.installFlushHooks()
+        // 点击别处（失焦）也 flush：防抖窗口不再依赖用户停笔
+        NotificationCenter.default.addObserver(
+            forName: NSWindow.didResignKeyNotification, object: nil, queue: .main) { [weak coordinator = context.coordinator] _ in
+                coordinator?.flushSerialize()
+            }
         return scroll
     }
 
@@ -108,21 +114,67 @@ struct RichProseEditor: NSViewRepresentable {
         private var lastHighlightText: String = ""
         private var lastLintSignature: String = ""
         private var highlightWork: DispatchWorkItem?
+        /// 大章节流的序列化（每键击全量 serialize 在 10 万字章上 ~25ms）
+        private var serializeWork: DispatchWorkItem?
+        /// 串长度变化超过该值（粘贴/删除大段）立即序列化，不进防抖
+        private let serializeImmediateThreshold = 400
 
         init(_ parent: RichProseEditor) {
             self.parent = parent
         }
 
         func textDidChange(_ notification: Notification) {
-            guard let tv = textView, let storage = tv.textStorage else { return }
+            guard let tv = textView else { return }
             // 新段落回归正文样式，避免标题/引用样式黏连；
             // 表格单元格内保留单元格属性，否则打字会脱出表格
             tv.typingAttributes = Self.typingAttributes(in: tv, baseFont: parent.baseFont, textColor: parent.textColor)
 
+            scheduleSerialize()
+            scheduleHighlights()
+        }
+
+        /// 序列化回 markdown：小改（逐字输入）防抖 250ms；结构性变化（大段增删/
+        /// 换行数变化）与关键时机（失焦/关窗/退出）立即 flush，不丢字。
+        private func scheduleSerialize() {
+            guard let tv = textView, let storage = tv.textStorage else { return }
+            let currentLength = storage.length
+            let prevLength = lastSerialized.utf16.count
+            let structural = abs(currentLength - prevLength) > serializeImmediateThreshold
+            if structural {
+                serializeNow()
+                return
+            }
+            serializeWork?.cancel()
+            let work = DispatchWorkItem { [weak self] in self?.serializeNow() }
+            serializeWork = work
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.25, execute: work)
+        }
+
+        /// 立即序列化并回传（保存/退出的唯一 flush 点）
+        func flushSerialize() {
+            serializeWork?.cancel()
+            serializeWork = nil
+            serializeNow()
+        }
+
+        private func serializeNow() {
+            guard let tv = textView, let storage = tv.textStorage else { return }
             let md = MarkdownLite.serialize(storage)
+            if md == lastSerialized { return }
             lastSerialized = md
             parent.markdown = md
-            scheduleHighlights()
+        }
+
+        /// 编辑器被移除/窗口关闭/失焦：把最后 250ms 的输入立刻落进 store
+        func installFlushHooks() {
+            NotificationCenter.default.addObserver(
+                forName: NSWindow.willCloseNotification, object: nil, queue: .main) { [weak self] _ in
+                    self?.flushSerialize()
+                }
+            NotificationCenter.default.addObserver(
+                forName: NSApplication.willTerminateNotification, object: nil, queue: .main) { [weak self] _ in
+                    self?.flushSerialize()
+                }
         }
 
         static func typingAttributes(in tv: NSTextView, baseFont: NSFont, textColor: NSColor) -> [NSAttributedString.Key: Any] {

@@ -43,6 +43,11 @@ enum ProjectLayout {
     static func canonDir(_ root: URL) -> URL { root.appendingPathComponent("canon", isDirectory: true) }
     static func proposalsFile(_ root: URL) -> URL { root.appendingPathComponent("proposals/inbox.json") }
     static func outlineFile(_ root: URL) -> URL { root.appendingPathComponent("outline.json") }
+    /// 大纲三件套落根目录（读与写必须是同一路径——曾因读写不一致导致重启丢故事线）
+    static func storylinesFile(_ root: URL) -> URL { root.appendingPathComponent("storylines.json") }
+    static func eventsFile(_ root: URL) -> URL { root.appendingPathComponent("events.json") }
+    static func stagesFile(_ root: URL) -> URL { root.appendingPathComponent("stages.json") }
+
     static func cluesFile(_ root: URL) -> URL { root.appendingPathComponent("clues.json") }
     static func memoryFile(_ root: URL) -> URL { root.appendingPathComponent("memory.json") }
     static func projectFile(_ root: URL) -> URL { root.appendingPathComponent("project.json") }

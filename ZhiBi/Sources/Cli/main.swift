@@ -538,6 +538,157 @@ func roundTwoStoreTests() async throws {
 
 try await roundTwoStoreTests()
 
+// MARK: - 17. 导出→再导入信息等价环
+
+@MainActor
+func roundTripTests() async throws {
+    let src = ProjectStore(rootURL: URL(fileURLWithPath: "/tmp/zhibi-rt-src-\(UUID().uuidString).zhibi"))
+    src.project = NovelProject(title: "等价环", genre: "东方玄幻", premise: "废灵根吞噬命数",
+                               targetChapters: 88, chapterWordTarget: 2500,
+                               authorIntent: "慢热开局，第三章必须见血", currentFocus: "第一卷追杀段",
+                               styleNotes: "短句，忌四字格")
+    src.ensureChapter(1)
+    src.ensureChapter(8)
+    src.updateChapter(1, countWords: false) { ch in
+        ch.title = "血夜"
+        ch.prose = "临渊区在烧。无器之人在巷子里跑。"
+        ch.status = .written
+        ch.summary = ChapterSummary(chapter: 1, summary: "觉醒当晚被追杀。", keyEvents: ["血洗", "逃亡"], emotionalTone: "紧迫")
+        ch.notes = ["伏笔：步态"]
+        var sk = ChapterSkeleton()
+        sk.beats = [Beat(summary: "开场追杀", purpose: "爽点", suggestedWords: 800, done: true)]
+        sk.endHook = "一点紫亮"
+        sk.mustDeliver = ["第一次亡命"]
+        sk.mustAvoid = ["不写觉醒过程"]
+        ch.skeleton = sk
+    }
+    src.updateChapter(8, countWords: false) { ch in ch.title = "雾隐"; ch.status = .written; ch.prose = "雾中照面。" }
+    src.storylines = [Storyline(id: "L01", name: "孤星出逃", kind: .main, isThroughLine: true, status: .active),
+                      Storyline(id: "L02", name: "白零线", kind: .growth, status: .active)]
+    src.timelineEvents = [
+        TimelineEvent(id: "E01", chapter: 1, objectiveFact: "紫渊觉醒当夜被追杀", readerKnowledge: "少年在逃", revealed: true, storylineIDs: ["L01"]),
+        TimelineEvent(id: "E02", chapter: 8, objectiveFact: "紫渊与白零相遇", readerKnowledge: "雾中照面", revealed: false, revealChapter: 8, storylineIDs: ["L01", "L02"]),
+    ]
+    src.clues = [
+        Clue(id: "F01", title: "哑叔的脚印", detail: "荒野深处的脚印", plantedChapter: 3, targetPayoffChapter: 8, status: .resolved),
+        Clue(id: "F02", title: "少主之血", detail: "塞德里克要紫渊的血", plantedChapter: 2, status: .developing),
+    ]
+    src.clues[0].actions = [ClueActionLog(chapter: 3, kind: .plant, note: "埋"), ClueActionLog(chapter: 8, kind: .resolve, note: "兑现")]
+    src.facts = [
+        MemoryFact(subject: "紫渊", predicate: "状态", object: "无器之人", fromChapter: 1, publicToReader: true, source: "extracted"),
+        MemoryFact(subject: "紫渊", predicate: "关系", object: "白零", fromChapter: 8, publicToReader: true, source: "extracted"),
+        MemoryFact(subject: "白零", predicate: "身份", object: "半精灵", fromChapter: 5, invalidatedAtChapter: 7, source: "extracted"),
+    ]
+    src.characterAliases = [CharacterAlias(canonicalName: "紫渊", aliases: ["少年"])]
+    src.stages = [Stage(id: 1, name: "星火初燃", chapterStart: 1, chapterEnd: 10, theme: "逃亡与相遇")]
+    src.canonSections = [CanonSection(title: "世界观", content: "命数九层。", certainty: .canon)]
+    src.project.dailyWords = ["2026-09-19": 2100]
+
+    let exportDir = try ExportService.exportOhStory(store: src).url
+    let scanned = ImportService.scan(exportDir)
+
+    let dst = ProjectStore(rootURL: URL(fileURLWithPath: "/tmp/zhibi-rt-dst-\(UUID().uuidString).zhibi"))
+    dst.ensureChapter(1)
+    ImportService.apply(scanned, into: dst)
+
+    check("往返-故事线等价", dst.storylines.count == 2 && dst.storylines.contains { $0.id == "L01" && $0.isThroughLine })
+    check("往返-事件等价", dst.timelineEvents.count == 2 && dst.timelineEvents.contains { $0.id == "E02" && !$0.revealed && $0.storylineIDs == ["L01", "L02"] },
+          "得到 \(dst.timelineEvents.map { "\($0.id)/\($0.revealed)" })")
+    check("往返-终态伏笔不再丢", dst.clues.count == 2 && dst.clues.contains { $0.id == "F01" && $0.status == .resolved })
+    check("往返-伏笔动作日志保留", dst.clues.first { $0.id == "F01" }?.actions.count == 2)
+    check("往返-事实含双时态", dst.facts.count == 3 && dst.facts.contains { $0.invalidatedAtChapter == 7 })
+    check("往返-阶段等价", dst.stages.count == 1 && dst.stages[0].name == "星火初燃")
+    check("往返-别名保留", dst.characterAliases.first?.canonicalName == "紫渊")
+    check("往返-正文等价", dst.chapter(1)?.prose.contains("临渊区在烧") == true && dst.chapter(8)?.prose.contains("雾中照面") == true)
+    check("往返-章摘要保留", dst.chapter(1)?.summary?.summary.contains("觉醒当晚") == true)
+    check("往返-随手记保留", dst.chapter(1)?.notes?.isEmpty == false)
+    check("往返-骨架保留", dst.chapter(1)?.skeleton?.beats.first?.summary == "开场追杀"
+          && dst.chapter(1)?.skeleton?.mustDeliver == ["第一次亡命"])
+    check("往返-项目元数据", dst.project.premise == "废灵根吞噬命数" && dst.project.authorIntent.contains("慢热")
+          && dst.project.currentFocus == "第一卷追杀段" && dst.project.styleNotes == "短句，忌四字格")
+    check("往返-体量参数", dst.project.targetChapters == 88 && dst.project.chapterWordTarget == 2500)
+    check("往返-每日账本", dst.project.dailyWords?["2026-09-19"] == 2100)
+    check("往返-设定库", dst.canonSections.contains { $0.title == "世界观" && $0.certainty == .canon })
+    // 大纲 md 是派生视图：不再重复进设定库
+    check("往返-大纲不重复入库", !dst.canonSections.contains { $0.title.contains("主线大纲") },
+          "设定 \(dst.canonSections.map(\.title))")
+
+    // 旧格式（无 clues/chapter_meta 键）仍可导入：不崩、伏笔降级路径
+    let legacyDir = URL(fileURLWithPath: "/tmp/zhibi-rt-legacy-\(UUID().uuidString)")
+    try? FileManager.default.createDirectory(at: legacyDir.appendingPathComponent("追踪", isDirectory: true), withIntermediateDirectories: true)
+    let legacyState = """
+    {"project":{"title":"旧书","exported_from":"oh-story"},"stages_overview":[{"id":1,"name":"起源","theme":"t"}],
+     "active_foreshadowing":[{"id":"F01","name":"旧钩子","detail":"d","planted_chapter":2}]}
+    """
+    try legacyState.data(using: .utf8)?.write(to: legacyDir.appendingPathComponent("追踪/_tracking-state.json"))
+    let legacyScanned = ImportService.scan(legacyDir)
+    let legacyDst = ProjectStore(rootURL: URL(fileURLWithPath: "/tmp/zhibi-rt-legacydst-\(UUID().uuidString).zhibi"))
+    legacyDst.ensureChapter(1)
+    ImportService.apply(legacyScanned, into: legacyDst)
+    check("旧格式仍可导入", legacyDst.clues.contains { $0.id == "F01" } && legacyDst.stages.count == 1)
+}
+
+try await roundTripTests()
+
+// MARK: - 18. 三轮回合：异步加载快照 / 防抖序列化语义
+
+@MainActor
+func roundThreeTests() async throws {
+    // loadAsync 与 load 等价（同一 capture/apply 路径），且不阻塞地拿回全部账本
+    let src = ProjectStore(rootURL: URL(fileURLWithPath: "/tmp/zhibi-r3-src-\(UUID().uuidString).zhibi"))
+    src.ensureChapter(2)
+    src.updateChapter(2, countWords: false) { $0.prose = "夜风很冷。"; $0.title = "风起"; $0.status = .written }
+    src.storylines = [Storyline(id: "L01", name: "主线", kind: .main, isThroughLine: true, status: .active)]
+    src.clues = [Clue(id: "F01", title: "钩子", detail: "d", plantedChapter: 2)]
+    src.facts = [MemoryFact(subject: "紫渊", predicate: "状态", object: "无器", fromChapter: 2, source: "extracted")]
+    src.canonSections = [CanonSection(title: "世界观", content: "命数九层", certainty: .canon)]
+    try? src.saveNow()
+
+    let asyncStore = ProjectStore(rootURL: src.rootURL)
+    try await asyncStore.loadAsync()
+    check("异步加载-正文", asyncStore.chapter(2)?.prose.contains("夜风很冷") == true)
+    check("异步加载-账本", asyncStore.storylines.count == 1 && asyncStore.clues.count == 1
+          && asyncStore.facts.count == 1 && asyncStore.canonSections.count == 1)
+    let syncStore = ProjectStore(rootURL: src.rootURL)
+    try syncStore.load()
+    check("同步/异步加载等价", syncStore.chapter(2)?.prose == asyncStore.chapter(2)?.prose
+          && syncStore.facts.count == asyncStore.facts.count)
+    // 曾有读写路径不一致（读 outline.json/storylines.json、写 storylines.json）导致
+    // 重启后故事线/时间线/阶段静默全丢——用「重新 load 后账本还在」钉死
+    check("重启后故事线不丢", syncStore.storylines.count == 1 && syncStore.timelineEvents.count == 0
+          && syncStore.stages.isEmpty)
+    src.timelineEvents = [TimelineEvent(id: "E01", chapter: 2, objectiveFact: "风起", readerKnowledge: "风起了", revealed: false)]
+    src.stages = [Stage(id: 1, name: "开篇", chapterStart: 1, chapterEnd: 5, theme: "逃亡")]
+    try? src.saveNow()
+    let reloaded = ProjectStore(rootURL: src.rootURL)
+    try? reloaded.load()
+    check("重启后事件与阶段不丢", reloaded.timelineEvents.count == 1 && reloaded.stages.count == 1,
+          "events=\(reloaded.timelineEvents.count) stages=\(reloaded.stages.count)")
+
+    // 隔离语义：非 UTF-8 正文经 loadAsync 也走 quarantine（原文件 .corrupt，内存 latin1 兜底）
+    let badRoot = URL(fileURLWithPath: "/tmp/zhibi-r3-bad-\(UUID().uuidString).zhibi")
+    let badStore = ProjectStore(rootURL: badRoot)
+    badStore.ensureChapter(1)
+    badStore.project.title = "坏编码书"
+    try? badStore.saveNow()
+    let proseURL = ProjectLayout.proseFile(badRoot, number: 1)
+    try? Data([0xFF, 0xFE, 0x00]).write(to: proseURL)
+    let badReloaded = ProjectStore(rootURL: badRoot)
+    try? await badReloaded.loadAsync()
+    check("坏编码正文被隔离保留", FileManager.default.fileExists(atPath: proseURL.path + ".corrupt")
+          && badReloaded.lastSaveError?.contains("UTF-8") == true)
+
+    // MarkdownLite 段落缓存语义未被防抖改动破坏：往返仍稳定
+    let font = NSFont.systemFont(ofSize: 14)
+    let doc = "第一段。\n\n第二段，带**粗体**与`代码`。\n\n| 甲 | 乙 |\n|---|---|\n| 1 | 2 |"
+    let back = MarkdownLite.serialize(MarkdownLite.render(doc, bodyFont: font, textColor: .textColor))
+    check("防抖改动后往返仍稳定", back.contains("第二段，带**粗体**与`代码`。") && back.contains("| 1 | 2 |"), "得到 [\(back.prefix(50))]")
+}
+
+try await roundThreeTests()
+
+
+
 
 
 // MARK: - 14. 记忆图谱：图引擎派生 + 回溯

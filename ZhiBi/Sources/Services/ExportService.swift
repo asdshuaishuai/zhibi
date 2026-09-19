@@ -112,7 +112,9 @@ enum ExportService {
 
         // 设定
         for section in store.canonSections {
-            try write(section.content, "设定/\(safeName(section.title)).md")
+            // 确定度写首行 HTML 注释：人读无感，导入侧回读（等价环需要）
+            let certainty = section.certainty == .canon ? "canon" : (section.certainty == .tentative ? "tentative" : "blank")
+            try write("<!-- zhibi:certainty=\(certainty) -->\n" + section.content, "设定/\(safeName(section.title)).md")
         }
 
         // 正文
@@ -142,18 +144,70 @@ enum ExportService {
                 .filter { $0.status == .planted || $0.status == .developing }
                 .map { c in ["id": c.id, "name": c.title, "detail": c.detail, "planted_chapter": c.plantedChapter,
                              "timing": c.timing.rawValue, "scale": c.scale.rawValue, "last_action_chapter": c.lastActionChapter] },
+            // 全量伏笔（含已回收/已搁置/已放弃）+ 动作日志——等价回读的关键字段
+            "clues": store.clues.map { c in
+                ["id": c.id, "name": c.title, "detail": c.detail, "scale": c.scale.rawValue,
+                 "timing": c.timing.rawValue, "importance": c.importance,
+                 "planted_chapter": c.plantedChapter, "planted_quote": c.plantedQuote,
+                 "target_payoff_chapter": c.targetPayoffChapter ?? NSNull(),
+                 "status": c.status.rawValue, "last_action_chapter": c.lastActionChapter,
+                 "actions": c.actions.map { ["chapter": $0.chapter, "kind": $0.kind.rawValue, "note": $0.note] }]
+            },
             "storylines": store.storylines.map { l in
                 ["id": l.id, "name": l.name, "kind": l.kind.rawValue, "through_line": l.isThroughLine, "status": l.status.rawValue]
             },
             "timeline_events": store.timelineEvents.map { e in
                 ["id": e.id, "chapter": e.chapter, "objective_fact": e.objectiveFact,
-                 "reader_knowledge": e.readerKnowledge, "revealed": e.revealed]
+                 "reader_knowledge": e.readerKnowledge, "revealed": e.revealed,
+                 "reveal_chapter": e.revealChapter ?? NSNull(),
+                 "storyline_ids": e.storylineIDs]
             },
             "facts": store.facts.map { f in
                 ["subject": f.subject, "predicate": f.predicate, "object": f.object,
                  "from_chapter": f.fromChapter, "invalidated_at_chapter": f.invalidatedAtChapter ?? NSNull(),
                  "public_to_reader": f.publicToReader]
             },
+            "character_aliases": store.characterAliases.map { a in
+                ["canonical": a.canonicalName, "aliases": a.aliases]
+            },
+            "dismissed_conflicts": store.dismissedConflicts,
+            // 每章结构化 meta：摘要/随手记/骨架（细纲 md 之外的权威副本）
+            "chapter_meta": store.chapters.map { ch in
+                var entry: [String: Any] = [
+                    "number": ch.number, "title": ch.title, "status": ch.status.rawValue,
+                    "notes": ch.notes ?? []
+                ]
+                if let sum = ch.summary {
+                    entry["summary"] = ["text": sum.summary, "key_events": sum.keyEvents, "emotional_tone": sum.emotionalTone]
+                }
+                if let sk = ch.skeleton {
+                    entry["skeleton"] = [
+                        "beats": sk.beats.map { b in
+                            ["summary": b.summary, "purpose": b.purpose, "suggested_words": b.suggestedWords,
+                             "done": b.done, "clue_ids": b.clueIDs, "id": b.id.uuidString]
+                        },
+                        "end_hook": sk.endHook,
+                        "must_deliver": sk.mustDeliver,
+                        "must_avoid": sk.mustAvoid,
+                        "clue_touches": sk.clueTouches.map { t in
+                            ["clue_id": t.clueID, "action": t.action.rawValue, "requirement": t.requirement]
+                        },
+                        "human_approved": sk.humanApproved
+                    ]
+                }
+                return entry
+            },
+            // 项目级元数据（作者意图/焦点/文风/体量）——原先全丢
+            "project_meta": [
+                "genre": store.project.genre,
+                "premise": store.project.premise,
+                "target_chapters": store.project.targetChapters,
+                "chapter_word_target": store.project.chapterWordTarget,
+                "author_intent": store.project.authorIntent,
+                "current_focus": store.project.currentFocus,
+                "style_notes": store.project.styleNotes,
+                "daily_words": store.project.dailyWords ?? [:]
+            ],
         ]
         if let next = store.chapter(store.currentChapter), let sk = next.skeleton, !sk.mustDeliver.isEmpty {
             state["next_chapter_commitments"] = [
