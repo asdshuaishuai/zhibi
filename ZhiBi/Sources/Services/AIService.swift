@@ -14,11 +14,20 @@ final class AIService: ObservableObject {
     /// 上一次运行新登记的提案数（nil = 本次运行未统计/无新增）
     @Published var lastRunNewProposals: Int?
 
-    /// 供应商连通性预检（DeepSeek / MiniMax 等都需要 Key；本地 Ollama 豁免）
+    /// 供应商连通性预检：Key 缺失 / 远程明文 HTTP（API Key 会明文出网）/ 端点非法
     func validateConfig(_ config: AgentConfig) -> String? {
-        if config.apiKey.isEmpty
-            && !config.baseURL.contains("localhost")
-            && !config.baseURL.contains("127.0.0.1") {
+        let trimmed = config.baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty {
+            return "Base URL 为空——在设置里填模型端点（或从目录选供应商）。"
+        }
+        guard let endpoint = URL(string: trimmed) else {
+            return "Base URL 无效：\(trimmed)"
+        }
+        let isLoopback = ["localhost", "127.0.0.1", "::1"].contains(endpoint.host?.lowercased() ?? "")
+        if endpoint.scheme?.lowercased() == "http", !isLoopback {
+            return "远程 API 地址不要用 http://（API Key 会明文出网），请改用 https://；本地 Ollama 不受限制。"
+        }
+        if config.apiKey.isEmpty, !isLoopback {
             return AgentError.noAPIKey.localizedDescription
         }
         return nil

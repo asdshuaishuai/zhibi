@@ -88,6 +88,13 @@ struct WelcomeView: View {
             }
             .padding(44)
             .frame(minWidth: 380, idealWidth: 470, maxWidth: 520)
+            .alert("打不开", isPresented: Binding(
+                get: { vm.projectOpenError != nil },
+                set: { if !$0 { vm.projectOpenError = nil } })) {
+                Button("好") {}
+            } message: {
+                Text(vm.projectOpenError ?? "")
+            }
             .background(
                 ZStack {
                     LinearGradient(colors: [Color(red: 0.13, green: 0.115, blue: 0.105),
@@ -390,7 +397,7 @@ struct ShelfBookCard: View {
             let meta = dir.appendingPathComponent("meta.json")
             guard let data = try? Data(contentsOf: meta),
                   let ch = try? JSONDecoder().decode(Chapter.self, from: data) else { continue }
-            if !ch.prose.isEmpty { result.chapters += 1 }
+            if ch.wordCount > 0 { result.chapters += 1 }
             result.words += ch.wordCount
         }
         return result

@@ -21,12 +21,17 @@ enum WordStats {
 /// 项目磁盘布局：正文是 md（人读人写可带走），结构是 JSON（机器权威）
 enum ProjectLayout {
     /// 文件名/目录名安全化：拒绝路径分隔符与父目录引用
+    /// 文件名长度上限：APFS 单段约 255 UTF-8 字节（中文 3 字节/字），超长标题会写盘失败
+    private static let maxNameChars = 80
+
     static func safeFileName(_ s: String) -> String {
-        var out = s
-            .replacingOccurrences(of: "/", with: "_")
+        var cleaned = s.replacingOccurrences(of: "/", with: "_")
             .replacingOccurrences(of: ":", with: "_")
-            .trimmingCharacters(in: .whitespaces)
-        while out.contains("..") { out = out.replacingOccurrences(of: "..", with: "_") }
+            .replacingOccurrences(of: "\n", with: " ")
+            .replacingOccurrences(of: "\0", with: "")
+        while cleaned.contains("..") { cleaned = cleaned.replacingOccurrences(of: "..", with: "_") }
+        var out = cleaned.trimmingCharacters(in: .whitespaces)
+        if out.count > maxNameChars { out = String(out.prefix(maxNameChars)) }
         if out.isEmpty || out == "." || out == "_" { out = "untitled" }
         return out
     }

@@ -92,6 +92,10 @@ struct ChapterEditorView: View {
         .sheet(isPresented: $showPipeline) {
             PipelineSheet(vm: vm, store: store, chapterNumber: chapterNumber)
         }
+        .sheet(isPresented: $showInbox) {
+            ProposalInboxView(vm: vm, store: store)
+                .frame(minWidth: 620, minHeight: 480)
+        }
     }
 
     // MARK: 头部（左：章节信息；右：三个主动作 + AI 协作菜单）

@@ -339,6 +339,99 @@ func frameworkTests() async throws {
 
 try await frameworkTests()
 
+// MARK: - 15. 审查修复回归（bug-hunt-swarm 四路调查 → 修复项）
+
+MainActor.assumeIsolated {
+    let font = NSFont.systemFont(ofSize: 15)
+
+    // P1-4 反斜杠对称：显示一轮后不变 + 序列化幂等（首次归一化后不再逐轮翻倍）
+    let slashMD = "路径 C:\\Users\\test"
+    let slashDisplay = MarkdownLite.render(slashMD, bodyFont: font, textColor: .textColor).string
+    let slashBack = MarkdownLite.serialize(MarkdownLite.render(slashMD, bodyFont: font, textColor: .textColor))
+    let slashAgain = MarkdownLite.serialize(MarkdownLite.render(slashBack, bodyFont: font, textColor: .textColor))
+    check("反斜杠显示不变", slashDisplay == slashMD + "\n", "得到 [\(slashDisplay)]")
+    check("反斜杠序列化幂等", slashAgain == slashBack, "一轮 [\(slashBack)] 二轮 [\(slashAgain)]")
+
+    // P1-5 表格无尾管道不丢末格（GFM 合法输入）
+    let noTail = MarkdownLite.serialize(MarkdownLite.render("| 甲 | 乙\n|---|---|\n| 1 | 2", bodyFont: font, textColor: .textColor))
+    check("无尾管道表格保末格", noTail.contains("| 甲 | 乙 |") && noTail.contains("| 1 | 2 |"), "得到 [\(noTail)]")
+    // 尾管道带空格也保
+    let spaceTail = MarkdownLite.serialize(MarkdownLite.render("| 甲 | 乙 |\n|---|---|\n| 1 | 2 |", bodyFont: font, textColor: .textColor))
+    check("标准尾管道表格不变", spaceTail.contains("| 1 | 2 |"), "得到 [\(spaceTail)]")
+
+    // P1-7 MemoryHub：一人多关系不误报矛盾
+    let hubStore = ProjectStore(rootURL: URL(fileURLWithPath: "/tmp/zhibi-hub-\(UUID().uuidString).zhibi"))
+    hubStore.facts = [
+        MemoryFact(subject: "紫渊", predicate: "关系", object: "白零", fromChapter: 8, source: "extracted"),
+        MemoryFact(subject: "紫渊", predicate: "关系", object: "苏叶", fromChapter: 12, source: "extracted"),
+        MemoryFact(subject: "紫渊", predicate: "状态", object: "无器", fromChapter: 1, source: "extracted"),
+        MemoryFact(subject: "紫渊", predicate: "状态", object: "命数九层", fromChapter: 5, source: "extracted"),
+    ]
+    let hubConflicts = MemoryHub.conflicts(hubStore.facts)
+    check("关系事实不误报矛盾", hubConflicts.allSatisfy { $0.predicate != "关系" }, "得到 \(hubConflicts.map { $0.subject + $0.predicate })")
+    check("状态冲突仍报", hubConflicts.contains { $0.predicate == "状态" && $0.subject == "紫渊" })
+
+    // P2-14 safeFileName 截断 + 过滤
+    let longName = ProjectLayout.safeFileName(String(repeating: "设", count: 300))
+    check("长标题文件名截断", longName.count == 80, "len=\(longName.count)")
+    check("文件名过滤路径符号", ProjectLayout.safeFileName("a/b:c") == "a_b_c")
+}
+
+// P1-9 storylines 编号查重 + P2-16 批次存储侧（异步）
+@MainActor
+func reviewFixTests() async throws {
+    // P1-9: AI 不传 id → max+1，不与既有撞号
+    let st = ProjectStore(rootURL: URL(fileURLWithPath: "/tmp/zhibi-sl-\(UUID().uuidString).zhibi"))
+    st.ensureChapter(1)
+    st.storylines = [Storyline(id: "L01", name: "主线", kind: .main, isThroughLine: true, status: .active)]
+    let tool = NovelTools.all(store: st).first { $0.name == "propose_storylines" }
+    let args = """
+    {"storylines":[{"name":"新支线","kind":"growth"}]}
+    """
+    _ = try? await tool?.handler(args)
+    if let p = st.proposals.first, case .storylines(let lines) = p.payload {
+        check("storylines 编号 max+1 查重", lines.count == 1 && lines[0].id == "L02", "得到 \(lines.map { $0.id })")
+        st.acceptProposal(p.id)
+        check("storylines 采纳撞号也入库", st.storylines.count == 2)
+    } else {
+        check("storylines 提案已登记", false)
+    }
+
+    // P1-11: 别名主语的事实出现在人物回溯里
+    let agStore = ProjectStore(rootURL: URL(fileURLWithPath: "/tmp/zhibi-ag-\(UUID().uuidString).zhibi"))
+    agStore.characterAliases = [CharacterAlias(canonicalName: "紫渊", aliases: ["少年"])]
+    agStore.facts = [
+        MemoryFact(subject: "紫渊", predicate: "状态", object: "无器", fromChapter: 1, source: "extracted"),
+        MemoryFact(subject: "少年", predicate: "状态", object: "出潮", fromChapter: 2, source: "extracted"),
+    ]
+    let node = MemoryNode(kind: .character, key: "紫渊", label: "紫渊", chapter: 2, meta: "", weight: 1)
+    check("人物回溯含别名主语事实", MemoryRecall.recall(node: node, store: agStore).count == 2)
+    let aliasHits = MemoryRecall.search("少年", store: agStore)
+    check("别名搜索翻出本名事实", aliasHits.count == 2, "得到 \(aliasHits.count)")
+
+    // P1-10: clues 采纳不再整条覆盖作者手改（status/actions 保留）
+    let clStore = ProjectStore(rootURL: URL(fileURLWithPath: "/tmp/zhibi-cl-\(UUID().uuidString).zhibi"))
+    clStore.ensureChapter(8)
+    var clue = Clue(id: "F01", title: "脚印", detail: "荒野脚印", plantedChapter: 3)
+    clue.status = .developing
+    clue.actions = [ClueActionLog(chapter: 5, kind: .develop, note: "又见")]
+    clStore.clues = [clue]
+    _ = try? await (NovelTools.all(store: clStore).first { $0.name == "propose_clues" })?.handler("""
+    {"clues":[{"id":"F01","title":"脚印","detail":"荒野脚印","planted_chapter":3}]}
+    """)
+    if let p = clStore.proposals.first, case .clues(let list) = p.payload {
+        _ = list
+        clStore.acceptProposal(p.id)
+        let kept = clStore.clues.first { $0.id == "F01" }
+        check("作者手改伏笔字段保留", kept?.status == .developing && kept?.actions.count == 1, "status=\(kept?.status.rawValue ?? "-") actions=\(kept?.actions.count ?? -1)")
+    } else {
+        check("伏笔提案已登记", false)
+    }
+}
+
+try await reviewFixTests()
+
+
 // MARK: - 14. 记忆图谱：图引擎派生 + 回溯
 
 MainActor.assumeIsolated {

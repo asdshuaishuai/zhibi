@@ -118,6 +118,17 @@ struct SettingsView: View {
                     vm.store?.autoSaveEnabled = vm.config.autoSave
                 }
                 .buttonStyle(.borderedProminent)
+                .alert("API Key 没保存上", isPresented: Binding(
+                    get: { AgentConfig.lastKeySaveFailed },
+                    set: { if !$0 { AgentConfig.lastKeySaveFailed = false } })) {
+                    Button("好") {}
+                } message: {
+                    Text("钥匙串写入失败（钥匙串可能已锁定）。其余设置已保存，但重启后 API Key 不会生效。")
+                }
+            }
+            if let issue = AgentConfig.lastLoadIssue {
+                Label(issue, systemImage: "exclamationmark.triangle")
+                    .font(.caption).foregroundStyle(.orange)
             }
         }
         .formStyle(.grouped)

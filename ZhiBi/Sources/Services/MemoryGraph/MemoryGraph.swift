@@ -146,7 +146,7 @@ enum MemoryGraphEngine {
                 store.storylines.first { $0.id == lid }?.name
             }
             nodes.append(MemoryNode(
-                kind: .event, key: e.id, label: "E\(e.id) 第\(e.chapter)章",
+                kind: .event, key: e.id, label: "\(e.id) 第\(e.chapter)章",
                 chapter: e.chapter,
                 meta: String(e.objectiveFact.prefix(60)) + (lineNames.isEmpty ? "" : "｜\(lineNames.joined(separator: "/"))"),
                 weight: 2))
@@ -173,7 +173,7 @@ enum MemoryGraphEngine {
         // 伏笔节点 + 落章边 + 悬念链
         for c in store.clues {
             nodes.append(MemoryNode(
-                kind: .clue, key: c.id, label: "F\(c.id) \(c.title)",
+                kind: .clue, key: c.id, label: "\(c.id) \(c.title)",
                 chapter: c.plantedChapter,
                 meta: "埋于第\(c.plantedChapter)章 · \(c.status.rawValue)",
                 weight: 2))
@@ -195,7 +195,7 @@ enum MemoryGraphEngine {
                 edges.append(MemoryEdge(
                     from: "\(MemoryNodeKind.event.rawValue)/\(plantEvent.id)",
                     to: "\(MemoryNodeKind.event.rawValue)/\(payEvent.id)",
-                    kind: .reveal, label: "F\(c.id) 悬念链", weight: 2))
+                    kind: .reveal, label: "\(c.id) 悬念链", weight: 2))
             }
         }
 
@@ -227,9 +227,11 @@ enum MemoryGraphEngine {
         }
 
         // 事件→人物：objectiveFact 里提到人物名（字符串包含，弱边，最多 3 个/事件）
+        // 名字 <2 字不参与包含匹配（「白」会误命中「李白」）；排序保证派生确定性
+        let matchableNames = characterNames.filter { $0.count >= 2 }.sorted()
         for e in store.timelineEvents {
             var hits = 0
-            for name in characterNames where hits < 3 && e.objectiveFact.contains(name) {
+            for name in matchableNames where hits < 3 && e.objectiveFact.contains(name) {
                 edges.append(MemoryEdge(
                     from: "\(MemoryNodeKind.event.rawValue)/\(e.id)",
                     to: "\(MemoryNodeKind.character.rawValue)/\(name)",
@@ -279,7 +281,9 @@ enum MemoryRecall {
         var out: [RecallItem] = []
         switch node.kind {
         case .character:
-            for f in store.facts where f.subject == node.key {
+            let canonicalOf = Dictionary(store.characterAliases.flatMap { a in a.aliases.map { ($0, a.canonicalName) } },
+                                         uniquingKeysWith: { first, _ in first })
+            for f in store.facts where (canonicalOf[f.subject] ?? f.subject) == node.key {
                 out.append(RecallItem(
                     chapter: f.fromChapter, kind: .fact,
                     text: "\(f.predicate) \(f.object)",
@@ -327,8 +331,17 @@ enum MemoryRecall {
         let query = q.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !query.isEmpty else { return [] }
         var out: [RecallItem] = []
+        // 别名扩展查询词：「少年」也要能翻出主语为「紫渊」的事实
+        let canonicalOf = Dictionary(store.characterAliases.flatMap { a in a.aliases.map { ($0, a.canonicalName) } },
+                                     uniquingKeysWith: { first, _ in first })
+        var terms = [query]
+        if let canonical = canonicalOf[query], !terms.contains(canonical) { terms.append(canonical) }
+        for a in store.characterAliases where a.canonicalName == query || a.canonicalName.contains(query) {
+            for alias in a.aliases where !terms.contains(alias) { terms.append(alias) }
+        }
         for f in store.facts
-        where f.subject.contains(query) || f.object.contains(query) || f.predicate.contains(query) {
+        where terms.contains(where: { t in f.subject.contains(t) || f.object.contains(t) })
+            || f.predicate.contains(query) {
             out.append(RecallItem(
                 chapter: f.fromChapter, kind: .fact,
                 text: "\(f.subject) \(f.predicate) \(f.object)",

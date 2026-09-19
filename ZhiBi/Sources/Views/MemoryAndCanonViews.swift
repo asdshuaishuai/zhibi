@@ -365,17 +365,18 @@ struct CanonView: View {
                 VStack(spacing: 0) {
                     HStack {
                         TextField("标题", text: Binding(
-                            get: { store.canonSections[idx].title },
-                            set: { store.canonSections[idx].title = $0; store.saveSoon() }))
+                            get: { store.canonSections.indices.contains(idx) ? store.canonSections[idx].title : "" },
+                            set: { if store.canonSections.indices.contains(idx) { store.canonSections[idx].title = $0; store.saveSoon() } }))
                             .font(.headline)
                             .textFieldStyle(.plain)
                         Picker("确定度", selection: Binding(
-                            get: { store.canonSections[idx].certainty },
-                            set: { store.canonSections[idx].certainty = $0; store.saveSoon() })) {
+                            get: { store.canonSections.indices.contains(idx) ? store.canonSections[idx].certainty : .tentative },
+                            set: { if store.canonSections.indices.contains(idx) { store.canonSections[idx].certainty = $0; store.saveSoon() } })) {
                             ForEach(Certainty.allCases, id: \.self) { Text($0.rawValue).tag($0) }
                         }
                         .controlSize(.small)
                         Button(role: .destructive) {
+                            guard store.canonSections.indices.contains(idx) else { return }
                             _ = store.canonSections.remove(at: idx)
                             selectedSection = nil
                             store.saveSoon()
@@ -387,8 +388,8 @@ struct CanonView: View {
                     // 所见即所得：默认展示即渲染后的排版，markdown 源码不对外露出
                     RichProseEditor(
                         markdown: Binding(
-                            get: { store.canonSections[idx].content },
-                            set: { store.canonSections[idx].content = $0; store.saveSoon() }),
+                            get: { store.canonSections.indices.contains(idx) ? store.canonSections[idx].content : "" },
+                            set: { if store.canonSections.indices.contains(idx) { store.canonSections[idx].content = $0; store.saveSoon() } }),
                         baseFont: NSFont.systemFont(ofSize: 14),
                         textColor: NSColor.labelColor)
                     Text("设定是作者主权：AI 只读，不代写。确定度三态：已定（正典）/ 暂定 / 有意留白。")

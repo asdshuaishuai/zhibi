@@ -110,11 +110,23 @@ enum NovelTools {
             let p = try decode(Payload.self, args)
             let kindMap = ["main": StorylineKind.main, "growth": .growth, "romance": .romance, "faction": .faction,
                            "mystery": .mystery, "rivalry": .rivalry, "world": .world, "other": .other]
-            let lines = p.storylines.enumerated().map { i, s -> Storyline in
-                Storyline(id: s.id ?? "L\(String(format: "%02d", i + 1))", name: s.name,
-                          kind: kindMap[s.kind] ?? .other, isThroughLine: s.is_through_line ?? false,
-                          entryChapter: s.entry_chapter, plannedPayoffChapter: s.planned_payoff_chapter,
-                          notes: s.notes ?? "")
+            // 编号取「已有最大 L 号 + 1」查重：AI 不传 id 时不能与既有故事线撞号（撞号会被去重静默丢弃）
+            let existing = await store.storylines
+            let maxLine = existing.compactMap { l -> Int? in
+                guard l.id.hasPrefix("L"), let n = Int(l.id.dropFirst()) else { return nil }
+                return n
+            }.max() ?? 0
+            var nextLine = maxLine
+            let lines = p.storylines.enumerated().map { _, s -> Storyline in
+                var sid = s.id ?? ""
+                if sid.isEmpty {
+                    nextLine += 1
+                    sid = String(format: "L%02d", nextLine)
+                }
+                return Storyline(id: sid, name: s.name,
+                       kind: kindMap[s.kind] ?? .other, isThroughLine: s.is_through_line ?? false,
+                       entryChapter: s.entry_chapter, plannedPayoffChapter: s.planned_payoff_chapter,
+                       notes: s.notes ?? "")
             }
             await store.addProposal(AIProposal(capability: .outlineTimeline, title: "故事线（\(lines.count) 条）",
                                                note: p.note ?? "", payload: .storylines(lines)))

@@ -122,18 +122,12 @@ final class ProjectStore: ObservableObject {
             try Disk.write(Data(ch.prose.utf8), to: ProjectLayout.proseFile(rootURL, number: ch.number))
         }
         try Disk.writeJSON(project, to: ProjectLayout.projectFile(rootURL))
-        try Disk.writeJSON(canonSections, to: ProjectLayout.canonDir(rootURL).appendingPathComponent("sections.json"))
-        // canon 每节同步导出为可手改的 md（派生视图）；文件名安全化；
-        // 孤儿 md（用户手工放入）自动导入为新节，绝不静默删除
+        // canon 每节同步导出为可手改的 md（派生视图）；孤儿 md（用户手工放入）自动导入为新节。
+        // 孤儿导入必须发生在写 sections.json 之前——否则本次保存里导入的节点要等下一次保存才可见。
         let canonDir = ProjectLayout.canonDir(rootURL)
         var usedNames = Set<String>()
         for section in canonSections {
-            var name = ProjectLayout.safeFileName(section.title)
-            while usedNames.contains(name + ".md") {
-                name += "-x"
-            }
-            usedNames.insert(name + ".md")
-            try Disk.write(Data(section.content.utf8), to: canonDir.appendingPathComponent(name + ".md"))
+            usedNames.insert(ProjectLayout.safeFileName(section.title) + ".md")
         }
         if let existing = try? FileManager.default.contentsOfDirectory(at: canonDir, includingPropertiesForKeys: nil) {
             for f in existing.sorted(by: { $0.lastPathComponent < $1.lastPathComponent })
@@ -144,6 +138,21 @@ final class ProjectStore: ObservableObject {
                 }
             }
         }
+        try Disk.writeJSON(canonSections, to: canonDir.appendingPathComponent("sections.json"))
+        // 每节 md 单节写失败不中断保存（其余账本还要落盘）
+        var canonWriteFailed = false
+        usedNames.removeAll()
+        for section in canonSections {
+            var name = ProjectLayout.safeFileName(section.title)
+            while usedNames.contains(name + ".md") { name += "-x" }
+            usedNames.insert(name + ".md")
+            do {
+                try Disk.write(Data(section.content.utf8), to: canonDir.appendingPathComponent(name + ".md"))
+            } catch {
+                canonWriteFailed = true
+                lastSaveError = "设定「\(section.title)」的 md 导出失败：\(error.localizedDescription)"
+            }
+        }
         let outlineDir = ProjectLayout.outlineFile(rootURL).deletingLastPathComponent()
         try Disk.writeJSON(storylines, to: outlineDir.appendingPathComponent("storylines.json"))
         try Disk.writeJSON(timelineEvents, to: outlineDir.appendingPathComponent("events.json"))
@@ -152,6 +161,11 @@ final class ProjectStore: ObservableObject {
         try Disk.writeJSON(MemoryFile(facts: facts, aliases: characterAliases, dismissedConflicts: dismissedConflicts), to: ProjectLayout.memoryFile(rootURL))
         try Disk.writeJSON(proposals, to: ProjectLayout.proposalsFile(rootURL))
         dirtyChapters.removeAll()
+        if canonWriteFailed {
+            // 其余账本已全部落盘；把单节 md 导出失败升级为可展示的错误（不阻塞保存本身）
+            throw NSError(domain: "ZhiBi.ProjectStore", code: 1,
+                          userInfo: [NSLocalizedDescriptionKey: lastSaveError ?? "设定 md 导出失败"])
+        }
     }
 
     private func chapterMetaURL(_ n: Int) -> URL {
@@ -279,7 +293,8 @@ final class ProjectStore: ObservableObject {
         guard let idx = proposals.firstIndex(where: { $0.id == id }) else { return }
         guard proposals[idx].status == .pending else { return }  // 防重复采纳覆盖手改
         let p = proposals[idx]
-        applyPayload(p.payload, chapter: p.chapterNumber)
+        // 入库失败（快照写不进/章节丢失）时保持 pending——否则提案会从待审列表消失且永不可再采纳
+        guard applyPayload(p.payload, chapter: p.chapterNumber) else { return }
         proposals[idx].status = .accepted
         proposals[idx].decidedAt = Date()
         saveSoon()
@@ -293,7 +308,9 @@ final class ProjectStore: ObservableObject {
     }
 
     /// 采纳提案 = 把 payload 写入权威状态（宿主裁决的唯一入口）
-    func applyPayload(_ payload: ProposalPayload, chapter: Int?) {
+    /// 返回 false = 未入库（调用方应保持提案 pending 而不是标记已采纳）
+    @discardableResult
+    func applyPayload(_ payload: ProposalPayload, chapter: Int?) -> Bool {
         switch payload {
         case .outlineEvents(let events):
             for e in events {
@@ -316,15 +333,15 @@ final class ProjectStore: ObservableObject {
             }
             clues.sort { $0.id < $1.id }
         case .skeleton(let sk):
-            guard let n = chapter else { break }
+            guard let n = chapter else { return false }
             updateChapter(n) { $0.skeleton = sk; if $0.status == .empty { $0.status = .skeletoned } }
         case .draft(let draft):
-            // 作者采纳草稿才走到这里；覆盖前自动快照，快照失败则中止采纳（旧稿保住）
-            guard let n = chapter else { break }
+            // 作者采纳草稿才走到这里；覆盖前自动快照，快照失败则中止采纳（旧稿保住，提案保持待审）
+            guard let n = chapter else { return false }
             if let existing = self.chapter(n), !existing.prose.isEmpty {
                 guard snapshotProse(chapter: n, tag: "采纳草稿前") != nil else {
                     lastSaveError = "采纳中止：快照写入失败（检查磁盘/权限），草稿仍在收件箱"
-                    return
+                    return false
                 }
             }
             updateChapter(n) {
@@ -332,13 +349,29 @@ final class ProjectStore: ObservableObject {
                 if $0.status == .empty || $0.status == .skeletoned || $0.status == .writing { $0.status = .written }
             }
         case .memoryPack(let newFacts, let summary, let newClues):
-            for f in newFacts { facts.append(f) }
-            for c in newClues where !clues.contains(where: { $0.id == c.id }) {
-                var cand = c
-                if cand.id.isEmpty { cand.id = nextClueID() }
-                clues.append(cand)
+            // 章节 guard 前置：避免半途 append 后失败导致重复追加
+            guard let n = chapter else { return false }
+            for f in newFacts where !facts.contains(where: { $0.subject == f.subject && $0.predicate == f.predicate && $0.object == f.object }) {
+                facts.append(f)
             }
-            guard let n = chapter else { break }
+            for c in newClues {
+                if let idx = clues.firstIndex(where: { $0.id == c.id }) {
+                    // 与既有伏兵合并：台账字段以作者维护为准（status/actions/lastActionChapter 不被 AI 版本抹掉）
+                    var merged = c
+                    let existing = clues[idx]
+                    let authorTouched = !existing.actions.isEmpty || existing.status != .planted
+                    if authorTouched {
+                        merged.status = existing.status
+                        merged.actions = existing.actions
+                        merged.lastActionChapter = existing.lastActionChapter
+                    }
+                    clues[idx] = merged
+                } else {
+                    var cand = c
+                    if cand.id.isEmpty { cand.id = nextClueID() }
+                    clues.append(cand)
+                }
+            }
             updateChapter(n) { $0.summary = summary }
         case .canon(let docs):
             // 设定是作者主权：同题不覆盖（作者可能手改过），只追加新题
@@ -351,6 +384,7 @@ final class ProjectStore: ObservableObject {
         case .report, .deslop, .memo:
             break // 报告类提案已展示在收件箱，无需入库
         }
+        return true
     }
 
     // MARK: - 流水线草稿

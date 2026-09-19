@@ -52,14 +52,33 @@ struct AgentConfig: Codable {
     var contextTokenBudget: Int = 12000
     var autoSave: Bool = true
 
+    /// 上一次 load 的告警（settings.json 损坏被重置等）——设置页展示，不落盘
+    static var lastLoadIssue: String?
+    /// 上一次钥匙串写入是否失败——保存设置时 UI 提示
+    static var lastKeySaveFailed = false
+
     static func load() -> AgentConfig {
-        var c = (try? Disk.readJSON(AgentConfig.self, from: settingsURL())) ?? AgentConfig()
+        let url = settingsURL()
+        var c: AgentConfig
+        if FileManager.default.fileExists(atPath: url.path) {
+            do {
+                c = try Disk.readJSON(AgentConfig.self, from: url)
+                lastLoadIssue = nil
+            } catch {
+                // 文件在但解析失败：回默认值并告知用户，而不是静默吞掉
+                c = AgentConfig()
+                lastLoadIssue = "设置文件损坏，已恢复默认值（API Key 不受影响，仍在钥匙串）。可重新保存一次覆盖。"
+            }
+        } else {
+            c = AgentConfig()
+            lastLoadIssue = nil
+        }
         c.apiKey = KeychainStore.load()
         return c
     }
 
     func persist() {
-        KeychainStore.save(apiKey)
+        Self.lastKeySaveFailed = !KeychainStore.save(apiKey)
         var c = self
         c.apiKey = ""
         try? Disk.writeJSON(c, to: Self.settingsURL())

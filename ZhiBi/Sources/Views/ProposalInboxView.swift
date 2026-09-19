@@ -318,7 +318,7 @@ struct ProposalInboxView: View {
                         HStack {
                             Text(d.title).font(.callout.bold())
                             Spacer()
-                            Text(Certainty(rawValue: d.certainty)?.rawValue ?? "暂定")
+                            Text(["canon": "已定", "tentative": "暂定", "blank": "有意留白", "open": "有意留白"][d.certainty] ?? d.certainty)
                                 .font(.caption2)
                                 .foregroundStyle(.secondary)
                         }

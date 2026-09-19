@@ -149,8 +149,9 @@ enum MarkdownLite {
     private static func appendTable(_ rows: [String], out: NSMutableAttributedString,
                                     baseFont: NSFont, textColor: NSColor) {
         var parsed: [[String]] = rows.map { raw in
-            raw.dropFirst().dropLast()
-                .components(separatedBy: "|")
+            // GFM 允许省略首尾管道：仅当行尾确有 | 时才剥末字符，否则会静默丢掉最后一格
+            let body = raw.hasSuffix("|") ? raw.dropFirst().dropLast() : raw.dropFirst()
+            return body.components(separatedBy: "|")
                 .map { $0.trimmingCharacters(in: .whitespaces) }
         }
         parsed.removeAll { row in !row.isEmpty && row.allSatisfy(isSeparatorCell) }
@@ -198,13 +199,14 @@ enum MarkdownLite {
         }
     }
 
+    private static let cacheLock = NSLock()
     private static var themedCache: [String: NSFont] = [:]
-
     private static var psCache: [String: NSParagraphStyle] = [:]
 
-    /// 缓存的段落样式（减少 intern 表条目）
+    /// 缓存的段落样式（减少 intern 表条目）；全局缓存加锁——渲染可能在后台队列调用
     static func paragraphStyle(kind: BlockKind, level: Int) -> NSParagraphStyle {
         let key = "\(kind.rawValue)|\(level)"
+        cacheLock.lock(); defer { cacheLock.unlock() }
         if let ps = psCache[key] { return ps }
         let ps = NSMutableParagraphStyle()
         applyParagraphStyle(ps, kind: kind)
@@ -215,7 +217,9 @@ enum MarkdownLite {
     private static func themedFont(base: NSFont, bold: Bool, size: CGFloat) -> NSFont {
         // 具体字体构造：绕开 CTFontDescriptorCreateMatchingFontDescriptor
         // （该调用在部分环境的无窗口 CLI 进程中会死锁）
-        let key = "\(bold)|\(Int(size))"
+        // 键用精确十进制 size：Int(size) 截断会让 24.0 与 24.14 共用一个缓存项
+        let key = "\(bold)|\(String(format: "%.4f", size))"
+        cacheLock.lock(); defer { cacheLock.unlock() }
         if let f = themedCache[key] { return f }
         let f = bold ? NSFont.boldSystemFont(ofSize: size) : NSFont.systemFont(ofSize: size)
         themedCache[key] = f
@@ -255,10 +259,16 @@ enum MarkdownLite {
         while currentIndex < text.endIndex {
             let ch = text[currentIndex]
             if ch == "\\" {
-                // \* → 字面星号，不作为定界符
+                // 转义序列反转义（与 serialize 的 escape 对称，否则反斜杠每轮往返翻倍）：
+                // \\ → 字面反斜杠；\* → 字面星号（不作定界符）
                 let next = text.index(after: currentIndex)
                 if next < text.endIndex, text[next] == "*" {
                     buffer.append("*")
+                    currentIndex = text.index(currentIndex, offsetBy: 2)
+                    continue
+                }
+                if next < text.endIndex, text[next] == "\\" {
+                    buffer.append("\\")
                     currentIndex = text.index(currentIndex, offsetBy: 2)
                     continue
                 }
@@ -403,8 +413,13 @@ enum MarkdownLite {
             if let rowIndex = attributed.attribute(tableRowIndexKey, at: anchor, effectiveRange: nil) as? Int {
                 let colIndex = attributed.attribute(tableColIndexKey, at: anchor, effectiveRange: nil) as? Int ?? 0
                 if tableCells[rowIndex] == nil { tableRows.append(rowIndex) }
-                tableCells[rowIndex, default: [:]][colIndex] =
-                    trimmed.length > 0 ? runsMarkdown(attributed, range: trimmed) : ""
+                // 同格多段（单元格内回车继承单元格属性产生）：追加而不是覆盖，防丢内容
+                let segment = trimmed.length > 0 ? runsMarkdown(attributed, range: trimmed) : ""
+                if let existing = tableCells[rowIndex]?[colIndex], !existing.isEmpty {
+                    tableCells[rowIndex]?[colIndex] = existing + (segment.isEmpty ? "" : " " + segment)
+                } else {
+                    tableCells[rowIndex, default: [:]][colIndex] = segment
+                }
                 continue
             }
             flushTable()

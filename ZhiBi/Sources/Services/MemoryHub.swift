@@ -55,7 +55,10 @@ enum MemoryHub {
     static func conflicts(_ facts: [MemoryFact]) -> [Conflict] {
         let valid = facts.filter { $0.isValid(atChapter: 9999) }
         var groups: [String: [MemoryFact]] = [:]
-        for f in valid where f.predicate != "知道" && f.predicate != "相信" && f.predicate != "目标" {
+        // 「关系」一人多对象完全正常（紫渊 关系 白零/苏叶可并存），不参与矛盾体检；
+        // 认知类谓词同样允许并存（人物可以先后相信两件事）
+        for f in valid where f.predicate != "知道" && f.predicate != "相信"
+            && f.predicate != "目标" && f.predicate != "关系" {
             groups["\(f.subject)|\(f.predicate)", default: []].append(f)
         }
         var result: [Conflict] = []

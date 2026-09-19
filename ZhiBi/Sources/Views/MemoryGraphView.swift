@@ -24,7 +24,24 @@ struct MemoryGraphView: View {
     @State private var panStart: CGSize = .zero
     @State private var scale: CGFloat = 1.0
 
-    private var graph: MemoryGraph { MemoryGraphEngine.build(from: store) }
+    /// 图缓存：只在账本规模签名变化时重建（避免拖拽每帧全量重建 4-6 次）。
+    /// 用类引用持有，避免在 body 求值里写 @State。
+    private final class GraphCache {
+        var stamp = Int.min
+        var graph = MemoryGraph()
+    }
+    @State private var graphCache = GraphCache()
+
+    private var graph: MemoryGraph {
+        let stamp = store.facts.count + store.timelineEvents.count * 1_000
+            + store.clues.count * 1_000_000 + store.storylines.count * 1_000_000_000
+            + store.characterAliases.count * 1_000_000_000_000
+        if graphCache.stamp != stamp {
+            graphCache.stamp = stamp
+            graphCache.graph = MemoryGraphEngine.build(from: store)
+        }
+        return graphCache.graph
+    }
 
     private var nodeColor: [MemoryNodeKind: Color] {
         [

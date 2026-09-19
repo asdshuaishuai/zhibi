@@ -33,6 +33,7 @@ final class AppViewModel: ObservableObject {
     }
 
     /// AI 状态条触发的跨视图跳转（如"查看提案"→收件箱）
+    @Published var projectOpenError: String?
     @Published var navigateToSection: WorkspaceSection?
 
     let ai = AIService()
@@ -95,13 +96,21 @@ final class AppViewModel: ObservableObject {
             try store.load()
             open(store: store)
         } catch {
-            // 空目录或损坏：尝试直接打开
-            open(store: store)
+            // 空目录（project.json 不存在）= 正常新书路径；文件在但解析失败 = 损坏，
+            // 不能静默开空 store——否则退出时保存会用默认值覆盖整个账本
+            let projectFile = ProjectLayout.projectFile(ref.url)
+            if FileManager.default.fileExists(atPath: projectFile.path) {
+                projectOpenError = "项目文件损坏，已中止打开（原文件未被改动）。\(projectFile.path) 可手动检查该 JSON，或从备份恢复。"
+            } else {
+                open(store: store)
+            }
         }
     }
 
     private func open(store: ProjectStore) {
         self.store = store
+        // 自动保存开关随持久化配置恢复，而不是等用户进章编辑器
+        store.autoSaveEnabled = config.autoSave
         screen = .project
         if let idx = projects.firstIndex(where: { $0.url == store.rootURL }) {
             projects[idx].lastOpenedAt = Date()
@@ -112,7 +121,12 @@ final class AppViewModel: ObservableObject {
     }
 
     func closeProject() {
-        try? store?.saveNow()
+        do {
+            try store?.saveNow()
+        } catch {
+            // 保存失败不能静默：错误留在 store 上（书架状态条可见），再返回
+            store?.lastSaveError = "保存失败：\(error.localizedDescription)（不要直接删项目目录）"
+        }
         store = nil
         screen = .welcome
         projects = ProjectRegistry.load()
