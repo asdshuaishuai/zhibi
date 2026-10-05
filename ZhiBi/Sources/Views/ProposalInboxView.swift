@@ -343,6 +343,66 @@ struct ProposalInboxView: View {
                 Text("采纳 = 写入设定库（同名文档不覆盖，保护你手改过的内容）。设定是作者主权，先读再决定。")
                     .font(.caption2).foregroundStyle(.tertiary)
             }
+
+        case .clueFixes(let fixes):
+            VStack(alignment: .leading, spacing: 8) {
+                ForEach(fixes) { f in
+                    VStack(alignment: .leading, spacing: 3) {
+                        HStack(spacing: 6) {
+                            ZBChip(text: f.kind.rawValue, filled: true)
+                            if !f.clueID.isEmpty {
+                                Text(f.clueID).font(.caption.monospaced()).foregroundStyle(.secondary)
+                            }
+                            if f.chapter > 0 {
+                                Text("第\(f.chapter)章").font(.caption2).foregroundStyle(.tertiary)
+                            }
+                            Spacer()
+                            Button("只采纳这一条") { store.applyClueFix(f) }
+                                .controlSize(.mini)
+                        }
+                        Text(f.reason).font(.caption)
+                        Text("→ \(f.action)").font(.caption).foregroundStyle(.secondary)
+                        if !f.evidence.isEmpty {
+                            Text("证据：\(f.evidence)").font(.caption2).foregroundStyle(.tertiary).lineLimit(2)
+                        }
+                    }
+                    .padding(8)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Color(nsColor: .underPageBackgroundColor))
+                    .cornerRadius(6)
+                }
+                Text("采纳 = 只改伏笔台账与动作日志，**不动正文**。补埋/校正原文这类需要你动笔的，台账会记下意图并继续催到正文真的补上。")
+                    .font(.caption2).foregroundStyle(.tertiary)
+            }
+
+        case .outlineUpdates(let updates):
+            VStack(alignment: .leading, spacing: 8) {
+                ForEach(updates) { u in
+                    VStack(alignment: .leading, spacing: 3) {
+                        HStack(spacing: 6) {
+                            ZBChip(text: u.kind.rawValue, filled: true)
+                            if let e = u.eventID { Text(e).font(.caption.monospaced()).foregroundStyle(.secondary) }
+                            if let l = u.storylineID { Text(l).font(.caption.monospaced()).foregroundStyle(.secondary) }
+                            if let c = u.newChapter { Text("→ 第\(c)章").font(.caption2).foregroundStyle(.orange) }
+                            if let s = u.newStatusRaw { Text("→ \(s)").font(.caption2).foregroundStyle(.orange) }
+                            Spacer()
+                            if u.confidence > 0 {
+                                Text("匹配度 \(Int(u.confidence * 100))%").font(.caption2).foregroundStyle(.tertiary)
+                            }
+                        }
+                        Text(u.reason).font(.caption)
+                        if !u.evidence.isEmpty {
+                            Text("证据：\(u.evidence)").font(.caption2).foregroundStyle(.tertiary).lineLimit(2)
+                        }
+                    }
+                    .padding(8)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Color(nsColor: .underPageBackgroundColor))
+                    .cornerRadius(6)
+                }
+                Text("采纳 = 把大纲从「建书时的计划」同步成「剧情实际的样子」。取消的事件不删记录，只标记，保留曾经计划过什么的痕迹。")
+                    .font(.caption2).foregroundStyle(.tertiary)
+            }
         }
     }
 

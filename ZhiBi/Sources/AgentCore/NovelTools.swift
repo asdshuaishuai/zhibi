@@ -16,6 +16,8 @@ enum NovelTools {
             proposeDraft(store: store, chapter: chapter),
             proposeMemory(store: store, chapter: chapter),
             proposeValidation(store: store, chapter: chapter),
+            proposeContinuity(store: store),
+            proposeOutlineUpdates(store: store),
             proposeDeslop(store: store, chapter: chapter),
             proposeMemo(store: store),
             proposeCanon(store: store),
@@ -195,9 +197,9 @@ enum NovelTools {
     static func proposeSkeleton(store: ProjectStore, chapter: Int) -> AgentTool {
         AgentTool(
             name: "propose_skeleton",
-            description: "提交章节骨架提案。你不写正文，只规划这章要完成什么：3-6 个节拍（beats），每拍一句人话说明要发生什么 + 功能定位；章尾钩子；硬交付项；禁止项；伏笔触点合同（clue_id + action: plant/develop/reveal）。揭1埋1：本章每回收一个伏笔，尽量同时埋1-2个新伏笔。",
+            description: "提交章节骨架提案。你不写正文，只规划这章要完成什么：3-6 个节拍（beats）。每拍除了 summary（要发生什么）与 purpose（功能定位），还要填**场景层**：pov（这一拍贴着谁写）/ location（具体地点）/ time_label（时间标记）/ cast（在场人物，用台账本名）/ turn（这一拍从什么变成什么）——场景层是宿主做连贯性审查的取证基础，缺了就查不出视角漂移与分身两地。另外要给：end_hook 章尾钩子 + hook_kind 钩子形态（悬念/危机/反转/信息差/承诺/情绪/登场，连续多章同型会形成套版感）、must_deliver 硬交付、must_avoid 禁止项（至少一条反 AI 指纹约束）、clue_touches 伏笔触点合同（clue_id + action: plant/develop/reveal/resolve/defer + requirement 硬要求）、payoff_type 本章兑现的爽点类型、new_expectation 本章挂上的可验证新期待、volume_label 所属卷。揭1埋1：每回收一个伏笔就至少埋一个新钩子；到期未动的伏笔必须进合同。宿主会用确定性闸门给这份骨架打分，有阻塞项会退回让你重修。",
             parametersJSON: """
-            {"type":"object","properties":{"note":{"type":"string"},"beats":{"type":"array","minItems":3,"maxItems":6,"items":{"type":"object","properties":{"summary":{"type":"string"},"purpose":{"type":"string"},"clue_ids":{"type":"array","items":{"type":"string"}},"suggested_words":{"type":"integer"}},"required":["summary"]}},"end_hook":{"type":"string"},"must_deliver":{"type":"array","items":{"type":"string"}},"must_avoid":{"type":"array","items":{"type":"string"}},"clue_touches":{"type":"array","items":{"type":"object","properties":{"clue_id":{"type":"string"},"action":{"type":"string","enum":["plant","develop","reveal"]},"requirement":{"type":"string"}},"required":["clue_id","action"]}}},"required":["beats","end_hook"]}
+            {"type":"object","properties":{"note":{"type":"string"},"beats":{"type":"array","minItems":3,"maxItems":6,"items":{"type":"object","properties":{"summary":{"type":"string"},"purpose":{"type":"string"},"clue_ids":{"type":"array","items":{"type":"string"}},"suggested_words":{"type":"integer"},"pov":{"type":"string","description":"这一拍贴着谁写；全章应统一"},"location":{"type":"string","description":"具体地点"},"time_label":{"type":"string","description":"时间标记，要能和相邻拍对上"},"cast":{"type":"array","items":{"type":"string"},"description":"在场人物，用台账本名"},"turn":{"type":"string","description":"这一拍从什么变成什么"}},"required":["summary"]}},"end_hook":{"type":"string"},"hook_kind":{"type":"string","enum":["悬念","危机","反转","信息差","承诺","情绪","登场"]},"pov":{"type":"string","description":"本章主视角"},"must_deliver":{"type":"array","items":{"type":"string"}},"must_avoid":{"type":"array","items":{"type":"string"}},"clue_touches":{"type":"array","items":{"type":"object","properties":{"clue_id":{"type":"string"},"action":{"type":"string","enum":["plant","develop","reveal","resolve","defer"]},"requirement":{"type":"string"}},"required":["clue_id","action"]}},"payoff_type":{"type":"string","description":"本章兑现的爽点类型"},"new_expectation":{"type":"string","description":"本章挂上的新期待，必须可验证"},"volume_label":{"type":"string","description":"所属卷/阶段"}},"required":["beats","end_hook"]}
             """
         ) { args in
             struct Payload: Decodable {
@@ -206,6 +208,11 @@ enum NovelTools {
                     let purpose: String?
                     let clue_ids: [String]?
                     let suggested_words: Int?
+                    let pov: String?
+                    let location: String?
+                    let time_label: String?
+                    let cast: [String]?
+                    let turn: String?
                 }
                 struct T: Decodable {
                     let clue_id: String
@@ -215,15 +222,24 @@ enum NovelTools {
                 let note: String?
                 let beats: [B]
                 let end_hook: String
+                let hook_kind: String?
+                let pov: String?
                 let must_deliver: [String]?
                 let must_avoid: [String]?
                 let clue_touches: [T]?
+                let payoff_type: String?
+                let new_expectation: String?
+                let volume_label: String?
             }
             let p = try decode(Payload.self, args)
-            let actionMap = ["plant": ClueActionKind.plant, "develop": .develop, "reveal": .reveal]
+            let actionMap = ["plant": ClueActionKind.plant, "develop": .develop, "reveal": .reveal,
+                             "resolve": ClueActionKind.resolve, "defer": ClueActionKind.defer]
             let sk = ChapterSkeleton(
                 beats: p.beats.map { b in
-                    Beat(summary: b.summary, purpose: b.purpose ?? "", clueIDs: b.clue_ids ?? [], suggestedWords: b.suggested_words ?? 0)
+                    Beat(summary: b.summary, purpose: b.purpose ?? "", clueIDs: b.clue_ids ?? [],
+                         suggestedWords: b.suggested_words ?? 0,
+                         pov: b.pov ?? "", location: b.location ?? "", timeLabel: b.time_label ?? "",
+                         cast: b.cast ?? [], turn: b.turn ?? "")
                 },
                 endHook: p.end_hook,
                 mustDeliver: p.must_deliver ?? [],
@@ -231,12 +247,148 @@ enum NovelTools {
                 clueTouches: (p.clue_touches ?? []).map { t in
                     ClueTouch(clueID: t.clue_id, action: actionMap[t.action] ?? .plant, requirement: t.requirement ?? "")
                 },
-                proposedByAI: true
+                proposedByAI: true,
+                hookKind: p.hook_kind ?? "",
+                pov: p.pov ?? "",
+                payoffType: p.payoff_type ?? "",
+                newExpectation: p.new_expectation ?? "",
+                volumeLabel: p.volume_label ?? ""
             )
+            // 宿主闸门：确定性打分 + 问题清单。有阻塞项时直接回给模型，让它在同一轮里自我修正——
+            // 这比让作者拿到一份不合格骨架再手动挑错省事得多，也不违反「人裁决」铁律（仍是提案）。
+            let gate = await MainActor.run { SkeletonGate.evaluate(sk, store: store, chapter: chapter) }
             await store.addProposal(AIProposal(capability: .chapterSkeleton, chapterNumber: chapter,
-                                               title: "第\(chapter ?? 0)章 骨架（\(sk.beats.count) 拍）",
-                                               note: p.note ?? "", payload: .skeleton(sk)))
-            return "已登记为提案「章节骨架」，等待作者在收件箱确认。作者会在此骨架上修改与填写，正文由作者亲笔完成。"
+                                               title: "第\(chapter)章 骨架（\(sk.beats.count) 拍·闸门 \(gate.score)/100）",
+                                               note: gateNote(p.note ?? "", gate), payload: .skeleton(sk)))
+            guard gate.blockers.isEmpty else {
+                return """
+                已登记提案「章节骨架」，但宿主闸门查出 \(gate.blockers.count) 项阻塞问题（评分 \(gate.score)/100）：
+                \(gate.blockers.map { "- \($0.message) → \($0.suggestion)" }.joined(separator: "\n"))
+                \(gate.warnings.isEmpty ? "" : "另有建议项：\n" + gate.warnings.prefix(6).map { "- \($0.message) → \($0.suggestion)" }.joined(separator: "\n"))
+                请修好后再调用一次 propose_skeleton（会登记为新提案，作者取用哪版由他决定）。
+                """
+            }
+            return "已登记为提案「章节骨架」（闸门 \(gate.score)/100，\(gate.warnings.count) 项建议已附在提案说明里），等待作者在收件箱确认。正文由作者亲笔完成。"
+        }
+    }
+
+    /// 把闸门结果写进提案说明：作者在收件箱里直接看到该改什么，不用自己对着骨架猜
+    private static func gateNote(_ note: String, _ gate: SkeletonGate.Report) -> String {
+        var lines: [String] = []
+        if !note.isEmpty { lines.append(note) }
+        lines.append("【骨架闸门 \(gate.score)/100】\(gate.summary)")
+        if !gate.hookKind.isEmpty {
+            lines.append("钩子形态：\(gate.hookKind)\(gate.hookConcrete ? "（挂在具体事物上）" : "（偏空泛，建议落到具体物件/动作）")")
+        }
+        if !gate.dueMissed.isEmpty { lines.append("到期未进合同的伏笔：\(gate.dueMissed.joined(separator: "、"))") }
+        lines.append("伏笔收支：埋 \(gate.plantCount) / 推 \(gate.developCount) / 收 \(gate.revealCount)")
+        for i in gate.issues.prefix(8) {
+            lines.append("· [\(i.severity.rawValue)] \(i.message) → \(i.suggestion)")
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    // MARK: - 全书连贯性审校 + 埋点修复
+
+    static func proposeContinuity(store: ProjectStore) -> AgentTool {
+        AgentTool(
+            name: "propose_continuity",
+            description: "提交全书连贯性审校提案。只查宿主确定性代码查不出来的六类：①动机断裂 ②能力与资源前后不一致（含战力/财富通胀失控）③人物性格漂移 ④称谓与身份混乱 ⑤因果链缺口（结果出现了但导致它的环节从未发生）⑥承诺失约。每条必须带 evidence（具体章号 + 原文引用）与 suggestion（怎么修）。不评风格、节奏、文笔——那是作者主权。",
+            parametersJSON: """
+            {"type":"object","properties":{"note":{"type":"string"},"issues":{"type":"array","items":{"type":"object","properties":{"severity":{"type":"string","enum":["blocker","warning","note"]},"category":{"type":"string","enum":["动机断裂","能力资源","性格漂移","称谓身份","因果缺口","承诺失约"]},"chapter":{"type":"integer","description":"问题落在第几章"},"message":{"type":"string"},"evidence":{"type":"string"},"suggestion":{"type":"string"}},"required":["severity","category","message"]}}},"required":["issues"]}
+            """
+        ) { args in
+            struct Payload: Decodable {
+                struct I: Decodable {
+                    let severity: String
+                    let category: String
+                    let chapter: Int?
+                    let message: String
+                    let evidence: String?
+                    let suggestion: String?
+                }
+                let note: String?
+                let issues: [I]
+            }
+            let p = try decode(Payload.self, args)
+            let sevMap = ["blocker": Severity.blocker, "warning": .warning, "note": .note]
+            let (asOf, deterministic) = await MainActor.run {
+                let n = store.currentChapter
+                return (n, ContinuityAuditor.audit(store: store, throughChapter: n))
+            }
+            let aiIssues = p.issues.map { i in
+                ValidationIssue(severity: sevMap[i.severity] ?? .warning, category: i.category,
+                                message: (i.chapter.map { "第\($0)章：" } ?? "") + i.message,
+                                evidence: i.evidence ?? "", suggestion: i.suggestion ?? "")
+            }
+            // 机械性错误由宿主确定性代码兜底，不花 token；AI 结果合并其上
+            var report = ValidationReport(chapter: asOf)
+            report.deterministicIssues = deterministic.issues
+            report.aiIssues = aiIssues
+            await store.addProposal(AIProposal(
+                capability: .continuityAudit, chapterNumber: asOf,
+                title: "全书连贯性审查（截至第\(asOf)章：确定性 \(deterministic.issues.count) 条 + AI \(aiIssues.count) 条）",
+                note: (p.note ?? "") + "\n" + deterministic.summary,
+                payload: .report(report)))
+            // 埋点修复单独成一条提案：每条都是可一键采纳的账本修正
+            if !deterministic.clueFixes.isEmpty {
+                await store.addProposal(AIProposal(
+                    capability: .continuityAudit, chapterNumber: asOf,
+                    title: "埋点修复方案（\(deterministic.clueFixes.count) 条，可逐条采纳）",
+                    note: "伏笔台账的烂账：种下原文与正文对不上、兑现逾期、疑似已收未记账、动作日志指向不存在的章等。采纳即改台账，不改正文。",
+                    payload: .clueFixes(deterministic.clueFixes)))
+            }
+            return "已登记提案「全书连贯性审查」（AI \(aiIssues.count) 条，宿主确定性 \(deterministic.issues.count) 条），另有 \(deterministic.clueFixes.count) 条埋点修复方案。等待作者裁决。"
+        }
+    }
+
+    // MARK: - 大纲同步（计划 vs 实际对账 → 活文档）
+
+    static func proposeOutlineUpdates(store: ProjectStore) -> AgentTool {
+        AgentTool(
+            name: "propose_outline_updates",
+            description: "提交大纲更新提案，把静态计划同步成随剧情推进的活文档。kind: event_happened=计划事件已在正文发生 / event_moved=事件改期（给 new_chapter）/ event_revealed=读者已知（此前 revealed=false）/ event_dropped=事件取消 / storyline_status=故事线状态调整（new_status: 进行中/蛰伏/已收束）/ stage_adjust=阶段调整。每条必须写 reason（凭什么这么判）与 evidence（命中哪一章的什么内容）。大纲是作者正典，采纳才生效。要新增大纲里没有的事件请改用 propose_outline_events。",
+            parametersJSON: """
+            {"type":"object","properties":{"note":{"type":"string"},"updates":{"type":"array","maxItems":30,"items":{"type":"object","properties":{"kind":{"type":"string","enum":["event_happened","event_moved","event_revealed","event_dropped","storyline_status","stage_adjust"]},"event_id":{"type":"string"},"storyline_id":{"type":"string"},"stage_id":{"type":"integer"},"new_chapter":{"type":"integer"},"new_status":{"type":"string","enum":["进行中","蛰伏","已收束"]},"reason":{"type":"string"},"evidence":{"type":"string"},"confidence":{"type":"number"}},"required":["kind","reason"]}}},"required":["updates"]}
+            """
+        ) { args in
+            struct Payload: Decodable {
+                struct U: Decodable {
+                    let kind: String
+                    let event_id: String?
+                    let storyline_id: String?
+                    let stage_id: Int?
+                    let new_chapter: Int?
+                    let new_status: String?
+                    let reason: String
+                    let evidence: String?
+                    let confidence: Double?
+                }
+                let note: String?
+                let updates: [U]
+            }
+            let p = try decode(Payload.self, args)
+            let kindMap: [String: OutlineUpdate.Kind] = [
+                "event_happened": .eventHappened, "event_moved": .eventMoved,
+                "event_revealed": .eventRevealed, "event_dropped": .eventDropped,
+                "storyline_status": .storylineStatus, "stage_adjust": .stageAdjust,
+            ]
+            let aiUpdates = p.updates.compactMap { u -> OutlineUpdate? in
+                guard let kind = kindMap[u.kind] else { return nil }
+                return OutlineUpdate(kind: kind, eventID: u.event_id, storylineID: u.storyline_id,
+                                     stageID: u.stage_id, newChapter: u.new_chapter,
+                                     newStatusRaw: u.new_status, reason: u.reason,
+                                     evidence: u.evidence ?? "", confidence: u.confidence ?? 0)
+            }
+            // 宿主确定性对账结果一并登记：模型可能漏判，作者能对照两边看
+            let det = await MainActor.run { OutlineSync.sync(store: store) }
+            let combined = det.suggestedUpdates + aiUpdates
+            let note = [p.note ?? "", det.summary].filter { !$0.isEmpty }.joined(separator: "\n")
+            await store.addProposal(AIProposal(
+                capability: .outlineSync, chapterNumber: det.asOfChapter,
+                title: "大纲同步（截至第\(det.asOfChapter)章：\(combined.count) 条更新建议）",
+                note: note, payload: .outlineUpdates(combined)))
+            return "已登记提案「大纲同步」\(combined.count) 条（宿主确定性对账 \(det.suggestedUpdates.count) 条 + 你补的 \(aiUpdates.count) 条）。作者采纳后才写回大纲。"
         }
     }
 

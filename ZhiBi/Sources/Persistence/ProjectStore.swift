@@ -505,8 +505,107 @@ final class ProjectStore: ObservableObject {
                 canonSections.append(CanonSection(title: d.title, content: d.content,
                                                   certainty: certaintyMap[d.certainty] ?? .tentative))
             }
+        case .clueFixes(let fixes):
+            for f in fixes { applyClueFix(f) }
+        case .outlineUpdates(let updates):
+            for u in updates { applyOutlineUpdate(u) }
         case .report, .deslop, .memo:
             break // 报告类提案已展示在收件箱，无需入库
+        }
+        return true
+    }
+
+    // MARK: - 埋点修复（台账修正；铁律：改账本，不改正文）
+
+    /// 采纳一条伏笔修复方案。只动台账与动作日志——正文永远由作者亲笔补写。
+    /// 幂等：同一条 fix 采纳两次结果一致，所以收件箱里既可以整包采纳也可以逐条采纳。
+    @discardableResult
+    func applyClueFix(_ fix: ClueFix) -> Bool {
+        // register 是「台账里没有这条」→ 新建；其余都必须先找到目标伏笔
+        if fix.kind == .register {
+            var c = Clue(id: nextClueID(), title: fix.newTitle ?? "未命名伏笔",
+                         detail: fix.newDetail ?? fix.reason,
+                         plantedChapter: fix.chapter, plantedQuote: fix.newQuote ?? "",
+                         status: .planted, lastActionChapter: fix.chapter,
+                         actions: [ClueActionLog(chapter: fix.chapter, kind: .plant, note: "连贯性审查补登记")])
+            if clues.contains(where: { $0.title == c.title && $0.plantedChapter == c.plantedChapter }) { return false }
+            c.targetPayoffChapter = fix.newTargetChapter
+            if let raw = fix.newTimingRaw, let t = ClueTiming(rawValue: raw) { c.timing = t }
+            clues.append(c)
+            clues.sort { $0.id < $1.id }
+            return true
+        }
+        guard let idx = clues.firstIndex(where: { $0.id == fix.clueID }) else { return false }
+        var c = clues[idx]
+        switch fix.kind {
+        case .retarget:
+            if let t = fix.newTargetChapter { c.targetPayoffChapter = t }
+            if let raw = fix.newTimingRaw, let timing = ClueTiming(rawValue: raw) { c.timing = timing }
+            // 改期要让过期告警停下来，否则作者改了期还继续被催
+            c.lastActionChapter = max(c.lastActionChapter, currentChapter)
+            c.actions.append(ClueActionLog(chapter: currentChapter, kind: .defer, note: "改期：" + fix.reason))
+        case .resolve:
+            c.status = .resolved
+            c.lastActionChapter = max(c.lastActionChapter, fix.chapter)
+            c.actions.append(ClueActionLog(chapter: fix.chapter, kind: .resolve, note: fix.reason))
+            if c.targetPayoffChapter == nil { c.targetPayoffChapter = fix.chapter }
+        case .defer:
+            c.status = .deferred
+            c.actions.append(ClueActionLog(chapter: currentChapter, kind: .defer, note: fix.reason))
+        case .abandon:
+            c.status = .abandoned
+            c.actions.append(ClueActionLog(chapter: currentChapter, kind: .defer, note: "放弃：" + fix.reason))
+        case .requote:
+            // 种下原文是兑现时的对照物，写错了就等于账对不上；只在拿到真实片段时替换
+            if let q = fix.newQuote, !q.isEmpty { c.plantedQuote = q }
+        case .replant:
+            // 台账说埋了、正文找不到：作者选择补写。这里只记意图，不动 lastActionChapter——
+            // 逾期告警要一直响到正文真的补上为止，否则账就又烂回去了。
+            c.status = .planted
+            c.actions.append(ClueActionLog(chapter: fix.chapter, kind: .plant,
+                                           note: "作者确认补埋（正文待补写）：" + fix.reason))
+        case .register:
+            break
+        }
+        clues[idx] = c
+        return true
+    }
+
+    // MARK: - 大纲同步落库
+
+    /// 采纳一条大纲更新。事件不删除——取消用 dropped 标记，保留「曾经计划过什么」的痕迹。
+    @discardableResult
+    func applyOutlineUpdate(_ u: OutlineUpdate) -> Bool {
+        let now = Date()
+        switch u.kind {
+        case .eventHappened, .eventMoved, .eventRevealed, .eventDropped:
+            guard let eid = u.eventID, let idx = timelineEvents.firstIndex(where: { $0.id == eid }) else { return false }
+            var e = timelineEvents[idx]
+            switch u.kind {
+            case .eventHappened:
+                e.happened = true
+                if e.actualChapter == nil { e.actualChapter = u.newChapter ?? e.chapter }
+            case .eventMoved:
+                e.happened = true
+                e.actualChapter = u.newChapter ?? e.actualChapter
+            case .eventRevealed:
+                e.revealed = true
+                if e.revealChapter == nil { e.revealChapter = u.newChapter ?? e.actualChapter ?? e.chapter }
+            case .eventDropped:
+                e.dropped = true
+            default:
+                break
+            }
+            e.syncNote = u.reason
+            e.syncedAt = now
+            timelineEvents[idx] = e
+        case .storylineStatus:
+            guard let lid = u.storylineID, let idx = storylines.firstIndex(where: { $0.id == lid }) else { return false }
+            guard let status = ActiveStatus(rawValue: u.newStatusRaw ?? "") else { return false }
+            storylines[idx].status = status
+        case .stageAdjust:
+            guard let sid = u.stageID, let idx = stages.firstIndex(where: { $0.id == sid }) else { return false }
+            if let end = u.newChapter, end >= stages[idx].chapterStart { stages[idx].chapterEnd = end }
         }
         return true
     }

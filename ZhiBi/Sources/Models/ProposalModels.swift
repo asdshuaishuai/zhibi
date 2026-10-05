@@ -1,6 +1,9 @@
 import Foundation
 
-// MARK: - AI 能力清单（注意：不存在"写正文"这个能力，这是产品铁律）
+// MARK: - AI 能力清单
+//
+// 铁律不是"AI 不能写正文"，而是"AI 的任何产出（含整章草稿）都只能以提案形态存在，
+// 作者采纳前不落正文，采纳时自动快照可回滚"。chapterDraft 产出的是草稿提案，不是正文。
 
 enum AICapability: String, Codable, CaseIterable {
     case framework = "搭建框架"
@@ -11,6 +14,8 @@ enum AICapability: String, Codable, CaseIterable {
     case chapterRevise = "按意见修复"
     case memoryExtract = "记忆提取"
     case validation = "一致性验证"
+    case continuityAudit = "全书连贯性审查"
+    case outlineSync = "大纲同步"
     case deslop = "去AI味"
     case recallMemo = "写作备忘"
 }
@@ -54,6 +59,10 @@ enum ProposalPayload: Codable {
     case deslop(DeslopReport)
     case memo(String)
     case canon([CanonDocProposal])
+    /// 埋点修复：可一键采纳的伏笔台账修正（ContinuityAuditor 产出）
+    case clueFixes([ClueFix])
+    /// 大纲同步：可一键采纳的大纲更新（OutlineSync 产出）
+    case outlineUpdates([OutlineUpdate])
 }
 
 enum ProposalStatus: String, Codable {

@@ -8,6 +8,7 @@ struct OutlineView: View {
     @State private var newEvent = TimelineEvent()
     @State private var showAddEvent = false
     @State private var outlineNotes = ""
+    @State private var showCraftCodex = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -100,9 +101,117 @@ struct OutlineView: View {
             .padding(.horizontal, 12)
             .padding(.top, 6)
 
+            outlineSyncBar
+
             timelineTable
         }
         .sheet(isPresented: $showAddEvent) { addEventSheet }
+        .sheet(isPresented: $showCraftCodex) { craftCodexSheet }
+    }
+
+    // MARK: - 大纲实时同步 + 剧情线连贯性
+
+    /// 对账结果。不能直接在 body 里算：OutlineSync 要读各章正文做双字组匹配，
+    /// 300 章量级是秒级的主线程开销，放进 body 就是每次 store 变化都卡一下。
+    @State private var syncReport: OutlineSyncReport?
+
+    /// 触发重算的**粗签名**：只含结构（章数/事件/故事线/阶段/台账），故意不含字数。
+    /// 含字数的话作者每敲一个字都会全量重算一遍——那比"稍微陈旧"糟得多。
+    private var syncStamp: Int {
+        var h = store.chapters.count &* 31
+        h = h &+ store.timelineEvents.count &* 131
+        for e in store.timelineEvents {
+            h = h &+ e.chapter &+ (e.happened ? 7 : 0) &+ (e.dropped ? 11 : 0) &+ (e.actualChapter ?? 0) &* 3
+        }
+        h = h &+ store.storylines.count &* 911
+        for l in store.storylines { h = h &+ l.status.rawValue.hashValue &+ (l.plannedPayoffChapter ?? 0) }
+        h = h &+ store.stages.count &* 71
+        for s in store.stages { h = h &+ s.chapterEnd }
+        h = h &+ store.clues.count &* 17
+        for c in store.clues { h = h &+ c.lastActionChapter &+ c.status.rawValue.hashValue }
+        return h
+    }
+
+    /// 大纲不是建书时的一次性计划：写了几十章之后它会和真实剧情脱节。
+    /// 这里把「计划 vs 实际」的对账结果常驻显示，作者随时能看到哪条线断了、哪个事件逾期了。
+    private var outlineSyncBar: some View {
+        let report = syncReport
+        let broken = report?.lineHealth.filter { $0.state == .broken || $0.state == .stalled } ?? []
+        let due = report?.lineHealth.filter { $0.state == .dueForPayoff } ?? []
+        let missed = report?.eventSync.filter { $0.status == "未发生" || $0.status == "疑似偏移" } ?? []
+        return VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
+                Image(systemName: "arrow.triangle.2.circlepath").foregroundStyle(Color.accentColor)
+                Text("大纲对账").font(.callout.bold())
+                if let report {
+                    Text(report.summary).font(.caption).foregroundStyle(.secondary).lineLimit(2)
+                } else {
+                    Text("正在对账…").font(.caption).foregroundStyle(.tertiary)
+                }
+                Spacer()
+                Button {
+                    syncReport = OutlineSync.sync(store: store)
+                } label: { Label("重新对账", systemImage: "arrow.clockwise") }
+                    .controlSize(.small)
+                    .help("正文改动不会自动重算（避免每敲一个字就全量对账），写完一段点这里刷新")
+                Button {
+                    Task { await vm.ai.runOutlineSync(store: store, config: vm.config) }
+                } label: { Label("同步大纲（提案）", systemImage: "arrow.triangle.2.circlepath") }
+                .controlSize(.small)
+                .disabled(vm.ai.running)
+                Button {
+                    Task { await vm.ai.runContinuityAudit(store: store, config: vm.config) }
+                } label: { Label("全书连贯性审查", systemImage: "stethoscope") }
+                .controlSize(.small)
+                .disabled(vm.ai.running)
+                Button("创作法典") { showCraftCodex = true }
+                    .controlSize(.small)
+            }
+            if !broken.isEmpty || !due.isEmpty || !missed.isEmpty {
+                HStack(spacing: 6) {
+                    ForEach(broken.prefix(4)) { l in
+                        ZBChip(text: "\(l.name)·\(l.state.rawValue)\(l.dormantChapters)章", color: l.state == .broken ? .red : .orange)
+                    }
+                    ForEach(due.prefix(3)) { l in
+                        ZBChip(text: "\(l.name)·待收束", color: .purple)
+                    }
+                    if !missed.isEmpty {
+                        ZBChip(text: "\(missed.count) 个计划事件对不上正文", color: .orange)
+                    }
+                }
+                Text("断线/待收束的线和逾期的计划事件都在这里。点「同步大纲」让 AI 给出更新提案，你采纳后大纲才变。")
+                    .font(.caption2).foregroundStyle(.tertiary)
+            }
+        }
+        .padding(10)
+        .zbCard()
+        .padding(.horizontal, 12)
+        .padding(.top, 6)
+        // 结构变了才重算；task 可取消，翻页/关窗不会留下孤儿计算
+        .task(id: syncStamp) {
+            syncReport = OutlineSync.sync(store: store)
+        }
+    }
+
+    private var craftCodexSheet: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 10) {
+                Image(systemName: "book.closed").foregroundStyle(Color.accentColor)
+                Text("创作法典").font(.headline)
+                Text("当前按题材「\(store.project.genre.isEmpty ? "通用" : store.project.genre)」裁剪")
+                    .font(.caption).foregroundStyle(.tertiary)
+                Spacer()
+                Button("关闭") { showCraftCodex = false }.controlSize(.small)
+            }
+            .padding(12)
+            Divider()
+            ScrollView {
+                MarkdownPreview(markdown: CraftCodex.referencePage(genreText: store.project.genre), fontSize: 13)
+                    .frame(maxWidth: .infinity, alignment: .topLeading)
+                    .padding(14)
+            }
+        }
+        .frame(width: 780, height: 680)
     }
 
     private var storylinesTable: some View {

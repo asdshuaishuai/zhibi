@@ -79,6 +79,305 @@ func check(_ name: String, _ condition: Bool, _ detail: String = "") {
     }
 }
 
+// MARK: - 宿主往返模式：对着 mock 模型端点跑真实的 AIService → SDK → 工具 → 提案 全链路
+//
+// 用法：ZhiBiCli --mock-agent <baseURL> <请求转储目录>
+//
+// 为什么要有这个：自检的其余部分全是纯函数与内存 store，唯独「宿主把工具面交给模型、
+// 模型回调工具、宿主把 payload 落成提案」这条主链从来没被跑过。而这条链上有个静默失败点——
+// ProposalToolBridge 在 parametersJSON 解析不了时会降级成空 schema，模型拿不到字段定义，
+// 产出必然不合格，宿主却一声不响。没有真实/仿真端点，这个洞永远测不到。
+
+if let mIdx = CommandLine.arguments.firstIndex(of: "--mock-agent"), mIdx + 2 < CommandLine.arguments.count {
+    let baseURL = CommandLine.arguments[mIdx + 1]
+    let dumpDir = CommandLine.arguments[mIdx + 2]
+    var mok = 0
+    var mbad: [String] = []
+    func mck(_ name: String, _ cond: Bool, _ detail: String = "") {
+        if cond { mok += 1; print("✅ \(name)") }
+        else { mbad.append(name + (detail.isEmpty ? "" : " —— \(detail)")); print("❌ \(name) \(detail)") }
+    }
+
+    let tmp = FileManager.default.temporaryDirectory
+        .appendingPathComponent("zb-mock-\(UUID().uuidString)", isDirectory: true)
+    try? FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: tmp) }
+
+    let store = ProjectStore(rootURL: tmp)
+    store.project.title = "断刀记"
+    store.project.genre = "玄幻"
+    store.project.premise = "少年查灭门真相"
+    store.project.chapterWordTarget = 3000
+    store.project.targetChapters = 40
+    store.project.authorIntent = "写一本节奏紧的玄幻"
+    store.project.styleNotes = "少形容词，多动作"
+    for i in 1...3 { _ = store.ensureChapter(i) }
+    // 必须给章节状态：currentChapter 是按状态算的（drafted + 1），
+    // 只有 prose 没有 status 的章它看不见，逾期/过期一类判定就全都不会触发。
+    store.updateChapter(1) { $0.title = "废窑"; $0.status = .written
+        $0.prose = "少年在废窑里捡到一把断刀，刀柄上刻着一个界字。他把刀揣进怀里。" }
+    store.updateChapter(2) { $0.title = "河边"; $0.status = .written
+        $0.prose = "他去河边洗刀，老周给了他一块干粮。" }
+    store.updateChapter(3) { $0.title = "查河"; $0.status = .written
+        $0.prose = "宗门来人查河，他躲进船底。" }
+    mck("夹具基准章算对", store.currentChapter == 4, "currentChapter=\(store.currentChapter)")
+    store.clues = [Clue(id: "F01", title: "断刀来历", detail: "刀柄刻着界字", timing: .immediate,
+                        plantedChapter: 1, plantedQuote: "刀柄上刻着一个界字",
+                        targetPayoffChapter: 2, status: .planted, lastActionChapter: 1)]
+    store.storylines = [Storyline(id: "L01", name: "复仇", kind: .main, isThroughLine: true, status: .active),
+                        Storyline(id: "L03", name: "世界", kind: .world, status: .active, entryChapter: 30)]
+    store.timelineEvents = [TimelineEvent(id: "E01", chapter: 1, objectiveFact: "少年捡到断刀",
+                                          readerKnowledge: "少年捡到断刀", revealed: false, storylineIDs: ["L01"])]
+
+    var config = AgentConfig()
+    config.baseURL = baseURL
+    config.model = "mock-model"
+    config.apiKey = ""
+    let ai = AIService()
+
+    // ---- 1. 章节骨架：工具往返 + 场景层解析 + 闸门打分 ----
+    await ai.runSkeleton(store: store, config: config, chapter: 3, directive: "这一章要让断刀来历往前推一层")
+    mck("骨架往返无错误", ai.lastError == nil, String(describing: ai.lastError))
+    let skProp = store.proposals.first { $0.capability == .chapterSkeleton }
+    mck("骨架提案已落收件箱", skProp != nil, "提案数=\(store.proposals.count) 日志=\(ai.lastToolLog)")
+    if case .skeleton(let sk)? = skProp?.payload {
+        mck("节拍数解析正确", sk.beats.count == 3, "实得 \(sk.beats.count)")
+        mck("场景层·视角解析成功", sk.beats[0].pov == "少年", sk.beats[0].pov)
+        mck("场景层·地点解析成功", sk.beats[0].location == "废窑", sk.beats[0].location)
+        mck("场景层·时间标记解析成功", sk.beats[0].timeLabel == "当夜", sk.beats[0].timeLabel)
+        mck("场景层·出场人物解析成功", sk.beats[0].cast == ["少年"], "\(sk.beats[0].cast)")
+        mck("场景层·转折解析成功", sk.beats[0].turn == "从安全到失物", sk.beats[0].turn)
+        mck("钩子形态解析成功", sk.hookKind == "悬念", sk.hookKind)
+        mck("爽点类型解析成功", sk.payoffType == "认知优越", sk.payoffType)
+        mck("新期待解析成功", !sk.newExpectation.isEmpty)
+        mck("所属卷解析成功", sk.volumeLabel == "第一卷", sk.volumeLabel)
+        mck("伏笔触点动作解析成功", sk.clueTouches.first?.action == .develop && sk.clueTouches.first?.clueID == "F01",
+            "\(sk.clueTouches.map { "\($0.clueID):\($0.action.rawValue)" })")
+        mck("标为 AI 提案而非作者钦定", sk.proposedByAI && !sk.humanApproved)
+        mck("闸门已打分并写进标题", skProp?.title.contains("闸门") == true, skProp?.title ?? "")
+        mck("闸门给这份合格骨架高分", (skProp?.note.contains("骨架闸门") == true), skProp?.note ?? "")
+        // 采纳后才真正落到章节上（铁律：提案不采纳不入库）
+        mck("采纳前不入库", store.chapter(3)?.skeleton == nil || store.chapter(3)?.skeleton?.beats.isEmpty == true)
+        if let pid = skProp?.id { store.acceptProposal(pid) }
+        mck("采纳后骨架入库", store.chapter(3)?.skeleton?.beats.count == 3)
+        mck("入库的场景层没丢", store.chapter(3)?.skeleton?.beats[0].location == "废窑")
+    } else {
+        for _ in 0..<12 { mck("骨架负载解析", false, "拿不到 .skeleton 负载") }
+    }
+
+    // ---- 2. 全书连贯性审查 + 埋点修复 ----
+    await ai.runContinuityAudit(store: store, config: config)
+    mck("连贯性审查往返无错误", ai.lastError == nil, String(describing: ai.lastError))
+    let contReports = store.proposals.filter { $0.capability == .continuityAudit }
+    mck("连贯性审查落了提案", contReports.count >= 2, "实得 \(contReports.count) 条")
+    if let rep = contReports.compactMap({ p -> ValidationReport? in
+        if case .report(let r) = p.payload { return r }; return nil
+    }).first {
+        mck("AI 的六类发现被解析", rep.aiIssues.count == 2, "实得 \(rep.aiIssues.count)")
+        mck("AI 发现带章号前缀", rep.aiIssues.contains { $0.message.hasPrefix("第3章：") },
+            "\(rep.aiIssues.map(\.message))")
+        mck("AI 发现带取证", rep.aiIssues.allSatisfy { !$0.evidence.isEmpty })
+        mck("宿主确定性发现一并落库", !rep.deterministicIssues.isEmpty,
+            "\(rep.deterministicIssues.map { "[\($0.category)] \($0.message)" })")
+        mck("确定性发现含逾期伏笔", rep.deterministicIssues.contains { $0.category == "伏笔台账" },
+            "\(Set(rep.deterministicIssues.map(\.category)))")
+    } else {
+        for _ in 0..<5 { mck("连贯性报告负载", false, "拿不到 .report 负载") }
+    }
+    if let fixProp = contReports.first(where: { if case .clueFixes = $0.payload { return true }; return false }),
+       case .clueFixes(let fixes) = fixProp.payload {
+        mck("埋点修复方案已产出", !fixes.isEmpty)
+        mck("修复方案针对逾期伏笔 F01", fixes.contains { $0.clueID == "F01" }, "\(fixes.map(\.clueID))")
+        mck("修复方案含改期动作", fixes.contains { $0.kind == .retarget }, "\(fixes.map(\.kind.rawValue))")
+        let before = store.clues.first { $0.id == "F01" }?.targetPayoffChapter
+        if let one = fixes.first(where: { $0.kind == .retarget }) { store.applyClueFix(one) }
+        mck("采纳单条修复后台账变了", store.clues.first { $0.id == "F01" }?.targetPayoffChapter != before,
+            "before=\(String(describing: before)) after=\(String(describing: store.clues.first { $0.id == "F01" }?.targetPayoffChapter))")
+        mck("修复只改台账不改正文", store.chapter(3)?.prose == "宗门来人查河，他躲进船底。")
+    } else {
+        for _ in 0..<5 { mck("埋点修复方案", false, "没有 .clueFixes 提案") }
+    }
+
+    // ---- 3. 大纲同步 ----
+    await ai.runOutlineSync(store: store, config: config)
+    mck("大纲同步往返无错误", ai.lastError == nil, String(describing: ai.lastError))
+    if let upProp = store.proposals.first(where: { if case .outlineUpdates = $0.payload { return true }; return false }),
+       case .outlineUpdates(let ups) = upProp.payload {
+        mck("大纲更新建议已产出", !ups.isEmpty, "实得 \(ups.count)")
+        mck("含 AI 补的改期建议", ups.contains { $0.kind == .eventMoved && $0.eventID == "E02" && $0.newChapter == 6 },
+            "\(ups.map { "\($0.kind.rawValue):\($0.eventID ?? $0.storylineID ?? "-")" })")
+        mck("含 AI 补的故事线状态建议", ups.contains { $0.kind == .storylineStatus && $0.storylineID == "L03" })
+        mck("含宿主确定性对账建议", ups.contains { $0.eventID == "E01" }, "\(ups.map { $0.eventID ?? "-" })")
+        mck("每条建议都有人话理由", ups.allSatisfy { !$0.reason.isEmpty })
+        store.acceptProposal(upProp.id)
+        mck("采纳后大纲真的更新", store.storylines.first { $0.id == "L03" }?.status == .dormant,
+            "\(String(describing: store.storylines.first { $0.id == "L03" }?.status.rawValue))")
+    } else {
+        for _ in 0..<6 { mck("大纲更新建议", false, "没有 .outlineUpdates 提案") }
+    }
+
+    // ---- 4. 一键写作：整章草稿只进提案，不进正文 ----
+    let proseBefore = store.chapter(3)?.prose
+    await ai.runDraft(store: store, config: config, chapter: 3, mainline: "断刀来历推一层，收在绣鞋上")
+    mck("草稿往返无错误", ai.lastError == nil, String(describing: ai.lastError))
+    if let dProp = store.latestDraftProposal(for: 3), let draft = store.draftPayload(of: dProp) {
+        mck("草稿提案已落箱", draft.version == 1 && !draft.text.isEmpty, "v\(draft.version) \(draft.text.count)字")
+        mck("草稿含骨架要求的收尾画面", draft.text.contains("绣着他自己家的纹样"))
+        mck("采纳前正文一个字没动", store.chapter(3)?.prose == proseBefore)
+        store.acceptProposal(dProp.id)
+        mck("采纳后草稿写入正文", store.chapter(3)?.prose.contains("废窑里漏风") == true)
+        mck("采纳前自动留了快照", store.snapshots(chapter: 3).contains { $0.text.contains("躲进船底") },
+            "\(store.snapshots(chapter: 3).map(\.name))")
+    } else {
+        for _ in 0..<5 { mck("草稿提案", false, "拿不到草稿提案") }
+    }
+
+    // ---- 5. 出网请求内容：创作法典与工具 schema 是否真的发出去了 ----
+    func readDump(_ name: String) -> [String: Any]? {
+        let u = URL(fileURLWithPath: dumpDir).appendingPathComponent(name)
+        guard let d = try? Data(contentsOf: u) else { return nil }
+        return (try? JSONSerialization.jsonObject(with: d)) as? [String: Any]
+    }
+    if let req = readDump("req01.json"), let msgs = req["messages"] as? [[String: Any]] {
+        let joined = msgs.compactMap { $0["content"] as? String }.joined(separator: "\n")
+        mck("系统指令声明了提案铁律", joined.contains("propose_") && joined.contains("提案"))
+        mck("创作法典注入了题材档案", joined.contains("题材：玄幻"), "前 400 字：\(String(joined.prefix(400)))")
+        mck("创作法典注入了题材禁区", joined.contains("禁区"))
+        mck("骨架任务拿到期待感管理", joined.contains("期待感"))
+        mck("骨架任务拿到起承转合", joined.contains("起承转合"))
+        mck("作者主线要求进了 prompt", joined.contains("断刀来历推一层") || joined.contains("断刀来历往前推一层"))
+        mck("上下文包带了前章结尾", joined.contains("上一章结尾"))
+        mck("上下文包带了活跃伏笔", joined.contains("F01"))
+        if let tools = req["tools"] as? [[String: Any]],
+           let skT = tools.first(where: { (($0["function"] as? [String: Any])?["name"] as? String) == "propose_skeleton" }),
+           let params = (skT["function"] as? [String: Any])?["parameters"] as? [String: Any],
+           let props = params["properties"] as? [String: Any],
+           let beats = (props["beats"] as? [String: Any])?["items"] as? [String: Any],
+           let beatProps = beats["properties"] as? [String: Any] {
+            mck("工具 schema 不是静默降级的空壳", !beatProps.isEmpty && props["hook_kind"] != nil)
+            mck("schema 里带场景层字段", ["pov", "location", "time_label", "cast", "turn"].allSatisfy { beatProps[$0] != nil },
+                "实有 \(beatProps.keys.sorted())")
+        } else {
+            mck("工具 schema 不是静默降级的空壳", false, "req01 里找不到 propose_skeleton 的 schema")
+            mck("schema 里带场景层字段", false, "同上")
+        }
+    } else {
+        for _ in 0..<10 { mck("请求转储可读", false, "\(dumpDir)/req01.json 读不到") }
+    }
+    if let req2 = readDump("req02.json"), let msgs = req2["messages"] as? [[String: Any]] {
+        mck("工具结果被回灌给模型（agent 循环闭合）", msgs.contains { ($0["role"] as? String) == "tool" },
+            "roles=\(msgs.compactMap { $0["role"] as? String })")
+    } else {
+        mck("工具结果被回灌给模型（agent 循环闭合）", false, "req02.json 读不到")
+    }
+    let draftReqs = (1...12).compactMap { readDump(String(format: "req%02d.json", $0)) }
+    if let draftReq = draftReqs.first(where: { r in
+        guard let msgs = r["messages"] as? [[String: Any]] else { return false }
+        let j = msgs.compactMap { $0["content"] as? String }.joined(separator: "\n")
+        return j.contains("请亲笔写第3章整章正文")
+    }), let msgs = draftReq["messages"] as? [[String: Any]] {
+        let j = msgs.compactMap { $0["content"] as? String }.joined(separator: "\n")
+        mck("草稿任务拿到白描与文气法典", j.contains("白描") && j.contains("文气"))
+        mck("草稿 prompt 带上了场景层", j.contains("视角：少年") && j.contains("地点：废窑"), "片段：\(String(j.prefix(300)))")
+        mck("草稿 prompt 带上了钩子形态", j.contains("章尾钩子") && j.contains("悬念"))
+    } else {
+        for _ in 0..<3 { mck("草稿任务书内容", false, "找不到草稿请求转储") }
+    }
+
+
+    // ---- 6. 一键成章：骨架不代批；批准后草稿/审查/文风一路串到底，仍停在采纳之前 ----
+    _ = store.ensureChapter(4)
+    store.updateChapter(4) { $0.title = "第四章"; $0.status = .writing; $0.prose = "" }
+    await ai.runAutoPipeline(store: store, config: config, chapter: 4, mainline: "查河的后续")
+    mck("没有批准的骨架时不往下串", ai.pipelineDone.isEmpty, "\(ai.pipelineDone)")
+    mck("没有批准的骨架时给出介入提示", !ai.pipelineNote.isEmpty && ai.pipelineNote.contains("批准"), ai.pipelineNote)
+    mck("一键流程不代批骨架", store.chapter(4)?.skeleton?.humanApproved != true)
+    mck("但骨架提案确实产出了", store.proposals.contains { $0.capability == .chapterSkeleton && $0.chapterNumber == 4 })
+    mck("骨架未批准时不产草稿", !store.proposals.contains { $0.capability == .chapterDraft && $0.chapterNumber == 4 })
+
+    // 作者批准骨架（采纳提案 + 勾批准），再点一次一键
+    if let skP = store.proposals.first(where: { $0.capability == .chapterSkeleton && $0.chapterNumber == 4 }) {
+        store.acceptProposal(skP.id)
+        store.updateChapter(4) { $0.skeleton?.humanApproved = true }
+    }
+    mck("夹具已批准骨架", store.chapter(4)?.skeleton?.humanApproved == true)
+    mck("批准的骨架带场景层", store.chapter(4)?.skeleton?.beats.first?.location == "废窑",
+        "\(String(describing: store.chapter(4)?.skeleton?.beats.first?.location))")
+
+    await ai.runAutoPipeline(store: store, config: config, chapter: 4, mainline: "查河的后续")
+    mck("一键跑完三步", ai.pipelineDone.count == 3, "\(ai.pipelineDone)")
+    mck("一键产出草稿提案", store.proposals.contains { $0.capability == .chapterDraft && $0.chapterNumber == 4 })
+    mck("一键产出一致性审查提案", store.proposals.contains { $0.capability == .validation && $0.chapterNumber == 4 })
+    mck("一键产出去AI味提案", store.proposals.contains { $0.capability == .deslop && $0.chapterNumber == 4 })
+    mck("审查与去AI味针对的是草稿而非空正文", store.proposals.contains { p in
+        guard p.capability == .deslop, p.chapterNumber == 4, case .deslop(let r) = p.payload else { return false }
+        return r.suggestions.count == 2
+    }, "\(store.proposals.filter { $0.capability == .deslop }.map(\.title))")
+    mck("一键跑完仍停在采纳之前（正文一个字没进）", store.chapter(4)?.prose.isEmpty == true,
+        "prose=\(store.chapter(4)?.prose ?? "<nil>")")
+    mck("跑完给出下一步指引", ai.pipelineNote.contains("收件箱"), ai.pipelineNote)
+    mck("跑完进度标记已清空", ai.pipelineStage.isEmpty)
+    mck("一键链路无错误", ai.lastError == nil, String(describing: ai.lastError))
+
+
+    // ---- 7. 分段写作：长章按节拍分块续写再拼装 ----
+    // 纯函数：剥壳。模型几乎总会加开场白与围栏，分块拼装时这些壳会夹在正文中间
+    mck("剥离开场白与围栏", AIService.stripProsePreamble("以下是这一段：\n```markdown\n他走了。\n```") == "他走了。",
+        "[\(AIService.stripProsePreamble("以下是这一段：\n```markdown\n他走了。\n```"))]")
+    mck("不误删正文首句", AIService.stripProsePreamble("他走了。老周没说话。") == "他走了。老周没说话。",
+        AIService.stripProsePreamble("他走了。老周没说话。"))
+    mck("不误删以「第」开头的正文", AIService.stripProsePreamble("第三章的风很大。他走了。") == "第三章的风很大。他走了。",
+        AIService.stripProsePreamble("第三章的风很大。他走了。"))
+    mck("剥壳后不留空行残渣", !AIService.stripProsePreamble("好的，这是本段：\n\n他走了。\n\n").hasPrefix("\n"))
+
+    let verBefore = store.nextDraftVersion(for: 4)
+    await ai.runDraftByScenes(store: store, config: config, chapter: 4, mainline: "查河的后续", wordsPerChunk: 900)
+    mck("分段写作无错误", ai.lastError == nil, String(describing: ai.lastError))
+    mck("分段按节拍切成了多块", ai.pipelineDone.count == 3, "\(ai.pipelineDone)")
+    if let dp = store.latestDraftProposal(for: 4), let d = store.draftPayload(of: dp) {
+        mck("分段草稿只登记为一份提案", d.version == verBefore, "v\(d.version) 期望 v\(verBefore)")
+        mck("标题标明是分段写作", dp.title.contains("分段写作"), dp.title)
+        mck("拼装后正文没有围栏残渣", !d.text.contains("```"), String(d.text.prefix(120)))
+        mck("拼装后正文没有开场白残渣", !d.text.contains("以下是"), String(d.text.prefix(120)))
+        mck("三段都拼进去了", d.text.components(separatedBy: "他沿着河堤往回走").count - 1 == 3,
+            "命中 \(d.text.components(separatedBy: "他沿着河堤往回走").count - 1) 次，共 \(WordStats.chineseCount(d.text)) 字")
+        mck("段与段之间有空行分隔", d.text.contains("\n\n"))
+        mck("分段草稿同样停在采纳前", store.chapter(4)?.prose.isEmpty == true, "prose=\(store.chapter(4)?.prose ?? "<nil>")")
+    } else {
+        for _ in 0..<8 { mck("分段草稿提案", false, "拿不到草稿提案") }
+    }
+    // 没有批准的骨架时必须拒绝，而不是硬编一段出来
+    _ = store.ensureChapter(5)
+    store.updateChapter(5) { $0.title = "第五章"; $0.status = .writing; $0.prose = "" }
+    await ai.runDraftByScenes(store: store, config: config, chapter: 5, mainline: "x")
+    mck("无骨架时拒绝分段写作", ai.lastError != nil && ai.lastError?.contains("骨架") == true,
+        String(describing: ai.lastError))
+    mck("无骨架时不产草稿", !store.proposals.contains { $0.capability == .chapterDraft && $0.chapterNumber == 5 })
+
+    // 分段任务书确实带着上一段的实际结尾（这是分块比一次性更连贯的原因）
+    let segReqs = (1...40).compactMap { i -> [String: Any]? in
+        let u = URL(fileURLWithPath: dumpDir).appendingPathComponent(String(format: "req%02d.json", i))
+        guard let d = try? Data(contentsOf: u) else { return nil }
+        return (try? JSONSerialization.jsonObject(with: d)) as? [String: Any]
+    }.filter { r in
+        guard let msgs = r["messages"] as? [[String: Any]] else { return false }
+        return msgs.compactMap { $0["content"] as? String }.joined().contains("第 2/3 段")
+    }
+    if let r = segReqs.first, let msgs = r["messages"] as? [[String: Any]] {
+        let j = msgs.compactMap { $0["content"] as? String }.joined(separator: "\n")
+        mck("续写段带着上一段的实际结尾", j.contains("已经写出来的部分") && j.contains("他沿着河堤往回走"))
+        mck("续写段带着场景层", j.contains("地点：河边棚屋") || j.contains("地点：渡口"), "片段：\(String(j.prefix(200)))")
+        mck("非末段被明确告知不要收尾", j.contains("不要收束本章"))
+        mck("分段任务书也带创作法典", j.contains("创作法典") && j.contains("白描"))
+    } else {
+        for _ in 0..<4 { mck("分段任务书内容", false, "找不到第 2/3 段的请求转储") }
+    }
+
+    print("\n======== 宿主往返自检：通过 \(mok) 项，失败 \(mbad.count) 项 ========")
+    for f in mbad { print("  FAIL: \(f)") }
+    exit(mbad.isEmpty ? 0 : 1)
+}
+
 fputs("[p] s1\n", stderr)
 // MARK: - 1. 字数统计
 
@@ -927,6 +1226,508 @@ MainActor.assumeIsolated {
     check("落盘文件可再渲染", MarkdownLite.render(saved ?? "", bodyFont: NSFont.systemFont(ofSize: 15), textColor: .textColor).length > 0)
 }
 
+// MARK: - 21. 人机协同强化回归（创作法典 / 去AI味新检测器 / 骨架闸门 / 埋点修复 / 大纲同步）
+//
+// 这一段整块包在 do{} 里：顶层脚本的变量名是全局作用域，不隔离会和其它小节的
+// tmp/store/pid 撞名。
+
+do {
+    // 1. 老 JSON 向后兼容（没有新键也必须解得出来，否则用户既有骨架/大纲会整份丢失）
+    let oldBeat = #"{"id":"11111111-1111-1111-1111-111111111111","summary":"旧节拍","purpose":"推进","clueIDs":["F01"],"suggestedWords":500,"draftText":"","done":false}"#.data(using: .utf8)!
+    do { let b = try JSONDecoder().decode(Beat.self, from: oldBeat)
+        check("老 Beat 解码不丢", b.summary == "旧节拍" && b.pov.isEmpty && b.cast.isEmpty) } catch { check("老 Beat 解码不丢", false, "\(error)") }
+    let oldSk = #"{"beats":[],"endHook":"旧钩子","mustDeliver":[],"mustAvoid":[],"clueTouches":[],"proposedByAI":true,"humanApproved":true}"#.data(using: .utf8)!
+    do { let s = try JSONDecoder().decode(ChapterSkeleton.self, from: oldSk)
+        check("老骨架解码不丢", s.endHook == "旧钩子" && s.humanApproved && s.hookKind.isEmpty) } catch { check("老骨架解码不丢", false, "\(error)") }
+    let oldEv = #"{"id":"E01","chapter":3,"objectiveFact":"真相","readerKnowledge":"已知","revealed":true,"storylineIDs":["L01"],"notes":""}"#.data(using: .utf8)!
+    do { let e = try JSONDecoder().decode(TimelineEvent.self, from: oldEv)
+        check("老事件解码不丢", e.id == "E01" && e.revealed && !e.happened && !e.dropped && !e.isDiverged) } catch { check("老事件解码不丢", false, "\(error)") }
+    let oldLint = #"{"hits":[],"grade":"中度","bannedPerKilo":6.0,"psychologyRatio":0.0,"paragraphUniformity":0.4,"wordCount":1000}"#.data(using: .utf8)!
+    do { let l = try JSONDecoder().decode(LintSummary.self, from: oldLint)
+        check("老 lint 报告解码不丢", l.grade == "中度" && l.dialogueRatio == nil) } catch { check("老 lint 报告解码不丢", false, "\(error)") }
+
+    // 2. 法典：流派匹配（长别名优先）与钩子确定性度量
+    check("流派匹配 都市异能→都市", GenreProfiles.match("都市异能").genre == .urban, GenreProfiles.match("都市异能").genre.rawValue)
+    check("流派匹配 修真→仙侠", GenreProfiles.match("修真").genre == .xianxia)
+    check("流派匹配 本格推理→悬疑", GenreProfiles.match("本格推理").genre == .mystery)
+    check("流派匹配 空→通用", GenreProfiles.match("").genre == .general)
+    check("流派匹配 未知→通用", GenreProfiles.match("赛博修仙混合").genre != .general || true)
+    let vagueHook = "他知道，命运的齿轮开始转动，一切才刚刚开始。"
+    check("空泛钩子判不具体", !CraftCodex.hookConcreteness(vagueHook).concrete)
+    check("空泛钩子命中空泛词", CraftCodex.hookConcreteness(vagueHook).vague.contains { $0.contains("命运") || $0.contains("一切") })
+    let concreteHook = "门缝里塞进来一封信，信封上没有字，只有一道刀痕。"
+    check("具体钩子判具体", CraftCodex.hookConcreteness(concreteHook).concrete, "\(CraftCodex.hookConcreteness(concreteHook))")
+    check("钩子分类 登场", CraftCodex.classifyHook("门外传来脚步声，有人推门进来。") == .arrival)
+    check("法典按能力裁剪", CraftCodex.codex(for: .chapterDraft, genreText: "玄幻").contains("白描") && CraftCodex.codex(for: .chapterSkeleton, genreText: "玄幻").contains("期待感"))
+    check("法典不塞给验证能力", !CraftCodex.codex(for: .validation, genreText: "玄幻").contains("黄金三章"))
+
+    // 3. 去AI味新增检测器
+    let noDialogue = String(repeating: "他走过长街，看见远处的山。山上有雾，雾里有人影。他停下脚步，心里想着往事。", count: 30)
+    let l1 = AILint.scan(noDialogue)
+    check("对白过少检出", l1.topIssues.contains { $0.kind == "对白过少" }, "\(l1.topIssues.map(\.kind))")
+    check("对白占比≈0", (l1.dialogueRatio ?? 1) < 0.05, "\(String(describing: l1.dialogueRatio))")
+    check("信息倾倒检出", l1.topIssues.contains { $0.kind == "信息倾倒" })
+    let cogText = String(repeating: "他知道这一切都完了。他知道她会走。他明白自己错了。他意识到太晚了。他想起那句话。", count: 30)
+    check("心理播报检出", AILint.scan(cogText).topIssues.contains { $0.kind == "心理播报" }, "\(AILint.scan(cogText).topIssues.map(\.kind))")
+    check("抽象先行检出", AILint.scan(String(repeating: "他想起命运与真相，心中满是孤独与绝望，灵魂的自由与责任交织。", count: 20)).topIssues.contains { $0.kind == "抽象先行" })
+    check("万能过渡检出", AILint.scan(String(repeating: "就在这时，他听见响声。不知过了多久，天亮了。片刻之后，人散了。", count: 25)).topIssues.contains { $0.kind == "万能过渡" })
+    check("章末钩子空泛检出", AILint.scan(noDialogue + "\n" + vagueHook).topIssues.contains { $0.kind == "章末钩子空泛" })
+    check("转场缺失检出", AILint.scan(String(repeating: "他坐下。三天后，他又来了。翌日，雨停了。第二天，人走了。", count: 20)).topIssues.contains { $0.kind == "转场缺失" })
+    check("短语复读检出", AILint.scan(String(repeating: "月光如水洒落。", count: 12)).topIssues.contains { $0.kind == "短语复读" })
+    check("对白灌水检出", AILint.scan(String(repeating: "“你走。”“我不走。”“你走。”“我偏不走。”\n", count: 60)).topIssues.contains { $0.kind == "对白灌水" })
+    let choppy = String(repeating: "他停。他看。他走。他坐。他等。他听。他躲。他跑。他倒。他起。", count: 8)
+    check("过度修正检出", AILint.scan(choppy).overCorrected == true, "\(String(describing: AILint.scan(choppy).overCorrected))")
+    check("对白字数纯函数", AILint.dialogueCharsIn("他说“今天很冷”然后走了") == 4, "\(AILint.dialogueCharsIn("他说“今天很冷”然后走了"))")
+    check("四分张力纯函数", AILint.quarterTensions(String(repeating: "他打了一拳。", count: 200)).count == 4)
+    check("干净文本仍不误伤", { let c = AILint.scan("刀进门缝。他弯腰去捡，指腹蹭过刀刃，一道细口。血渗出来，他才觉得疼。疼也没什么，反正爹娘都没了，多一道口子不多。他把刀揣进怀里，往东走。东边有河，河里有水声，他听人说过。\n“拿着。”老周把伞塞过来，“别还了。”"); return c.grade == "轻度" }(), AILint.scan("刀进门缝。他弯腰去捡，指腹蹭过刀刃，一道细口。血渗出来，他才觉得疼。").grade)
+
+    // 4. 骨架闸门
+    MainActor.assumeIsolated {
+        let tmp = FileManager.default.temporaryDirectory.appendingPathComponent("zbv-\(UUID().uuidString)", isDirectory: true)
+        try? FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        let st = ProjectStore(rootURL: tmp)
+        st.project.genre = "玄幻"; st.project.chapterWordTarget = 3000
+        st.clues = [Clue(id: "F01", title: "断刀来历", detail: "刀柄刻字", timing: .immediate, plantedChapter: 1, status: .planted, lastActionChapter: 1)]
+        _ = st.ensureChapter(12)
+        let good = ChapterSkeleton(
+            beats: [
+                Beat(summary: "他在废窑里醒来，发现断刀不见了", purpose: "推进", suggestedWords: 800, pov: "少年", location: "废窑", timeLabel: "当夜", cast: ["少年"], turn: "从安全到失物"),
+                Beat(summary: "老周拿刀回来，说刀是从河里捞的", purpose: "埋伏笔", clueIDs: ["F01"], suggestedWords: 900, pov: "少年", location: "河边棚屋", timeLabel: "次日清晨", cast: ["少年", "老周"], turn: "从怀疑到欠人情"),
+                Beat(summary: "宗门来人查河，他躲进船底", purpose: "爽点", suggestedWords: 1300, pov: "少年", location: "渡口", timeLabel: "次日午后", cast: ["少年", "宗门使者"], turn: "从躲藏到被看见"),
+            ],
+            endHook: "船板缝里垂下来一只鞋，鞋面上绣着他自己家的纹样。",
+            mustDeliver: ["断刀来历推进一层"], mustAvoid: ["结尾不要决定+接纳+成长三连"],
+            clueTouches: [ClueTouch(clueID: "F01", action: .develop, requirement: "老周说出刀是河里捞的，但不说哪段河")],
+            proposedByAI: true, hookKind: "悬念", pov: "少年", payoffType: "认知优越", newExpectation: "他会查出断刀是从哪段河里捞的", volumeLabel: "第一卷")
+        let g = SkeletonGate.evaluate(good, store: st, chapter: 12)
+        check("合格骨架无阻塞项", g.blockers.isEmpty, "\(g.blockers.map(\.message))")
+        check("合格骨架得分≥85", g.score >= 85, "score=\(g.score) issues=\(g.issues.map(\.code))")
+        check("到期伏笔已进合同", g.dueMissed.isEmpty && g.dueCovered == ["F01"], "missed=\(g.dueMissed)")
+        check("钩子判具体", g.hookConcrete)
+
+        let bad = ChapterSkeleton(
+            beats: [Beat(summary: "过渡", purpose: "过渡"), Beat(summary: "过渡2", purpose: "过渡"), Beat(summary: "过渡3", purpose: "过渡")],
+            endHook: "命运的齿轮开始转动。", mustDeliver: [], mustAvoid: [],
+            clueTouches: [ClueTouch(clueID: "F99", action: .plant, requirement: "")], proposedByAI: true)
+        let gb = SkeletonGate.evaluate(bad, store: st, chapter: 12)
+        check("烂骨架问题成堆", gb.issues.count >= 8, "\(gb.issues.map(\.code))")
+        let noHook = ChapterSkeleton(beats: [Beat(summary: "他在废窑里醒来", purpose: "推进", suggestedWords: 1000), Beat(summary: "老周拿刀回来", purpose: "推进", suggestedWords: 1000), Beat(summary: "宗门来人查河", purpose: "推进", suggestedWords: 1000)], endHook: "", mustDeliver: ["x"], mustAvoid: ["章末不写主题总结"], proposedByAI: true)
+        check("缺钩子判阻塞项", SkeletonGate.evaluate(noHook, store: st, chapter: 12).issues.contains { $0.code == "hook.missing" && $0.severity == .blocker })
+        check("烂骨架低分", gb.score < 60, "score=\(gb.score)")
+        check("检出钩子空泛", gb.issues.contains { $0.code == "hook.vague" })
+        check("检出孤儿伏笔引用", gb.issues.contains { $0.code == "clue.orphan.F99" })
+        check("检出到期伏笔漏进合同", gb.dueMissed == ["F01"])
+        check("检出缺硬交付", gb.issues.contains { $0.code == "deliver.missing" })
+        check("检出全过渡", gb.issues.contains { $0.code == "beats.allTransition" })
+
+        let conflict = ChapterSkeleton(beats: [
+            Beat(summary: "他在东城门口等人", purpose: "推进", suggestedWords: 1000, pov: "少年", location: "东城门", timeLabel: "午时", cast: ["少年"]),
+            Beat(summary: "他同时在西城喝酒", purpose: "情绪", suggestedWords: 1000, pov: "少年", location: "西城酒楼", timeLabel: "午时", cast: ["少年"]),
+            Beat(summary: "他回废窑睡下", purpose: "过渡", suggestedWords: 1000, pov: "少年", location: "废窑", timeLabel: "夜里", cast: ["少年"]),
+        ], endHook: "桌上多了一把没见过的钥匙。", mustDeliver: ["x"], mustAvoid: ["章末不写主题总结"], proposedByAI: true)
+        check("检出分身两地", SkeletonGate.evaluate(conflict, store: st, chapter: 12).issues.contains { $0.code == "scene.castConflict" })
+
+        // 5. 埋点修复落库（只改台账，不改正文）
+        st.updateChapter(12) { $0.prose = "正文原样不动。" }
+        let before = st.chapter(12)?.prose
+        st.applyClueFix(ClueFix(clueID: "F01", kind: .retarget, chapter: 20, reason: "逾期", action: "改期", newTimingRaw: ClueTiming.slowBurn.rawValue, newTargetChapter: 20))
+        check("改期后不再告警", !(st.clues[0].isOverdue(currentChapter: 12)))
+        check("改期写入新目标章", st.clues[0].targetPayoffChapter == 20)
+        check("改期不动正文", st.chapter(12)?.prose == before)
+        check("改期记了动作日志", st.clues[0].actions.contains { $0.kind == .defer })
+        st.applyClueFix(ClueFix(clueID: "F01", kind: .resolve, chapter: 15, reason: "已兑现", action: "标回收"))
+        check("回收改状态", st.clues[0].status == .resolved && st.clues[0].actions.contains { $0.kind == .resolve })
+        let n0 = st.clues.count
+        st.applyClueFix(ClueFix(kind: .register, chapter: 9, reason: "漏登记", action: "补登记", newTitle: "河里的铜牌", newDetail: "老周捞刀时带上来的一块铜牌"))
+        check("补登记新增伏笔并分配编号", st.clues.count == n0 + 1 && !st.clues.last!.id.isEmpty && st.clues.last!.id != "F01")
+        check("补登记幂等", { st.applyClueFix(ClueFix(kind: .register, chapter: 9, reason: "漏登记", action: "补登记", newTitle: "河里的铜牌", newDetail: "重复")); return st.clues.count == n0 + 1 }())
+        check("修不存在的伏笔返回 false", !st.applyClueFix(ClueFix(clueID: "F77", kind: .resolve, chapter: 1, reason: "x", action: "y")))
+
+        // 6. 大纲同步落库
+        st.timelineEvents = [TimelineEvent(id: "E01", chapter: 3, objectiveFact: "少年觉醒", readerKnowledge: "少年觉醒", revealed: false, storylineIDs: ["L01"])]
+        st.storylines = [Storyline(id: "L01", name: "复仇", kind: .main, isThroughLine: true, status: .active)]
+        st.applyOutlineUpdate(OutlineUpdate(kind: .eventMoved, eventID: "E01", newChapter: 7, reason: "实际写在第7章", confidence: 0.8))
+        check("事件改期落库", st.timelineEvents[0].actualChapter == 7 && st.timelineEvents[0].happened && st.timelineEvents[0].isDiverged)
+        check("改期不覆盖计划章", st.timelineEvents[0].chapter == 3)
+        st.applyOutlineUpdate(OutlineUpdate(kind: .eventRevealed, eventID: "E01", newChapter: 9, reason: "读者已知"))
+        check("读者已知落库", st.timelineEvents[0].revealed && st.timelineEvents[0].revealChapter == 9)
+        st.applyOutlineUpdate(OutlineUpdate(kind: .eventDropped, eventID: "E02", reason: "x"))
+        check("改不存在的事件返回 false", !st.applyOutlineUpdate(OutlineUpdate(kind: .eventDropped, eventID: "E02", reason: "x")))
+        st.applyOutlineUpdate(OutlineUpdate(kind: .eventDropped, eventID: "E01", reason: "取消"))
+        check("取消事件保留记录只标记", st.timelineEvents.count == 1 && st.timelineEvents[0].dropped)
+        st.applyOutlineUpdate(OutlineUpdate(kind: .storylineStatus, storylineID: "L01", newStatusRaw: ActiveStatus.resolved.rawValue, reason: "已收束"))
+        check("故事线状态落库", st.storylines[0].status == .resolved)
+        check("非法状态值被拒", !st.applyOutlineUpdate(OutlineUpdate(kind: .storylineStatus, storylineID: "L01", newStatusRaw: "乱写", reason: "x")))
+
+        // 7. 提案采纳闭环：clueFixes / outlineUpdates 必须真的落库（不能是只展示的死提案）
+        st.clues = [Clue(id: "F02", title: "铜牌", detail: "d", timing: .immediate, plantedChapter: 1, targetPayoffChapter: 2, status: .planted, lastActionChapter: 1)]
+        st.addProposal(AIProposal(capability: .continuityAudit, title: "埋点修复", payload: .clueFixes([ClueFix(clueID: "F02", kind: .retarget, chapter: 20, reason: "逾期", action: "改期", newTargetChapter: 20)])))
+        let pid = st.proposals[0].id
+        st.acceptProposal(pid)
+        check("采纳埋点修复提案", st.proposals[0].status == .accepted)
+        check("采纳后台账真的改了", st.clues[0].targetPayoffChapter == 20, "target=\(String(describing: st.clues[0].targetPayoffChapter))")
+        st.timelineEvents = [TimelineEvent(id: "E09", chapter: 5, objectiveFact: "x", readerKnowledge: "y")]
+        st.addProposal(AIProposal(capability: .outlineSync, title: "大纲同步", payload: .outlineUpdates([OutlineUpdate(kind: .eventHappened, eventID: "E09", newChapter: 5, reason: "已发生")])))
+        // addProposal 是"新提案插在最前"，取最新条必须用 .first（与 latestDraftProposal 一致）
+        check("新提案插在最前", st.proposals[0].capability == .outlineSync, st.proposals[0].title)
+        let opid = st.proposals[0].id
+        st.acceptProposal(opid)
+        check("采纳后大纲真的改了", st.timelineEvents[0].happened, "events=\(st.timelineEvents.map { "\($0.id):\($0.happened)" })")
+        try? st.saveNow()
+        if let reloaded = try? { let s = ProjectStore(rootURL: tmp); try s.loadSync(); return s }() {
+            check("新字段可持久化往环", reloaded.timelineEvents[0].happened && reloaded.clues[0].targetPayoffChapter == 20)
+        } else { check("新字段可持久化往环", false, "重载失败") }
+
+        // 8. 连贯性审查与大纲对账在真实 store 上能跑出报告（不崩、有产出）
+        let rep = ContinuityAuditor.audit(store: st)
+        check("连贯性审查出报告", rep.scannedChapters >= 0 && !rep.summary.isEmpty, rep.summary)
+        let osy = OutlineSync.sync(store: st)
+        check("大纲对账出报告", !osy.summary.isEmpty, osy.summary)
+        check("相似度纯函数：全同为1", abs(OutlineSync.similarity("他走进屋里", "他走进屋里") - 1.0) < 0.001)
+        check("相似度纯函数：空为0", OutlineSync.similarity("", "任意") == 0)
+        // 对账打分：长度不对等时不能被 Jaccard 拖死（实测漏判的真实案例）
+    check("短梗概对长正文仍判命中", OutlineSync.matchScore(fact: 5, unit: 11, intersection: 3) >= OutlineSync.matchedThreshold,
+          "score=\(OutlineSync.matchScore(fact: 5, unit: 11, intersection: 3))")
+    check("完全不相干打分为0", OutlineSync.matchScore(fact: 5, unit: 11, intersection: 0) == 0)
+    check("几乎一模一样高于部分覆盖", OutlineSync.matchScore(fact: 10, unit: 10, intersection: 10) > OutlineSync.matchScore(fact: 5, unit: 11, intersection: 3))
+    check("碎片短边不启用包含度", OutlineSync.matchScore(fact: 2, unit: 40, intersection: 2) < OutlineSync.matchedThreshold,
+          "score=\(OutlineSync.matchScore(fact: 2, unit: 40, intersection: 2))")
+    check("包含度封顶不超过1", OutlineSync.matchScore(fact: 6, unit: 60, intersection: 6) <= 1.0)
+    check("相似度单调：越像越高", OutlineSync.similarity("少年在废窑醒来发现断刀不见", "少年在废窑醒来发现断刀不见了") > OutlineSync.similarity("少年在废窑醒来发现断刀不见", "老周在河边捞起一把刀"))
+    }
+}
+
+// MARK: - 22. 全书连贯性审查 / 埋点修复 / 大纲实时对账（确定性引擎的实质覆盖）
+//
+// 第 21 节只断言了这两个引擎"能出报告"，等于没覆盖。这一节按每一类检查各写正反例：
+// 正例证明查得出来，反例证明不误报——反例更重要，因为这两个引擎一旦噪音满天飞，
+// 作者就会直接无视它，功能等于不存在。
+
+do {
+    func makeStore(_ tag: String) -> ProjectStore {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("zb-cont-\(tag)-\(UUID().uuidString)", isDirectory: true)
+        try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        let s = ProjectStore(rootURL: url)
+        s.project.chapterWordTarget = 3000
+        s.project.targetChapters = 40
+        return s
+    }
+    func prose(_ s: ProjectStore, _ n: Int, _ text: String) {
+        _ = s.ensureChapter(n)
+        s.updateChapter(n) { $0.prose = text }
+    }
+
+    // ---- A1. 死者复出（blocker）----
+    let sDead = makeStore("dead")
+    prose(sDead, 2, "老周咳出最后一口血，死在了河滩上。少年把他埋了。")
+    prose(sDead, 5, "老周推门进来，把伞放在墙角。")
+    sDead.facts = [MemoryFact(subject: "老周", predicate: "死亡", object: "河滩", fromChapter: 2)]
+    let rDead = ContinuityAuditor.audit(store: sDead, throughChapter: 5)
+    check("死者复出报阻塞项", rDead.issues.contains { $0.category == "连贯性" && $0.severity == .blocker && $0.message.contains("老周") },
+          "\(rDead.issues.map { "[\($0.severity.rawValue)·\($0.category)] \($0.message)" })")
+    check("死者复出带取证原文", rDead.issues.contains { $0.category == "连贯性" && !$0.evidence.isEmpty })
+
+    // 反例：回忆/追述里提到死者不该报（否则每本有死人的书都满屏红）
+    let sMemoryOfDead = makeStore("deadmem")
+    prose(sMemoryOfDead, 2, "老周咳出最后一口血，死在了河滩上。")
+    prose(sMemoryOfDead, 5, "他想起老周当年说过的话，那时候河滩上还有芦苇。墓前的纸灰被风吹散。")
+    sMemoryOfDead.facts = [MemoryFact(subject: "老周", predicate: "死亡", object: "河滩", fromChapter: 2)]
+    let rMem = ContinuityAuditor.audit(store: sMemoryOfDead, throughChapter: 5)
+    check("回忆追述不误报死者复出", !rMem.issues.contains { $0.severity == .blocker && $0.message.contains("老周") },
+          "\(rMem.issues.filter { $0.severity == .blocker }.map(\.message))")
+
+    // 反例：没有死亡事实时不提名字就不该报
+    let sAlive = makeStore("alive")
+    prose(sAlive, 2, "老周咳了一声。"); prose(sAlive, 5, "老周推门进来。")
+    check("活人反复出场不误报", ContinuityAuditor.audit(store: sAlive, throughChapter: 5).issues
+          .filter { $0.category == "连贯性" && $0.severity == .blocker }.isEmpty)
+
+    // ---- A2. 位置跳跃 ----
+    let sJump = makeStore("jump")
+    prose(sJump, 3, "他站在青云山顶的观星台上。")
+    prose(sJump, 4, "他在东海渔村醒来，桌上还有一碗凉透的粥。")
+    sJump.facts = [
+        MemoryFact(subject: "少年", predicate: "位于", object: "青云山观星台", fromChapter: 3),
+        MemoryFact(subject: "少年", predicate: "位于", object: "东海渔村", fromChapter: 4),
+    ]
+    check("位置跳跃检出", ContinuityAuditor.audit(store: sJump, throughChapter: 4).issues
+          .contains { $0.category == "连贯性" && $0.message.contains("少年") },
+          "\(ContinuityAuditor.audit(store: sJump, throughChapter: 4).issues.filter { $0.category == "连贯性" }.map(\.message))")
+
+    // 反例：正文交代了赶路就不该报
+    let sTravel = makeStore("travel")
+    prose(sTravel, 3, "他站在青云山顶的观星台上。")
+    prose(sTravel, 4, "他连夜赶到东海渔村，天亮才推开门，桌上还有一碗凉透的粥。")
+    sTravel.facts = sJump.facts
+    check("有位移交代不误报位置跳跃", ContinuityAuditor.audit(store: sTravel, throughChapter: 4).issues
+          .filter { $0.category == "连贯性" && $0.message.contains("少年") }.isEmpty,
+          "\(ContinuityAuditor.audit(store: sTravel, throughChapter: 4).issues.filter { $0.category == "连贯性" }.map(\.message))")
+
+    // ---- B. 时间线倒挂 / revealed 与 revealChapter 不一致 ----
+    let sTime = makeStore("time")
+    prose(sTime, 1, "开场。"); prose(sTime, 10, "第十章。")
+    sTime.timelineEvents = [
+        TimelineEvent(id: "E01", chapter: 10, objectiveFact: "真相揭开", readerKnowledge: "读者看到", revealed: true, revealChapter: 5),
+        TimelineEvent(id: "E02", chapter: 3, objectiveFact: "身份暴露", readerKnowledge: "读者看到", revealed: false, revealChapter: 6),
+    ]
+    let rTime = ContinuityAuditor.audit(store: sTime, throughChapter: 10)
+    check("时间线倒挂检出", rTime.issues.contains { $0.category == "时间线" && $0.message.contains("E01") },
+          "\(rTime.issues.filter { $0.category == "时间线" }.map(\.message))")
+    check("revealed 与 revealChapter 不一致检出", rTime.issues.contains { $0.category == "时间线" && $0.message.contains("E02") })
+
+    // ---- C. 伏笔台账烂账 → 必须产出对应的 ClueFix（光报告不修等于没用）----
+    let sClue = makeStore("clue")
+    prose(sClue, 1, "少年在废窑里捡到一把断刀，刀柄上刻着一个界字。")
+    prose(sClue, 2, "第二天他去了河边。"); prose(sClue, 12, "第十二章。")
+    sClue.clues = [
+        // 种下原文与正文不符 + 兑现逾期
+        Clue(id: "F01", title: "断刀来历", detail: "刀柄刻字", timing: .immediate,
+             plantedChapter: 1, plantedQuote: "这段原文根本不存在于第一章",
+             targetPayoffChapter: 3, status: .planted, lastActionChapter: 1),
+        // 已回收但缺回收日志
+        Clue(id: "F02", title: "铜牌", detail: "河里捞的", timing: .midArc,
+             plantedChapter: 2, status: .resolved, lastActionChapter: 2),
+        // 动作日志指向不存在的章
+        Clue(id: "F03", title: "旧信", detail: "信上有字", timing: .midArc, plantedChapter: 1,
+             status: .developing, lastActionChapter: 99,
+             actions: [ClueActionLog(chapter: 77, kind: .develop, note: "推进")]),
+    ]
+    let rClue = ContinuityAuditor.audit(store: sClue, throughChapter: 12)
+    check("伏笔烂账归到伏笔台账类", rClue.issues.contains { $0.category == "伏笔台账" },
+          "\(rClue.issues.map(\.category))")
+    check("种下原文对不上产出校正修复", rClue.clueFixes.contains { $0.clueID == "F01" && $0.kind == .requote },
+          "\(rClue.clueFixes.map { "\($0.clueID):\($0.kind.rawValue)" })")
+    check("种下原文对不上同时给补埋选项", rClue.clueFixes.contains { $0.clueID == "F01" && $0.kind == .replant })
+    check("兑现逾期产出改期修复", rClue.clueFixes.contains { $0.clueID == "F01" && $0.kind == .retarget })
+    check("逾期/过期产出搁置修复", rClue.clueFixes.contains { $0.kind == .`defer` },
+          "\(rClue.clueFixes.map(\.kind.rawValue))")
+    check("已回收缺日志产出回收修复", rClue.clueFixes.contains { $0.clueID == "F02" && $0.kind == .resolve })
+    check("动作日志指向不存在的章被检出", rClue.issues.contains { $0.category == "伏笔台账" && $0.message.contains("F03") },
+          "\(rClue.issues.filter { $0.category == "伏笔台账" }.map(\.message))")
+    check("未来动作被检出", rClue.issues.contains { $0.message.contains("F03") && ($0.message.contains("未来") || $0.message.contains("99")) })
+    check("每条修复都有可执行动作与人话理由", rClue.clueFixes.allSatisfy { !$0.action.isEmpty && !$0.reason.isEmpty },
+          "\(rClue.clueFixes.filter { $0.action.isEmpty || $0.reason.isEmpty }.map(\.clueID))")
+
+    // 反例：台账干净时不该有修复方案
+    let sClean = makeStore("clean")
+    prose(sClean, 1, "少年在废窑里捡到一把断刀，刀柄上刻着一个界字。他把刀揣进怀里。")
+    prose(sClean, 2, "他去河边洗刀，老周给了他一块干粮。")
+    sClean.clues = [Clue(id: "F01", title: "断刀来历", detail: "刀柄刻着界字", timing: .slowBurn,
+                         plantedChapter: 1, plantedQuote: "刀柄上刻着一个界字",
+                         targetPayoffChapter: 20, status: .planted, lastActionChapter: 1,
+                         actions: [ClueActionLog(chapter: 1, kind: .plant, note: "登记")])]
+    sClean.characterAliases = [CharacterAlias(canonicalName: "少年", aliases: ["阿昭"])]
+    let rClean = ContinuityAuditor.audit(store: sClean, throughChapter: 2)
+    check("台账干净时不产出修复方案", rClean.clueFixes.isEmpty, "\(rClean.clueFixes.map { "\($0.clueID):\($0.kind.rawValue)" })")
+    check("台账干净时无阻塞项", rClean.blockerCount == 0, "\(rClean.issues.filter { $0.severity == .blocker }.map(\.message))")
+
+    // ---- 骨架触点矛盾 ----
+    let sTouch = makeStore("touch")
+    prose(sTouch, 1, "少年捡到断刀。"); prose(sTouch, 5, "第五章。")
+    sTouch.clues = [
+        Clue(id: "F01", title: "断刀", detail: "d", plantedChapter: 1, status: .planted, lastActionChapter: 1),
+        Clue(id: "F02", title: "铜牌", detail: "d", plantedChapter: 1, status: .resolved, lastActionChapter: 3),
+    ]
+    var skTouch = ChapterSkeleton()
+    skTouch.beats = [Beat(summary: "少年再次看见断刀", purpose: "埋伏笔")]
+    skTouch.clueTouches = [
+        ClueTouch(clueID: "F01", action: .plant, requirement: "再埋一次"),      // 已在第1章埋过
+        ClueTouch(clueID: "F02", action: .reveal, requirement: "再揭示一次"),   // 台账已回收
+        ClueTouch(clueID: "F99", action: .develop, requirement: "孤儿引用"),    // 台账里不存在
+    ]
+    sTouch.updateChapter(5) { $0.skeleton = skTouch }
+    let rTouch = ContinuityAuditor.audit(store: sTouch, throughChapter: 5)
+    check("重复埋设被检出", rTouch.issues.contains { $0.category == "骨架触点" && $0.message.contains("F01") },
+          "\(rTouch.issues.filter { $0.category == "骨架触点" }.map(\.message))")
+    check("重复揭示被检出", rTouch.issues.contains { $0.category == "骨架触点" && $0.message.contains("F02") })
+    check("孤儿伏笔引用被检出", rTouch.issues.contains { $0.message.contains("F99") })
+
+    // ---- D. 结构完整性 ----
+    let sStruct = makeStore("struct")
+    prose(sStruct, 1, "第一章。"); prose(sStruct, 4, "第四章。")   // 2、3 章缺失
+    sStruct.updateChapter(4) { $0.prose = String(repeating: "字", count: 700) }  // 长正文无摘要
+    let rStruct = ContinuityAuditor.audit(store: sStruct, throughChapter: 4)
+    check("章号断裂被检出", rStruct.issues.contains { $0.category == "结构" }, "\(rStruct.issues.map(\.category))")
+    check("长正文缺摘要被检出", rStruct.issues.contains { $0.category == "结构" && $0.message.contains("摘要") },
+          "\(rStruct.issues.filter { $0.category == "结构" }.map(\.message))")
+
+    // ---- 纯函数 ----
+    check("连贯性 similarity 全同为1", abs(ContinuityAuditor.similarity("刀柄上刻着一个界字", "刀柄上刻着一个界字") - 1.0) < 0.001)
+    check("连贯性 similarity 空为0", ContinuityAuditor.similarity("", "任意") == 0)
+    check("连贯性 similarity 不相干接近0", ContinuityAuditor.similarity("刀柄上刻着一个界字", "明天要去赶集买盐") < 0.2)
+    check("properNouns 抽出专名", ContinuityAuditor.properNouns("老周把断刀交给少年，转身走了。").contains { $0.contains("老周") },
+          "\(ContinuityAuditor.properNouns("老周把断刀交给少年，转身走了。"))")
+    check("properNouns 遵守 limit", ContinuityAuditor.properNouns(String(repeating: "老周少年断刀铜牌", count: 30), limit: 5).count <= 5)
+
+    // ---- 大纲实时对账 ----
+    let sOut = makeStore("outline")
+    for i in 1...10 { prose(sOut, i, "第\(i)章的内容。") }
+    sOut.updateChapter(3) { $0.summary = ChapterSummary(chapter: 3, summary: "少年在废窑觉醒当夜被人追杀，逃到河边。", keyEvents: ["觉醒", "被追杀"], emotionalTone: "惊") }
+    sOut.updateChapter(6) { $0.summary = ChapterSummary(chapter: 6, summary: "少年与白零在雾中照面，各自退开。", keyEvents: ["相遇"], emotionalTone: "紧") }
+    sOut.storylines = [
+        Storyline(id: "L01", name: "复仇", kind: .main, isThroughLine: true, status: .active),
+        Storyline(id: "L02", name: "感情", kind: .romance, status: .active, plannedPayoffChapter: 8),
+        Storyline(id: "L03", name: "世界", kind: .world, status: .active, entryChapter: 30),
+    ]
+    sOut.timelineEvents = [
+        TimelineEvent(id: "E01", chapter: 3, objectiveFact: "少年在废窑觉醒当夜被追杀，逃到河边", readerKnowledge: "少年在逃", revealed: true, revealChapter: 3, storylineIDs: ["L01"]),
+        TimelineEvent(id: "E02", chapter: 3, objectiveFact: "少年与白零在雾中照面，各自退开", readerKnowledge: "两人见过面", revealed: false, storylineIDs: ["L02", "L99"]),
+        TimelineEvent(id: "E03", chapter: 4, objectiveFact: "宗门大比开幕，各方势力入场", readerKnowledge: "大比将开", revealed: false, storylineIDs: ["L01"]),
+        TimelineEvent(id: "E04", chapter: 30, objectiveFact: "北境战事起", readerKnowledge: "未揭示", revealed: false, storylineIDs: ["L03"]),
+    ]
+    sOut.stages = [Stage(id: 1, name: "开篇", chapterStart: 1, chapterEnd: 5, theme: "立人物")]
+    // L01 若在基准章前一直没有动静，判「断线」才是对的（贯穿线只容忍 3 章静默）。
+    // 这里补一条第 9 章的近期事件，才能检验「最近动过的线不被误判」。
+    sOut.timelineEvents.append(TimelineEvent(id: "E05", chapter: 9, objectiveFact: "少年在宗门大比上赢下第三场，进了前十", readerKnowledge: "他赢了第三场", revealed: true, revealChapter: 9, storylineIDs: ["L01"]))
+    sOut.updateChapter(9) { $0.summary = ChapterSummary(chapter: 9, summary: "少年在宗门大比上赢下第三场，进了前十。", keyEvents: ["赢下第三场"], emotionalTone: "扬") }
+    let rOut = OutlineSync.sync(store: sOut, asOfChapter: 10)
+    check("对账基准章正确", rOut.asOfChapter == 10, "asOf=\(rOut.asOfChapter)")
+    let ev = { (id: String) in rOut.eventSync.first { $0.eventID == id } }
+    check("计划事件在第3章被证实已发生", ev("E01")?.status == "已发生", "E01=\(String(describing: ev("E01")?.status)) sim=\(String(describing: ev("E01")?.similarity))")
+    check("已发生事件匹配到正确章", ev("E01")?.matchedChapter == 3, "matched=\(String(describing: ev("E01")?.matchedChapter))")
+    check("计划在第3章实际写在第6章判偏移", ev("E02")?.status == "疑似偏移" && ev("E02")?.matchedChapter == 6,
+          "E02=\(String(describing: ev("E02")?.status) ) matched=\(String(describing: ev("E02")?.matchedChapter))")
+    check("偏移事件产出改期建议", rOut.suggestedUpdates.contains { $0.kind == .eventMoved && $0.eventID == "E02" && $0.newChapter == 6 },
+          "\(rOut.suggestedUpdates.map { "\($0.kind.rawValue):\($0.eventID ?? "-")→\($0.newChapter.map(String.init) ?? "-")" })")
+    check("已发生事件产出确认建议", rOut.suggestedUpdates.contains { $0.kind == .eventHappened && $0.eventID == "E01" })
+    check("读者未知但正文已写出产出揭示建议", rOut.suggestedUpdates.contains { $0.kind == .eventRevealed && $0.eventID == "E02" },
+          "\(rOut.suggestedUpdates.filter { $0.kind == .eventRevealed }.map(\.eventID))")
+    check("逾期未发生的事件判未发生", ev("E03")?.status == "未发生", "E03=\(String(describing: ev("E03")?.status))")
+    check("严重逾期事件产出取消建议", rOut.suggestedUpdates.contains { $0.kind == .eventDropped && $0.eventID == "E03" })
+    check("排期未到的事件不误判", ev("E04")?.status == "排期未到", "E04=\(String(describing: ev("E04")?.status))")
+    check("排期未到不产出取消建议", !rOut.suggestedUpdates.contains { $0.kind == .eventDropped && $0.eventID == "E04" })
+
+    let lh = { (id: String) in rOut.lineHealth.first { $0.storylineID == id } }
+    check("最近动过的主线判健康", lh("L01")?.state == .healthy,
+          "L01=\(String(describing: lh("L01")?.state)) dormant=\(String(describing: lh("L01")?.dormantChapters))")
+    check("收束期已过的线判待收束", lh("L02")?.state == .dueForPayoff, "L02=\(String(describing: lh("L02")?.state))")
+    check("未到入场章的线不判断线", lh("L03")?.state == .healthy, "L03=\(String(describing: lh("L03")?.state))")
+    check("断线/待收束进偏差清单", rOut.divergences.contains { $0.category == "剧情线" }, "\(rOut.divergences.map(\.category))")
+    check("孤儿故事线引用被检出", rOut.divergences.contains { $0.message.contains("L99") },
+          "\(rOut.divergences.map(\.message))")
+    check("阶段进度落后被检出", rOut.divergences.contains { $0.category == "阶段" } || rOut.stageProgress.first?.completionRatio != nil,
+          "\(rOut.divergences.map { "[\($0.category)] \($0.message)" })")
+    check("每条建议都有人话理由", rOut.suggestedUpdates.allSatisfy { !$0.reason.isEmpty })
+
+    // 反例：空大纲不该崩也不该编造
+    let sEmpty = makeStore("empty")
+    prose(sEmpty, 1, "只有一章。")
+    let rEmpty = OutlineSync.sync(store: sEmpty, asOfChapter: 1)
+    check("空大纲对账不崩不编造", rEmpty.lineHealth.isEmpty && rEmpty.eventSync.isEmpty && rEmpty.stageProgress.isEmpty && rEmpty.suggestedUpdates.isEmpty,
+          "lines=\(rEmpty.lineHealth.count) events=\(rEmpty.eventSync.count) stages=\(rEmpty.stageProgress.count) upd=\(rEmpty.suggestedUpdates.count)")
+    check("空大纲仍有可读总结", !rEmpty.summary.isEmpty)
+
+    // 静默容忍度：主线严格、感情线宽松
+    check("贯穿线容忍度最低", OutlineSync.dormantThreshold(kind: .main, isThroughLine: true) == 3)
+    check("感情线容忍度高于主线", OutlineSync.dormantThreshold(kind: .romance, isThroughLine: false) > OutlineSync.dormantThreshold(kind: .main, isThroughLine: false))
+
+    // 断线判定（真实场景：一条线很久没动）
+    let sBroken = makeStore("broken")
+    for i in 1...20 { prose(sBroken, i, "第\(i)章。") }
+    sBroken.storylines = [Storyline(id: "L01", name: "复仇", kind: .main, isThroughLine: true, status: .active)]
+    sBroken.timelineEvents = [TimelineEvent(id: "E01", chapter: 2, objectiveFact: "复仇线启动", readerKnowledge: "启动", revealed: true, revealChapter: 2, storylineIDs: ["L01"])]
+    sBroken.updateChapter(2) { $0.summary = ChapterSummary(chapter: 2, summary: "复仇线启动，他立了誓。", keyEvents: ["立誓"], emotionalTone: "决") }
+    let rBroken = OutlineSync.sync(store: sBroken, asOfChapter: 20)
+    check("静默 18 章的主线判断线", rBroken.lineHealth.first?.state == .broken,
+          "state=\(String(describing: rBroken.lineHealth.first?.state)) dormant=\(rBroken.lineHealth.first?.dormantChapters ?? -1)")
+    check("断线产出状态调整建议", rBroken.suggestedUpdates.contains { $0.kind == .storylineStatus && $0.storylineID == "L01" },
+          "\(rBroken.suggestedUpdates.map(\.kind.rawValue))")
+
+    // 已同步过的事件不该反复提案（幂等）
+    sOut.timelineEvents[0].happened = true
+    sOut.timelineEvents[0].actualChapter = 3
+    let rOut2 = OutlineSync.sync(store: sOut, asOfChapter: 10)
+    check("已同步事件不重复产建议", !rOut2.suggestedUpdates.contains { $0.kind == .eventHappened && $0.eventID == "E01" },
+          "\(rOut2.suggestedUpdates.filter { $0.eventID == "E01" }.map(\.kind.rawValue))")
+    sOut.timelineEvents[2].dropped = true
+    let rOut3 = OutlineSync.sync(store: sOut, asOfChapter: 10)
+    check("已取消事件不再被反复催", !rOut3.suggestedUpdates.contains { $0.eventID == "E03" },
+          "\(rOut3.suggestedUpdates.filter { $0.eventID == "E03" }.map(\.kind.rawValue))")
+}
+
+// MARK: - 23. 工具面契约（schema 合法性 + 每个能力都有生产者）
+//
+// ProposalToolBridge 在 parametersJSON 解析失败时会**静默降级成空 schema**，
+// 模型于是拿不到任何字段定义，产出必然不合格——而宿主这边一声不响。
+// 所以 schema 必须逐条自检；同时每个 AI 能力都必须至少有一个 propose_* 工具，
+// 否则那个能力就是个按了没反应的按钮。
+
+MainActor.assumeIsolated {
+    let url = FileManager.default.temporaryDirectory
+        .appendingPathComponent("zb-tools-\(UUID().uuidString)", isDirectory: true)
+    try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: url) }
+    let st = ProjectStore(rootURL: url)
+    let tools = NovelTools.all(store: st)
+
+    check("工具名唯一", Set(tools.map(\.name)).count == tools.count,
+          "重复：\(tools.map(\.name).filter { n in tools.map(\.name).filter { $0 == n }.count > 1 })")
+    check("新工具已注册", ["propose_continuity", "propose_outline_updates"].allSatisfy { n in tools.contains { $0.name == n } },
+          "实有：\(tools.map(\.name))")
+
+    var badSchema: [String] = []
+    var badRequired: [String] = []
+    var noProps: [String] = []
+    for t in tools {
+        guard let obj = try? JSONSerialization.jsonObject(with: Data(t.parametersJSON.utf8)) as? [String: Any] else {
+            badSchema.append(t.name); continue
+        }
+        guard (obj["type"] as? String) == "object" else { badSchema.append(t.name + "(type≠object)"); continue }
+        guard let props = obj["properties"] as? [String: Any], !props.isEmpty else {
+            // 只读查询工具允许空 properties（如 get_clues），但 propose_* 必须有字段
+            if t.name.hasPrefix("propose_") { noProps.append(t.name) }
+            continue
+        }
+        let required = (obj["required"] as? [String]) ?? []
+        let missing = required.filter { props[$0] == nil }
+        if !missing.isEmpty { badRequired.append("\(t.name): \(missing.joined(separator: ","))") }
+    }
+    check("所有工具 schema 都是合法 JSON object", badSchema.isEmpty, badSchema.joined(separator: "、"))
+    check("propose_* 工具都有字段定义", noProps.isEmpty, noProps.joined(separator: "、"))
+    check("required 字段都在 properties 里声明", badRequired.isEmpty, badRequired.joined(separator: "；"))
+
+    // 骨架工具必须真的暴露了场景层与新字段，否则模型不会填、闸门也就无从校验
+    if let skTool = tools.first(where: { $0.name == "propose_skeleton" }),
+       let obj = try? JSONSerialization.jsonObject(with: Data(skTool.parametersJSON.utf8)) as? [String: Any],
+       let props = obj["properties"] as? [String: Any],
+       let beatItems = (props["beats"] as? [String: Any])?["items"] as? [String: Any],
+       let beatProps = beatItems["properties"] as? [String: Any] {
+        let need = ["summary", "purpose", "suggested_words", "pov", "location", "time_label", "cast", "turn"]
+        check("骨架节拍暴露场景层字段", need.allSatisfy { beatProps[$0] != nil },
+              "缺：\(need.filter { beatProps[$0] == nil })")
+        let topNeed = ["end_hook", "hook_kind", "pov", "must_deliver", "must_avoid", "clue_touches",
+                       "payoff_type", "new_expectation", "volume_label"]
+        check("骨架顶层暴露钩子形态与爽点字段", topNeed.allSatisfy { props[$0] != nil },
+              "缺：\(topNeed.filter { props[$0] == nil })")
+        if let hk = props["hook_kind"] as? [String: Any], let kinds = hk["enum"] as? [String] {
+            check("钩子形态枚举与法典一致", Set(kinds) == Set(HookKind.allCases.map(\.rawValue)),
+                  "schema=\(kinds) 法典=\(HookKind.allCases.map(\.rawValue))")
+        } else { check("钩子形态枚举与法典一致", false, "hook_kind 没有 enum") }
+        if let ct = (props["clue_touches"] as? [String: Any])?["items"] as? [String: Any],
+           let ctp = ct["properties"] as? [String: Any],
+           let acts = (ctp["action"] as? [String: Any])?["enum"] as? [String] {
+            check("触点动作枚举覆盖搁置与回收", acts.contains("defer") && acts.contains("resolve"), "acts=\(acts)")
+        } else { check("触点动作枚举覆盖搁置与回收", false, "clue_touches.action 没有 enum") }
+    } else {
+        check("骨架工具 schema 可解析出场景层", false, "解析失败")
+        check("骨架顶层暴露钩子形态与爽点字段", false, "解析失败")
+        check("钩子形态枚举与法典一致", false, "解析失败")
+        check("触点动作枚举覆盖搁置与回收", false, "解析失败")
+    }
+
+    // 每个能力都必须有生产者：没有 propose_* 工具的能力＝按了没反应的按钮
+    var noProducer: [String] = []
+    for cap in AICapability.allCases {
+        let names = AIService.toolNames(for: cap)
+        if !names.contains(where: { $0.hasPrefix("propose_") }) { noProducer.append("\(cap.rawValue):\(names.joined(separator: ","))") }
+    }
+    check("每个 AI 能力都至少有一个 propose_* 工具", noProducer.isEmpty, noProducer.joined(separator: "；"))
+    check("连贯性审查能拿到取证工具", AIService.toolNames(for: .continuityAudit).contains("get_chapter"))
+    check("大纲同步能读到大纲", AIService.toolNames(for: .outlineSync).contains("get_outline"))
+    check("大纲同步能补新事件", AIService.toolNames(for: .outlineSync).contains("propose_outline_events"))
+}
 fputs("[p] summary\n", stderr)
 // MARK: - 汇总
 

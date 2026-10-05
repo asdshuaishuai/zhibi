@@ -715,6 +715,30 @@ struct BeatCardView: View {
                         .font(.caption2).foregroundStyle(.orange)
                 }
             }
+            // 场景层：AI 会填，作者也必须能手改——连贯性审查（视角漂移 / 分身两地）全靠这几个字段取证
+            DisclosureGroup {
+                VStack(alignment: .leading, spacing: 4) {
+                    TextField("视角（这一拍贴着谁写）", text: binding.pov)
+                    TextField("地点", text: binding.location)
+                    TextField("时间标记（当夜/次日清晨…）", text: binding.timeLabel)
+                    TextField("在场人物（逗号分隔）", text: Binding(
+                        get: { current.cast.joined(separator: "，") },
+                        set: { newValue in
+                            update { $0.cast = newValue.split(whereSeparator: { "，,、 ".contains($0) }).map(String.init) }
+                        }))
+                    TextField("转折（从什么变成什么）", text: binding.turn, axis: .vertical)
+                }
+                .textFieldStyle(.roundedBorder)
+                .font(.caption2)
+            } label: {
+                HStack(spacing: 5) {
+                    Text("场景层").font(.caption2.bold())
+                    Text("\(Int(current.sceneCompleteness * 100))%")
+                        .font(.caption2.monospacedDigit())
+                        .foregroundStyle(current.sceneCompleteness >= 0.5 ? Color.green : Color.orange)
+                }
+            }
+            .font(.caption2)
             // 骨架填写：人在节拍上写草稿（渲染视图，不露 markdown 源码）
             RichProseEditor(
                 markdown: Binding(

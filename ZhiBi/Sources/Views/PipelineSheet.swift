@@ -13,6 +13,10 @@ struct PipelineSheet: View {
     @State private var mainline = ""
     @State private var feedback = ""
     @State private var acceptedNote: String?
+    @State private var volFrom = 1
+    @State private var volTo = 20
+    @State private var volDirective = ""
+    @State private var wordsPerChunk = 1200
 
     private var latestDraft: AIProposal? { store.latestDraftProposal(for: chapterNumber) }
     private var draft: ChapterDraft? { latestDraft.flatMap { store.draftPayload(of: $0) } }
@@ -26,6 +30,8 @@ struct PipelineSheet: View {
             Divider()
             ScrollView {
                 VStack(alignment: .leading, spacing: 12) {
+                    autoPipelineCard
+
                     stage(1, "主线（你给）") {
                         TextEditor(text: $mainline)
                             .font(.callout)
@@ -48,6 +54,54 @@ struct PipelineSheet: View {
                                 Text("骨架提案在收件箱，建议先批准再写作").font(.caption2).foregroundStyle(.tertiary)
                             }
                         }
+                        // 宿主闸门：批准前先用确定性代码给骨架打分，问题直接摆出来
+                        if let sk = store.chapter(chapterNumber)?.skeleton, !sk.beats.isEmpty {
+                            let gate = SkeletonGate.evaluate(sk, store: store, chapter: chapterNumber)
+                            VStack(alignment: .leading, spacing: 4) {
+                                HStack(spacing: 6) {
+                                    Text("骨架闸门 \(gate.score)/100").font(.caption.bold())
+                                    ZBChip(text: gate.blockers.isEmpty ? "无阻塞项" : "\(gate.blockers.count) 项阻塞",
+                                           color: gate.blockers.isEmpty ? .green : .red, filled: !gate.blockers.isEmpty)
+                                    if !gate.hookKind.isEmpty {
+                                        ZBChip(text: "钩子·\(gate.hookKind)", color: gate.hookConcrete ? .green : .orange)
+                                    }
+                                    ZBChip(text: "埋\(gate.plantCount)/推\(gate.developCount)/收\(gate.revealCount)", color: .blue)
+                                    Spacer()
+                                }
+                                ForEach(gate.issues.prefix(5)) { i in
+                                    Text("[\(i.severity.rawValue)] \(i.message) → \(i.suggestion)")
+                                        .font(.caption2).foregroundStyle(.secondary)
+                                }
+                            }
+                            .padding(8)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .background(Color(nsColor: .underPageBackgroundColor))
+                            .cornerRadius(6)
+                        }
+                        // 卷骨架：逐章搭骨架只见树木不见森林，卷级弧光要在这一层设计
+                        DisclosureGroup("规划整卷弧光（多章路标，不逐章写节拍）") {
+                            VStack(alignment: .leading, spacing: 8) {
+                                HStack(spacing: 10) {
+                                    Stepper("从第 \(volFrom) 章", value: $volFrom, in: 1...9999)
+                                    Stepper("到第 \(volTo) 章", value: $volTo, in: 1...9999)
+                                }
+                                .controlSize(.small)
+                                TextEditor(text: $volDirective)
+                                    .font(.callout).frame(minHeight: 44)
+                                    .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(Color.secondary.opacity(0.25)))
+                                Button("出卷级设计提案") {
+                                    Task { await vm.ai.runVolumeSkeleton(store: store, config: vm.config,
+                                                                         from: volFrom, to: volTo,
+                                                                         directive: volDirective.isEmpty ? mainline : volDirective) }
+                                }
+                                .zbGlassButton()
+                                .disabled(vm.ai.running || volTo < volFrom)
+                                Text("按起承转合设计这一段的赌注递增、章级路标、伏笔收支与期待感账；作者认可后再逐章搭骨架。一次最多 40 章。")
+                                    .font(.caption2).foregroundStyle(.tertiary)
+                            }
+                            .padding(.top, 4)
+                        }
+                        .font(.caption)
                     }
 
                     stage(3, "AI 一键写作") {
@@ -60,6 +114,20 @@ struct PipelineSheet: View {
                             }
                             .zbGlassButton(prominent: true)
                             .disabled(vm.ai.running)
+                            Button {
+                                Task { await vm.ai.runDraftByScenes(store: store, config: vm.config,
+                                                                    chapter: chapterNumber, mainline: mainline,
+                                                                    wordsPerChunk: wordsPerChunk) }
+                            } label: {
+                                Label("分段写 v\(store.nextDraftVersion(for: chapterNumber))", systemImage: "square.stack.3d.up")
+                            }
+                            .zbGlassButton()
+                            .disabled(vm.ai.running || store.chapter(chapterNumber)?.skeleton?.humanApproved != true)
+                            .help("按骨架节拍分块续写再拼装。3000 字以上一次性生成，后半段必然退化（复读、赶结尾、把后几拍压成一两句交代）；分块更稳。需要先有批准的骨架。")
+                        }
+                        HStack(spacing: 8) {
+                            Stepper("每段约 \(wordsPerChunk) 字", value: $wordsPerChunk, in: 600...2400, step: 200)
+                                .controlSize(.mini)
                             Text("按主线 + 骨架 + 记忆召回，产出草稿提案（不直接改正文）")
                                 .font(.caption2).foregroundStyle(.tertiary)
                         }
@@ -152,6 +220,52 @@ struct PipelineSheet: View {
             }
         }
         .frame(width: 760, height: 720)
+        .onAppear {
+            // 默认把当前章所在的那一卷（每 20 章一卷，与分卷导出口径一致）填进去
+            let volStart = max(1, ((chapterNumber - 1) / 20) * 20 + 1)
+            volFrom = volStart
+            volTo = volStart + 19
+        }
+    }
+
+    /// 一键成章：草稿 → 一致性审查 → 去AI味 自动串起来，停在「采纳」之前。
+    /// 骨架不在自动串的范围里——它是写前契约，属于正典决定，必须作者亲自批准。
+    private var autoPipelineCard: some View {
+        let approved = store.chapter(chapterNumber)?.skeleton?.humanApproved == true
+        return VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 10) {
+                Image(systemName: "bolt.fill").foregroundStyle(Color.accentColor)
+                Text("一键成章").font(.headline)
+                Spacer()
+                Button {
+                    Task { await vm.ai.runAutoPipeline(store: store, config: vm.config,
+                                                       chapter: chapterNumber, mainline: mainline) }
+                } label: {
+                    Label(vm.ai.running ? (vm.ai.pipelineStage.isEmpty ? "跑着…" : vm.ai.pipelineStage) : "一键跑到底",
+                          systemImage: "play.fill")
+                }
+                .zbGlassButton(prominent: true)
+                .disabled(vm.ai.running)
+            }
+            Text(approved
+                 ? "骨架已批准 → 会依次跑：写草稿 · 一致性审查 · 去AI味，产出全进收件箱，**停在采纳之前**。"
+                 : "还没有批准的骨架 → 这一步只会先出骨架提案并停下。骨架是写前契约，得你亲自批准（一键流程不代批）。")
+                .font(.caption).foregroundStyle(approved ? Color.secondary : Color.orange)
+            if !vm.ai.pipelineDone.isEmpty {
+                HStack(spacing: 6) {
+                    ForEach(vm.ai.pipelineDone, id: \.self) { s in
+                        ZBChip(text: "✓ \(s)", color: s.contains("失败") ? .red : .green)
+                    }
+                }
+            }
+            if !vm.ai.pipelineNote.isEmpty {
+                Text(vm.ai.pipelineNote).font(.caption).foregroundStyle(.secondary)
+            }
+            if let err = vm.ai.lastError {
+                Text(err).font(.caption).foregroundStyle(.red)
+            }
+        }
+        .zbCard()
     }
 
     private func acceptDraft() {

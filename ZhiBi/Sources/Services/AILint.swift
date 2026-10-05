@@ -21,6 +21,18 @@ struct LintSummary: Codable {
     var wordCount: Int = 0
     /// 全章句长标准差（sepia/中文校准：人类 ≈15.2 字 vs AI ≈12.8 字，单语料方向参考）
     var sentenceLengthSD: Double? = nil
+    /// 对白字数占比（网文健康区约 25-45%；过低＝说明文腔，过高＝对白灌水）
+    var dialogueRatio: Double? = nil
+    /// 张力密度（动作/冲突词千字频次，CraftCodex.tensionDensity）——跨章横向比可看出注水
+    var tensionDensity: Double? = nil
+    /// 章末钩子是否具体（挂在物件/动作/人身上，而非抽象概念）
+    var hookConcrete: Bool? = nil
+    /// 抽象名词千字密度
+    var abstractPerKilo: Double? = nil
+    /// 情绪曲线是否平坦（四分法张力落差过小）
+    var emotionCurveFlat: Bool? = nil
+    /// 是否过度修正（去AI味去成了新的指纹：通篇破碎短句）
+    var overCorrected: Bool? = nil
 
     var topIssues: [LintHit] { hits.filter { $0.count > 0 }.sorted { $0.count > $1.count } }
 }
@@ -80,6 +92,39 @@ enum AILint {
 
     /// 段首套话（中文编辑反馈）
     static let paragraphOpeners: [String] = ["其实", "事实上", "换句话说", "可以说", "显然"]
+
+    /// 万能过渡句（AI 与新手共用的时间/场景填充，密度高即"转场靠套话"）
+    static let universalTransitions: [String] = [
+        "就在这时", "就在此时", "正当此时", "不知过了多久", "时间一分一秒", "时间仿佛静止",
+        "片刻之后", "片刻后", "转眼之间", "转眼间", "翌日清晨", "第二天一早", "与此同时",
+        "另一边", "话说", "且说", "却说", "不多时", "半晌", "过了许久",
+    ]
+
+    /// 认知动词堆叠（"他知道/他明白/他意识到"——把戏写成心理播报）
+    static let cognitionVerbs: [String] = [
+        "他知道", "她知道", "他知道", "他明白", "她明白", "他意识到", "她意识到",
+        "他想起", "她想起", "他觉得", "她觉得", "他清楚", "她清楚", "他懂得",
+        "心中清楚", "心里明白", "暗自思量", "心中暗想", "脑子里闪过",
+    ]
+
+    /// 抽象名词（抽象密度高＝概念先行，缺少可拍摄的东西）
+    static let abstractNouns: [String] = [
+        "命运", "真相", "意义", "价值", "情感", "心灵", "灵魂", "本质", "存在", "信念",
+        "希望", "绝望", "孤独", "自由", "责任", "宿命", "记忆", "尊严", "勇气", "恐惧",
+        "正义", "邪恶", "光明", "黑暗", "永恒", "轮回", "因果", "执念", "温暖", "冰冷",
+    ]
+
+    /// 代词段首（"他/她/我/你"开头段落占比过高＝叙述贴着一个人打转，缺少场景调度）
+    static let pronounOpeners: [String] = ["他", "她", "我", "你", "它", "他们", "她们"]
+
+    /// 时间跳跃提示（有跳跃但没有分节符＝转场缺失，读者会糊）
+    static let timeJumpMarkers: [String] = [
+        "三天后", "三日后", "两天后", "第二天", "翌日", "数日后", "半月后", "一个月后",
+        "一年后", "多年以后", "许多年后", "当天夜里", "入夜", "天亮时",
+    ]
+
+    /// 分节符（Markdown 或空行以外的显式转场标记）
+    static let sceneSeparators: [String] = ["***", "---", "◆", "◇", "※", "……"]
 
     static func scan(_ text: String) -> LintSummary {
         var hits: [LintHit] = []
@@ -227,19 +272,201 @@ enum AILint {
         }.count
         hit("段首套话", openerCount > 0 ? "\(openerCount) 个段落以『其实/事实上』类开头——删掉直接说" : "", "", openerCount)
 
-        // 分级（Humanizer 五维表 + sepia 结构信号，取最高档；注意 sepia 校准：不要把每条规则用满）
+        // 15. 段首同构（连续段落以同一代词/同一个词开头 —— 叙述贴着一个人打转，是模型的强指纹）
+        var pronounOpenerCount = 0
+        var headCounter: [String: Int] = [:]
+        for p in paragraphs {
+            let head = String(p.prefix(1))
+            if pronounOpeners.contains(head) { pronounOpenerCount += 1 }
+            headCounter[String(p.prefix(2)), default: 0] += 1
+        }
+        let pronounOpenerRatio = paragraphs.isEmpty ? 0 : Double(pronounOpenerCount) / Double(paragraphs.count)
+        if paragraphs.count >= 8, pronounOpenerRatio > 0.55 {
+            hit("段首同构", "\(Int(pronounOpenerRatio * 100))% 的段落以人称代词开头（>55% 判同构）——换主语、换镜头、用动作或物件起段", "", pronounOpenerCount)
+        }
+        if let (head, cnt) = headCounter.max(by: { $0.value < $1.value }), paragraphs.count >= 10,
+           cnt >= 6, Double(cnt) / Double(paragraphs.count) > 0.4 {
+            hit("段首复读", "\(cnt) 个段落都以「\(head)」开头（占 \(Int(Double(cnt) / Double(paragraphs.count) * 100))%）——起段方式雷同", head, cnt)
+        }
+
+        // 16. 对白占比（网文健康区约 25-45%；过低＝说明文腔，过高＝对白灌水）
+        var dialogueChars = 0
+        for p in paragraphs {
+            dialogueChars += dialogueCharsIn(p)
+        }
+        let dialogueRatio = Double(dialogueChars) / Double(max(1, charCount))
+        if charCount >= 600 {
+            if dialogueRatio < 0.12 {
+                // count 不能传 dialogueChars：零对白时它恰好是 0，会被 hit() 的 count>0 门槛吞掉
+                hit("对白过少", "对白占比 \(String(format: "%.0f", dialogueRatio * 100))%（<12%）——通篇叙述容易读成说明文，把冲突交给对白去吵", "", max(1, Int((0.12 - dialogueRatio) * 1000)))
+            } else if dialogueRatio > 0.68 {
+                hit("对白灌水", "对白占比 \(String(format: "%.0f", dialogueRatio * 100))%（>68%）——缺少动作与环境支点，读者会失去空间感", "", dialogueChars)
+            }
+        }
+
+        // 17. 信息倾倒（连续多段无对白的纯叙述过长）
+        var longestSilentRun = 0
+        var currentRun = 0
+        for p in paragraphs {
+            if dialogueCharsIn(p) > 0 {
+                longestSilentRun = max(longestSilentRun, currentRun)
+                currentRun = 0
+            } else {
+                currentRun += WordStats.chineseCount(p)
+            }
+        }
+        longestSilentRun = max(longestSilentRun, currentRun)
+        if longestSilentRun > 900 {
+            hit("信息倾倒", "最长连续无对白叙述 \(longestSilentRun) 字（>900）——插一句对白、一个动作或一次转场把它切开", "", longestSilentRun / 100)
+        }
+
+        // 18. 万能过渡句
+        let transitionFiller = universalTransitions.reduce(0) { $0 + text.occurrences(of: $1) }
+        let transitionFillerPerKilo = Double(transitionFiller) / kilo
+        if transitionFillerPerKilo > 2.5 {
+            hit("万能过渡", "『就在这时/不知过了多久』类过渡 \(transitionFiller) 处（\(String(format: "%.1f", transitionFillerPerKilo))/千字）——转场要给具体的时间地点锚点", "", transitionFiller)
+        }
+
+        // 19. 认知动词堆叠
+        let cognitionCount = cognitionVerbs.reduce(0) { $0 + text.occurrences(of: $1) }
+        let cognitionPerKilo = Double(cognitionCount) / kilo
+        if cognitionPerKilo > 3 {
+            hit("心理播报", "『他知道/他明白/他意识到』\(cognitionCount) 处（\(String(format: "%.1f", cognitionPerKilo))/千字）——把认知换成让读者自己看出来的行为", "", cognitionCount)
+        }
+
+        // 20. 抽象名词密度
+        let abstractCount = abstractNouns.reduce(0) { $0 + text.occurrences(of: $1) }
+        let abstractPerKilo = Double(abstractCount) / kilo
+        if abstractPerKilo > 4 {
+            hit("抽象先行", "抽象名词 \(abstractCount) 处（\(String(format: "%.1f", abstractPerKilo))/千字）——概念要落到具体物件与动作上（白描）", "", abstractCount)
+        }
+
+        // 21. 章末钩子强度（网文命门：钩子必须挂在具体的物件/动作/人身上）
+        let tail400 = String(text.suffix(400))
+        let hookEval = CraftCodex.hookConcreteness(tail400)
+        if charCount >= 800, !tail400.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            if !hookEval.concrete {
+                let why = hookEval.vague.isEmpty ? "找不到具体锚点" : "命中空泛词「\(hookEval.vague.prefix(2).joined(separator: "、"))」"
+                hit("章末钩子空泛", "收尾\(why)——钩子要挂在一个可拍摄的物件、动作或人身上（CraftCodex 钩子类型学：悬念/危机/反转/信息差/承诺/情绪/登场）",
+                    String(tail400.suffix(40)), 1)
+            }
+        }
+
+        // 22. 情绪曲线平坦（四分法张力落差过小说明全章一个速度）
+        let tension = CraftCodex.tensionDensity(text)
+        var curveFlat = false
+        if charCount >= 1600 {
+            let quarters = quarterTensions(text)
+            if quarters.count == 4 {
+                let spread = (quarters.max() ?? 0) - (quarters.min() ?? 0)
+                let peak = quarters.max() ?? 0
+                // 落差既看绝对值也看相对峰值：全程低张力或全程同一张力都算平
+                if spread < 1.5 || (peak > 0 && spread / peak < 0.35) {
+                    curveFlat = true
+                    hit("情绪曲线平坦", "四段张力 \(quarters.map { String(format: "%.1f", $0) }.joined(separator: " → "))——全章一个速度等于没有速度，至少安排一次节奏换挡",
+                        "", Int(spread * 10))
+                }
+            }
+        }
+
+        // 23. 过度修正（去AI味的失败模式：把句子全打碎，形成新的"人味指纹"）
+        let allLens = sentences.map { WordStats.chineseCount($0) }.filter { $0 > 0 }
+        var overCorrected = false
+        if allLens.count >= 10 {
+            let meanLen = Double(allLens.reduce(0, +)) / Double(allLens.count)
+            var v: Double = 0
+            for l in allLens { let d = Double(l) - meanLen; v += d * d }
+            let sdAll = (v / Double(allLens.count)).squareRoot()
+            let shortRatio = Double(allLens.filter { $0 <= 6 }.count) / Double(allLens.count)
+            if meanLen < 9 && sdAll < 5 && shortRatio > 0.5 {
+                overCorrected = true
+                hit("过度修正", "平均句长 \(String(format: "%.1f", meanLen)) 字、\(Int(shortRatio * 100))% 是 6 字以内短句——通篇破碎短句本身就是一种指纹，需要长句回来承重",
+                    "", Int(meanLen))
+            }
+        }
+
+        // 24. 转场缺失（有时间跳跃但没有分节符）
+        let jumpCount = timeJumpMarkers.reduce(0) { $0 + text.occurrences(of: $1) }
+        let hasSeparator = sceneSeparators.contains { text.contains($0) }
+        if jumpCount >= 2, !hasSeparator {
+            hit("转场缺失", "\(jumpCount) 处时间跳跃但没有分节符——读者会糊掉，用 *** 或空行明确切场", "", jumpCount)
+        }
+
+        // 25. 高频重复短语（同一 4 字短语反复出现＝口头禅/AI 签名句）
+        if let (phrase, times) = topRepeatedQuadgram(text, minTimes: 4) {
+            hit("短语复读", "「\(phrase)」一章内出现 \(times) 次——同一个修辞反复用会变成签名句", phrase, times)
+        }
+
+        // 分级（Humanizer 五维表 + sepia 结构信号 + 网文结构信号，取最高档；注意 sepia 校准：不要把每条规则用满）
         let bannedPerKilo = Double(bannedTotal) / kilo
         var grade = "轻度"
-        if bannedPerKilo > 15 || psyRatio > 0.025 || tagRatio > 0.5 { grade = "重度" }
+        if bannedPerKilo > 15 || psyRatio > 0.025 || tagRatio > 0.5 || cognitionPerKilo > 6 { grade = "重度" }
         else if bannedPerKilo > 5 || psyRatio > 0.01 || transPerKilo > 3 || cv < 0.15
-                    || flatRuns >= 2 || paddingTotal >= 3 { grade = "中度" }
+                    || flatRuns >= 2 || paddingTotal >= 3
+                    || cognitionPerKilo > 3 || abstractPerKilo > 4
+                    || (charCount >= 600 && dialogueRatio < 0.12) || curveFlat
+                    || longestSilentRun > 900 { grade = "中度" }
 
         return LintSummary(hits: hits, grade: grade,
                            bannedPerKilo: bannedPerKilo,
                            psychologyRatio: psyRatio,
                            paragraphUniformity: cv,
                            wordCount: charCount,
-                           sentenceLengthSD: sentenceSD)
+                           sentenceLengthSD: sentenceSD,
+                           dialogueRatio: dialogueRatio,
+                           tensionDensity: tension,
+                           hookConcrete: charCount >= 800 ? hookEval.concrete : nil,
+                           abstractPerKilo: abstractPerKilo,
+                           emotionCurveFlat: curveFlat,
+                           overCorrected: overCorrected)
+    }
+
+    // MARK: - 度量辅助（纯函数，可单测）
+
+    /// 统计一行里对白引号内的字数（支持中文弯引号与直角引号）
+    static func dialogueCharsIn(_ line: String) -> Int {
+        var total = 0
+        var stack: [Character] = []
+        let pairs: [Character: Character] = ["“": "”", "「": "」", "『": "』"]
+        let closers: Set<Character> = ["”", "」", "』"]
+        for c in line {
+            if let closer = stack.last {
+                if c == closer { stack.removeLast() }   // 右引号本身不算对白内容
+                else { total += 1 }
+            } else if pairs[c] != nil {
+                stack.append(pairs[c]!)
+            } else if closers.contains(c) {
+                continue    // 孤立的右引号不计
+            }
+        }
+        return total
+    }
+
+    /// 四分法张力：把全文按字符位置切四段，各算 CraftCodex.tensionDensity
+    static func quarterTensions(_ text: String) -> [Double] {
+        let chars = Array(text)
+        guard chars.count >= 400 else { return [] }
+        let size = chars.count / 4
+        return (0..<4).map { i in
+            let start = i * size
+            let end = (i == 3) ? chars.count : start + size
+            return CraftCodex.tensionDensity(String(chars[start..<end]))
+        }
+    }
+
+    /// 出现次数最多的 4 字短语（跳过含标点/空白的窗口，避免把结构性分隔算成修辞）
+    static func topRepeatedQuadgram(_ text: String, minTimes: Int) -> (phrase: String, times: Int)? {
+        let chars = Array(text)
+        guard chars.count >= 40 else { return nil }
+        var counts: [String: Int] = [:]
+        let skip: Set<Character> = [" ", "\n", "\t", "，", "。", "！", "？", "、", "；", "：", "“", "”", "「", "」", "（", "）", "…"]
+        for i in 0...(chars.count - 4) {
+            let window = chars[i..<(i + 4)]
+            if window.contains(where: { skip.contains($0) }) { continue }
+            counts[String(window), default: 0] += 1
+        }
+        guard let best = counts.max(by: { $0.value < $1.value }), best.value >= minTimes else { return nil }
+        return (best.key, best.value)
     }
 
     private static func firstTeaser(in tail: String) -> String {

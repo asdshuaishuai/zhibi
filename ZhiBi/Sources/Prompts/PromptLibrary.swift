@@ -37,11 +37,22 @@ enum PromptLibrary {
             return "从作者刚写完的正文提取记忆包。用 propose_memory 提案。"
         case .validation:
             return "对指定章节做一致性审校。用 propose_validation 提案。"
+        case .continuityAudit:
+            return "对全书做连贯性审校与伏笔烂账排查。用 propose_continuity 提案。宿主已用确定性代码扫过一遍（死者复出/位置跳跃/时间线倒挂/伏笔台账烂账），你的职责是补它查不出来的部分：动机断裂、能力与资源前后不一致、人物性格漂移、称谓与身份混乱、因果链缺口。"
+        case .outlineSync:
+            return "把大纲与真实剧情对账并给出更新建议。用 propose_outline_updates 提案。宿主已用确定性代码算出「计划 vs 实际」的偏差与剧情线健康度，你的职责是判断这些偏差是该改大纲还是该改后文，并补出大纲里已经明显过时或缺失的事件。"
         case .deslop:
             return "对指定章节做去AI味诊断并给逐处修改建议。用 propose_deslop 提案。"
         case .recallMemo:
             return "基于上下文包给作者写本章备忘。用 propose_memo 提案。"
         }
+    }
+
+    /// 创作法典片段（流派档案 + 网文创作法 + 传统文学创作法），按能力裁剪后注入任务书。
+    /// 这是"吸收经典网文与传统文学创作风格/哲学/理念"的落点：不是塞一段鸡汤，
+    /// 而是让每个能力都拿到与它相关的那部分法典。
+    static func craft(for capability: AICapability, genre: String, written: Int = 0, target: Int = 100) -> String {
+        CraftCodex.codex(for: capability, genreText: genre, progress: (written, target))
     }
 
     // MARK: - 大纲时间线
@@ -95,7 +106,9 @@ enum PromptLibrary {
 
     // MARK: - 章节骨架（InkOS 规划师 memo 精髓）
 
-    static func chapterSkeletonTask(chapter n: Int, chapterTitle: String, pack: ContextPack, authorDirective: String) -> String {
+    static func chapterSkeletonTask(chapter n: Int, chapterTitle: String, pack: ContextPack,
+                                    authorDirective: String, craft: String = "",
+                                    gateReport: String = "", prevHookKinds: String = "") -> String {
         """
         请为第\(n)章「\(chapterTitle)」搭骨架。你不写正文——你只规划这章要完成什么、兑现什么、不要做什么。
 
@@ -105,16 +118,124 @@ enum PromptLibrary {
         ## 作者对本章的直接要求（最高优先级）
         \(authorDirective.isEmpty ? "（无，按大纲与上下文推进）" : authorDirective)
 
+        ## 创作法典（题材契约 + 两套创作法，按它的标准规划）
+        \(craft.isEmpty ? "（未注入）" : craft)
+        \(prevHookKinds.isEmpty ? "" : "\n## 近几章已用过的钩子形态（本章要换一种，避免套版）\n\(prevHookKinds)")}
+
         ## 规划纪律（InkOS）
         1. 3-6 个节拍；每节拍一句"人话"写清要发生的具体事件，不写字段名。
         2. 每节拍给功能定位（推进/爽点/埋伏笔/收钩子/情绪/过渡）与建议字数；场景要有"当下目标→阻力→有意义的转折"。
-        3. 万物皆饵：日常/过渡节拍的每一笔也要是未来剧情的伏笔或钩子。
-        4. 揭1埋1：本章每回收一个伏笔，同时至少埋 1 个新钩子。clue_touches 里写清本章对每条活跃伏笔的动作（plant/develop/reveal）与硬要求。
-        5. 章尾钩子：写清收在什么画面、指向哪里（用具体物件/事件，不用"他不知道的是"这类空泛预告）。
-        6. 硬交付（must_deliver）：读者等了最久的那件事，本章必须兑现或明确推进。
-        7. 若上下文之间冲突，信"上一章摘要"（剧情已实际发生）。
-        8. 本节拍表是写给作者看的写前契约：把最值得作者自由发挥的地方在节拍说明里点名"放开写"，把不能碰的写进 must_avoid。
-        9. 叙事架构提示（sepia，挑着用别用满）：最大的揭露放本章后段；因果链允许断一节（某件事自有来历，不全由上一拍推出）；情绪表达行为优先、身体化只留给峰值；must_avoid 里加一条"结尾不要『决定+接纳+成长』三连"或"章末不写主题总结"。
+        3. **每个节拍都要填场景层**（这是连贯性审查的取证基础，缺了后面查不了）：
+           - pov：这一拍贴着谁写（全章统一一个视角；要换视角就在 must_deliver 里写明切点）
+           - location：具体地点（不要写"某处"）
+           - time_label：时间标记（"当夜""三日后清晨"都行，但要能和相邻拍对上）
+           - cast：在场人物（用台账里的本名，不要用别名混着写）
+           - turn：这一拍的转折，从什么变成什么（没有转折的拍就是过场，不要全章都是过场）
+        4. 万物皆饵：日常/过渡节拍的每一笔也要是未来剧情的伏笔或钩子。
+        5. 揭1埋1：本章每回收一个伏笔，同时至少埋 1 个新钩子。clue_touches 里写清本章对每条活跃伏笔的动作（plant/develop/reveal）与硬要求；**到期未动的伏笔必须进合同**（推进它，或显式标 defer）。
+        6. 章尾钩子：写清收在什么画面、指向哪里（用具体物件/事件，不用"他不知道的是"这类空泛预告），并在 hook_kind 里标明形态（悬念/危机/反转/信息差/承诺/情绪/登场）。
+        7. 硬交付（must_deliver）：读者等了最久的那件事，本章必须兑现或明确推进。
+        8. 禁止项（must_avoid）：至少写一条反 AI 指纹约束（"结尾不要决定+接纳+成长三连"或"章末不写主题总结"），再写本章题材禁区里最容易踩的那条。
+        9. 本章要兑现的爽点类型填 payoff_type；本章挂上的新期待填 new_expectation（必须可验证——读者能核对它兑现了没有）；所属卷/阶段填 volume_label。
+        10. 若上下文之间冲突，信"上一章摘要"（剧情已实际发生）。
+        11. 本节拍表是写给作者看的写前契约：把最值得作者自由发挥的地方在节拍说明里点名"放开写"，把不能碰的写进 must_avoid。
+        12. 叙事架构提示（挑着用别用满）：最大的揭露放本章后段；因果链允许断一节（某件事自有来历，不全由上一拍推出）；情绪表达行为优先、身体化只留给峰值。
+        \(gateReport.isEmpty ? "" : "\n## 宿主闸门对上一版骨架的检查结果（这一版必须逐条修掉）\n\(gateReport)")}
+        """
+    }
+
+    // MARK: - 卷骨架（批量：一次规划连续多章的弧光，再逐章细化）
+
+    static func volumeSkeletonTask(fromChapter start: Int, toChapter end: Int, pack: ContextPack,
+                                   authorDirective: String, craft: String = "",
+                                   existingOutline: String = "") -> String {
+        """
+        请为第\(start)–\(end)章（共 \(end - start + 1) 章）规划**卷级弧光**。这一轮不逐章搭骨架——先把这一段当一个完整中篇来设计，作者认可后再逐章细化。
+
+        ## 上下文（宿主已按预算组装，可信）
+        \(pack.asText)
+
+        ## 已有大纲与时间线（这一段原本计划发生什么）
+        \(existingOutline.isEmpty ? "（空）" : existingOutline)
+
+        ## 作者对这一段的要求（最高优先级）
+        \(authorDirective.isEmpty ? "（无，按大纲推进）" : authorDirective)
+
+        ## 创作法典
+        \(craft.isEmpty ? "（未注入）" : craft)
+
+        ## 要交付什么（用 propose_memo 提交一份卷级设计，作者看完才逐章搭骨架）
+        按起承转合给这一段的弧光，逐条写清：
+        1. **本卷核心冲突**：谁要什么、被谁挡住、代价是什么；比上一段重在哪里（赌注递增）。
+        2. **四拍分布**：起（第几章，新处境）／承（第几章，受挫一次）／转（第几章，变量进场改变局面性质）／合（第几章，卷末大兑现 + 抛下一卷钩子）。
+        3. **章级路标**：逐章一行——第N章要推进哪条剧情线、兑现或挂起哪个期待、钩子形态用哪一种（整卷钩子形态要轮换，不要连续三章同型）。
+        4. **伏笔收支表**：这一段要回收哪些旧伏笔（写 F 编号）、要埋哪些新的、哪些到期了必须处理。
+        5. **期待感账**：这一段结束时，读者手上还握着哪几个未兑现的期待（即时/近期/长期各至少一个）。
+        6. **本卷禁区**：这段最容易踩的题材禁区与最可能崩的地方（战力/资源/信息通胀）。
+
+        ## 纪律
+        - 不要写正文，不要逐章写满节拍——这一轮只交弧光与路标。
+        - 每章的路标必须具体到"能据此搭骨架"，不要写"推进剧情"这种废话。
+        - 与已有大纲冲突时，明确指出冲突点并给两个选项（改大纲 / 改本段规划），让作者裁决。
+        """
+    }
+
+    // MARK: - 全书连贯性审校（在确定性审查之上补 LLM 才能查的部分）
+
+    static func continuityAuditTask(asOfChapter n: Int, deterministicFindings: String,
+                                    digest: String, craft: String = "") -> String {
+        """
+        请对全书（截至第\(n)章）做连贯性审校，用 propose_continuity 提案。
+
+        ## 宿主确定性扫描已发现（可信，不要重复报这些，直接在此基础上补）
+        \(deterministicFindings.isEmpty ? "（暂无）" : deterministicFindings)
+
+        ## 全书梗概（宿主组装：各章摘要 + 关键事件 + 台账 + 剧情线）
+        \(digest)
+
+        ## 题材禁区（违背这些也算连贯性问题）
+        \(craft.isEmpty ? "（未注入）" : craft)
+
+        ## 你的职责：只查确定性代码查不出来的那六类
+        1. **动机断裂**：人物做了这件事，但此前建立的性格/处境/利益不支持他这么做。
+        2. **能力与资源不一致**：某项能力/道具/人脉/金钱此前用过或明确没有，后文的用法与之矛盾（含战力与财富通胀失控）。
+        3. **人物性格漂移**：同一个人前后像两个人，且文中没有给出变化的理由与过程。
+        4. **称谓与身份混乱**：同一人物称呼前后不一致、身份/辈分/职位对不上。
+        5. **因果链缺口**：结果出现了，但导致它的环节从未发生过（不是"留白"，是"漏写"）。
+        6. **承诺失约**：文中明确许下的约定/期限/誓言到期未兑现，也没人提起。
+
+        ## 纪律
+        - 每条 issue 必须带 evidence（引用具体章号与原句）与 suggestion（怎么修）。引不出证据就不要报。
+        - 不要报风格、节奏、文笔问题——那是作者主权，且不属于连贯性。
+        - 不要重复宿主已经查出的机械性错误（死者复出、位置跳跃、时间线倒挂、伏笔台账烂账）。
+        - 没有问题就返回空列表，不要为了凑数硬造。
+        """
+    }
+
+    // MARK: - 大纲同步（把静态计划变成活文档）
+
+    static func outlineSyncTask(asOfChapter n: Int, deterministicFindings: String,
+                                craft: String = "") -> String {
+        """
+        请把大纲与真实剧情对账，并用 propose_outline_updates 提交更新建议。
+
+        ## 宿主确定性对账结果（可信，这是你的取证基础）
+        \(deterministicFindings.isEmpty ? "（暂无）" : deterministicFindings)
+
+        ## 创作法典（判断偏差该改大纲还是该改后文时，按它的节奏参数与卷弧结构判）
+        \(craft.isEmpty ? "（未注入）" : craft)
+
+        ## 你的职责
+        1. 对宿主标出的每个「计划 vs 实际」偏差，判断：这件事是**已经发生了只是大纲没更新**，还是**真的漏写了**，还是**该取消**。给出理由与证据。
+        2. 对断线/停滞的剧情线，给出处置建议：本段内唤醒、显式转为蛰伏、还是收束。不要建议凭空加戏。
+        3. 补出大纲里已经明显过时或缺失的关键事件（用 new_event），每个都要写 objective_fact（作者真相）与 reader_knowledge（读者已知）。
+        4. 若某条线的 planned_payoff_chapter 已过而线还没收束，给出新的收束章建议。
+
+        ## 纪律
+        - 大纲是作者的正典。你只提建议，作者采纳才生效；不要声称已更新。
+        - 每条建议必须写 reason（凭什么这么判）与 evidence（命中了哪一章的什么内容）。
+        - 不要为了让大纲好看而把没发生的事标成已发生。
+        - 建议数量控制在最必要的范围内，一次给 30 条更新等于没给。
         """
     }
 
@@ -275,6 +396,73 @@ enum PromptLibrary {
 
         ## 六、输出
         propose_draft 一次提交全文；note 里一句话说明本稿要点。不要把正文拆进对话。
+        """
+    }
+
+    /// 分段写作的一小段：只写这几拍，且必须接着上一段的结尾往下写。
+    /// 长章一次性生成到后半段必然退化（复读、赶结尾、把后几拍压成一两句交代），
+    /// 所以按节拍切块，每块带着"已经写出来的实际结尾"续写，最后由宿主拼成整章。
+    static func sceneDraftTask(chapter n: Int, title: String, beatIndex: Int, beatCount: Int,
+                               beats: [Beat], isLast: Bool, endHook: String, hookKind: String,
+                               mustDeliver: [String], mustAvoid: [String], clueTouches: [ClueTouch],
+                               mainline: String, targetWords: Int, pack: ContextPack,
+                               previousText: String, model: String) -> String {
+        let beatLines = beats.enumerated().map { i, b -> String in
+            var line = "\(i + 1). \(b.summary)（\(b.purpose)\(b.suggestedWords > 0 ? "｜约\(b.suggestedWords)字" : "")）"
+            var scene: [String] = []
+            if !b.pov.isEmpty { scene.append("视角：\(b.pov)") }
+            if !b.location.isEmpty { scene.append("地点：\(b.location)") }
+            if !b.timeLabel.isEmpty { scene.append("时间：\(b.timeLabel)") }
+            if !b.cast.isEmpty { scene.append("在场：\(b.cast.joined(separator: "、"))") }
+            if !b.turn.isEmpty { scene.append("转折：\(b.turn)") }
+            if !scene.isEmpty { line += "\n   " + scene.joined(separator: "｜") }
+            return line
+        }.joined(separator: "\n")
+        let touchLines = clueTouches.map { "[\($0.clueID)] \($0.action.rawValue)——\($0.requirement)" }.joined(separator: "\n")
+        return """
+        这是第\(n)章「\(title)」的第 \(beatIndex)/\(beatCount) 段。只写这一段，写完直接停。
+
+        ## 本段要写的节拍（写前契约，逐拍落实）
+        \(beatLines)
+
+        ## 本段字数
+        约 \(targetWords) 字（±20%）。不要为了凑字数注水，也不要写成提纲。
+
+        ## 作者主线要求（最高优先级）
+        \(mainline.isEmpty ? "（未填，按骨架与上下文推进）" : mainline)
+
+        ## 前情与状态（宿主组装，可信）
+        \(pack.asText)
+
+        ## 本章已经写出来的部分（你的开头必须无缝接住它的最后一句：情绪、时态、在场人物、镜头位置都要对得上）
+        \(previousText.isEmpty ? "（这是本段开头，也是本章开头——直接进入场景，不要写章节标题、不要写任何开场白）" : String(previousText.suffix(1500)))
+
+        ## 本章伏笔触点合同（落在本段的必须写出可定位的兑现段）
+        \(touchLines.isEmpty ? "（无）" : touchLines)
+        \(isLast ? """
+
+        ## 这是本章最后一段
+        章尾钩子必须落地：\(endHook)\(hookKind.isEmpty ? "" : "（\(hookKind)型）")
+        钩子要挂在具体的物件、动作或人身上，用画面收，不要总结、不要感慨、不要写"他终于明白"。
+        """ : """
+
+        ## 这一段不是结尾
+        不要收束本章、不要写章尾钩子、不要做任何总结——写到本段节拍完成就停，把势头留给下一段。
+        """)
+        \(mustDeliver.isEmpty ? "" : "\n## 本章硬交付（本段涉及的部分必须兑现）\n" + mustDeliver.joined(separator: "\n"))
+        \(mustAvoid.isEmpty ? "" : "\n## 禁止\n" + mustAvoid.joined(separator: "\n"))
+
+        ## 写作纪律（写的时候就做对，别留给修订）
+        1. 情绪行为优先、直接命名其次，身体化描写只留一两个峰值；嗅觉克制。
+        2. 因果链允许断一节；至少留一个不解释的细节或松线头。
+        3. 句长参差：长短句交错，别写等长句串；对白吵具体的事，不吵哲学。
+        4. 场景层已经给了视角/地点/时间/在场人物——严格按它写，不要漂移视角，不要让不在场的人说话。
+
+        ## 执行模型自查（别把这些默认倾向带进正文）
+        \(narrativeFingerprint(for: model))
+
+        ## 输出
+        只输出这一段的正文。**不要**输出章节标题、段号、"以下是…"之类的开场白、代码围栏或任何解释。
         """
     }
 
