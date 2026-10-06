@@ -661,6 +661,7 @@ struct BeatCardView: View {
     @ObservedObject var store: ProjectStore
     let chapterNumber: Int
     let beat: Beat
+    @State private var showScene = false
 
     private var current: Beat {
         store.chapter(chapterNumber)?.skeleton?.beats.first { $0.id == beat.id } ?? beat
@@ -673,6 +674,34 @@ struct BeatCardView: View {
             change(&skt.beats[idx])
             ch.skeleton = skt
         }
+    }
+
+    /// 场景层编辑器（popover）：卡片太窄放不下，且卡片变高会触发分栏约束再入崩溃
+    private func sceneEditor(_ binding: Binding<Beat>) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("场景层 ｜ 拍 \(beatIndex)").font(.headline)
+            Text("连贯性审查（视角漂移、同一人分身两地）就靠这几个字段取证；AI 会填，你可以改。")
+                .font(.caption).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            Divider()
+            TextField("视角（这一拍贴着谁写）", text: binding.pov)
+            TextField("地点", text: binding.location)
+            TextField("时间标记（当夜／次日清晨…）", text: binding.timeLabel)
+            TextField("在场人物（逗号分隔）", text: Binding(
+                get: { current.cast.joined(separator: "，") },
+                set: { newValue in
+                    update { $0.cast = newValue.split(whereSeparator: { "，,、 ".contains($0) }).map(String.init) }
+                }))
+            TextField("转折（从什么变成什么）", text: binding.turn)
+        }
+        .textFieldStyle(.roundedBorder)
+        .font(.callout)
+        .padding(14)
+        .frame(width: 330)
+    }
+
+    private var beatIndex: Int {
+        (store.chapter(chapterNumber)?.skeleton?.beats.firstIndex { $0.id == beat.id } ?? 0) + 1
     }
 
     var body: some View {
@@ -715,30 +744,28 @@ struct BeatCardView: View {
                         .font(.caption2).foregroundStyle(.orange)
                 }
             }
-            // 场景层：AI 会填，作者也必须能手改——连贯性审查（视角漂移 / 分身两地）全靠这几个字段取证
-            DisclosureGroup {
-                VStack(alignment: .leading, spacing: 4) {
-                    TextField("视角（这一拍贴着谁写）", text: binding.pov)
-                    TextField("地点", text: binding.location)
-                    TextField("时间标记（当夜/次日清晨…）", text: binding.timeLabel)
-                    TextField("在场人物（逗号分隔）", text: Binding(
-                        get: { current.cast.joined(separator: "，") },
-                        set: { newValue in
-                            update { $0.cast = newValue.split(whereSeparator: { "，,、 ".contains($0) }).map(String.init) }
-                        }))
-                    TextField("转折（从什么变成什么）", text: binding.turn, axis: .vertical)
-                }
-                .textFieldStyle(.roundedBorder)
-                .font(.caption2)
+            // 场景层：AI 会填，作者也必须能手改——连贯性审查（视角漂移 / 分身两地）全靠这几个字段取证。
+            //
+            // 这里必须走 popover、不能在卡片里展开：卡片一变高，外层横向 ScrollView 的高度跟着变，
+            // 会撞上 SwiftUI 在 NavigationSplitView 里的约束更新再入（NSHostingView.SizeConstraints.update
+            // → SplitViewChildController → 再进 setNeedsUpdateConstraints），实测直接 abort。
+            // 顺带也治了 250pt 卡片塞 5 个输入框太挤的问题。
+            Button {
+                showScene = true
             } label: {
                 HStack(spacing: 5) {
+                    Image(systemName: "rectangle.on.rectangle.angled")
                     Text("场景层").font(.caption2.bold())
                     Text("\(Int(current.sceneCompleteness * 100))%")
                         .font(.caption2.monospacedDigit())
                         .foregroundStyle(current.sceneCompleteness >= 0.5 ? Color.green : Color.orange)
+                    Spacer(minLength: 0)
                 }
+                .font(.caption2)
+                .contentShape(Rectangle())
             }
-            .font(.caption2)
+            .buttonStyle(.borderless)
+            .popover(isPresented: $showScene, arrowEdge: .bottom, content: { sceneEditor(binding) })
             // 骨架填写：人在节拍上写草稿（渲染视图，不露 markdown 源码）
             RichProseEditor(
                 markdown: Binding(

@@ -74,6 +74,12 @@
 
 `OutlineSync.sync` 要读各章正文做双字组匹配，300 章量级是秒级的主线程开销。所以大纲页的对账结果放在 `@State` 里，用 `.task(id: 粗签名)` 触发重算，**粗签名只含结构（章数/事件/故事线/阶段/台账），故意不含字数**——含字数的话作者每敲一个字都会全量对账一遍，那比"稍微陈旧"糟得多。正文改动后由「重新对账」按钮显式刷新。同理，`MemoryGraphView` 用 `GraphCache.stamp` 只在账本规模变化时重建图。
 
+### 视图纪律：卡片不要在横向 ScrollView 里变高
+
+骨架的拍卡片排在 `ScrollView(.horizontal)` 里，而外层是 `NavigationSplitView` 的分栏。这类结构下**任何"点一下让卡片变高"的控件都会崩**：横向 ScrollView 的高度取最高卡片，卡片一变高就反推分栏宿主的尺寸约束，而这一步发生在 AppKit 正在跑约束更新的过程中——`NSHostingView.SizeConstraints.update` → `SplitViewChildController` → 再进 `setNeedsUpdateConstraints`，重入直接 abort（实测，不是理论）。
+
+所以「场景层」用 **popover** 打开而不是在卡片里 `DisclosureGroup` 展开：popover 是独立窗口，不参与父视图布局，卡片高度恒定。写新面板时同理——要么高度恒定，要么把可变高度的部分放进 popover / sheet / 独立 inspector。
+
 ### 工具面契约：schema 不能静默降级
 
 `ProposalToolBridge` 在 `parametersJSON` 解析失败时会降级成空 schema，模型于是拿不到字段定义、产出必然不合格，而宿主一声不响。因此自检里有一节专门校验：每个工具的 schema 都是合法 JSON object、`propose_*` 都有字段定义、`required` 里的字段都在 `properties` 中声明、骨架工具确实暴露了场景层与钩子形态枚举（且枚举与 `HookKind` 一致）、**每个 `AICapability` 都至少有一个 `propose_*` 工具**（没有生产者的能力就是个按了没反应的按钮）。
@@ -108,10 +114,9 @@ libfx 没有 Swift SDK，因此按其文档模型在 Swift 内同构实现 `Agen
 ├── memory.json           # 双时态事实三元组 + 角色别名
 ├── proposals/inbox.json  # AI 提案收件箱（pending/accepted/rejected）
 ├── chapters/ch-NNN/
-│   ├── meta.json         # 标题/状态/字数
+│   ├── meta.json         # 标题/状态/字数 + 骨架 + 摘要（瘦身结构：正文不在这里，另有 prose.md）
 │   ├── prose.md          # 人的正文（权威，纯 markdown）
-│   ├── skeleton.json     # 章节骨架（AI 提案 → 人修改批准）
-│   └── summary.json      # 人确认后的章节摘要
+│   └── snapshots/        # 覆盖/去AI味前的版本快照（可回滚）
 └── checkpoints/          # FxAgent checkpoint 状态
 ```
 
@@ -156,6 +161,12 @@ zhibi/
 `Beat` / `ChapterSkeleton` / `TimelineEvent` 都实现了**显式 `init(from:)`**，逐字段 `decodeIfPresent` 兜底。
 
 原因：Swift 合成的 `Decodable` 对「带默认值的非可选字段」缺键会直接抛 `keyNotFound`（已实测），
-所以任何新增字段如果不写显式解码器，用户磁盘上既有的 `skeleton.json` / `outline.json` 会整份解不出来、
+所以任何新增字段如果不写显式解码器，用户磁盘上既有的骨架 / 大纲 JSON 会整份解不出来、
 静默丢骨架丢大纲。这条对 `LintSummary` 等一切会落盘的模型同样适用——新增字段要么可选，要么配显式解码器。
 自检第 21 节里有专门的「老 JSON 向后兼容」断言守着这条。
+
+**反过来更要命：读 meta.json 必须用 `ChapterMeta`，不能用 `Chapter`。** meta.json 是瘦身结构、
+没有 `prose` 键，而 `Chapter.prose` 是非可选字段——用 `Chapter` 去解必然抛 `keyNotFound`，
+一旦被 `?? Chapter(number:)` 吞掉，每章就退化成空章：表现是「打开工程骨架全没了」，
+随后自动保存把骨架从盘上永久抹掉。书架统计那侧早就改成了 `ChapterMeta`，读盘这侧漏了，于是
+"数字对得上、编辑器里全丢"（自检 5.1b 现在用「存盘 → 新 store 读回」把这条钉死，只断言内存态是测不出来的）。

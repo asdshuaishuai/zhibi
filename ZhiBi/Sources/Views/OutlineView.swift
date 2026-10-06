@@ -205,11 +205,12 @@ struct OutlineView: View {
             }
             .padding(12)
             Divider()
-            ScrollView {
-                MarkdownPreview(markdown: CraftCodex.referencePage(genreText: store.project.genre), fontSize: 13)
-                    .frame(maxWidth: .infinity, alignment: .topLeading)
-                    .padding(14)
-            }
+            // MarkdownPreview 内部就是 NSScrollView。外面再套一层 SwiftUI ScrollView 时，
+            // 它拿不到固有高度（NSScrollView 的 fittingSize 近似 0），整个弹层只剩灰底。
+            // 给它一个确定的高度即可，滚动交给它自己。
+            MarkdownPreview(markdown: CraftCodex.referencePage(genreText: store.project.genre), fontSize: 13)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .padding(.horizontal, 6)
         }
         .frame(width: 780, height: 680)
     }

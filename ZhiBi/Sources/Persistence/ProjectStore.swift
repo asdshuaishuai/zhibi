@@ -88,9 +88,10 @@ final class ProjectStore: ObservableObject {
             if let dirs = try? fm.contentsOfDirectory(at: ProjectLayout.chaptersDir(rootURL), includingPropertiesForKeys: nil) {
                 for dir in dirs.sorted(by: { $0.lastPathComponent < $1.lastPathComponent }) where dir.lastPathComponent.hasPrefix("ch-") {
                     guard let num = Int(dir.lastPathComponent.dropFirst(3)) else { continue }
-                    var ch = (try? Disk.readJSON(Chapter.self, from: ProjectStore.chapterMetaURL(rootURL, num))) ?? Chapter(number: num)
-                    // 正文读不了（非 UTF-8 等）：原稿隔离为 .corrupt，绝不静默清空后覆盖
                     let proseFile = ProjectLayout.proseFile(rootURL, number: num)
+                    var ch = ProjectStore.loadChapterMeta(rootURL: rootURL, number: num,
+                                                         proseFileMissing: !fm.fileExists(atPath: proseFile.path))
+                    // 正文读不了（非 UTF-8 等）：原稿隔离为 .corrupt，绝不静默清空后覆盖
                     if fm.fileExists(atPath: proseFile.path) {
                         let (text, quarantined) = Disk.readTextOrQuarantine(proseFile)
                         ch.prose = text
@@ -155,9 +156,10 @@ final class ProjectStore: ObservableObject {
         if let dirs = try? fm.contentsOfDirectory(at: ProjectLayout.chaptersDir(rootURL), includingPropertiesForKeys: nil) {
             for dir in dirs.sorted(by: { $0.lastPathComponent < $1.lastPathComponent }) where dir.lastPathComponent.hasPrefix("ch-") {
                 guard let num = Int(dir.lastPathComponent.dropFirst(3)) else { continue }
-                var ch = (try? Disk.readJSON(Chapter.self, from: ProjectStore.chapterMetaURL(rootURL, num))) ?? Chapter(number: num)
-                // 正文读不了（非 UTF-8 等）：原稿隔离为 .corrupt，绝不静默清空后覆盖
                 let proseFile = ProjectLayout.proseFile(rootURL, number: num)
+                var ch = Self.loadChapterMeta(rootURL: rootURL, number: num,
+                                              proseFileMissing: !fm.fileExists(atPath: proseFile.path))
+                // 正文读不了（非 UTF-8 等）：原稿隔离为 .corrupt，绝不静默清空后覆盖
                 if fm.fileExists(atPath: proseFile.path) {
                     let (text, quarantined) = Disk.readTextOrQuarantine(proseFile)
                     ch.prose = text
@@ -284,6 +286,34 @@ final class ProjectStore: ObservableObject {
 
     nonisolated private static func chapterMetaURL(_ root: URL, _ n: Int) -> URL {
         ProjectLayout.chapterDir(root, number: n).appendingPathComponent("meta.json")
+    }
+
+    /// 旧版把正文内嵌在 meta.json（后来才拆成 prose.md）。prose.md 缺失时才回退取它。
+    private struct LegacyMetaProse: Codable { var prose: String? }
+
+    /// 读一章的 meta。**必须用 ChapterMeta 解**：meta.json 里没有 prose 键，
+    /// 而 Chapter.prose 是非可选字段，用 Chapter 解必然抛 keyNotFound，
+    /// 被 `?? Chapter(number:)` 吞掉之后，每章的状态/骨架/摘要/随手记都会静默退化成默认值——
+    /// 表现就是「打开工程后骨架全没了」，再自动保存就从盘上永久抹掉。
+    nonisolated static func loadChapterMeta(rootURL: URL, number n: Int, proseFileMissing: Bool) -> Chapter {
+        let url = chapterMetaURL(rootURL, n)
+        guard let meta = try? Disk.readJSON(ChapterMeta.self, from: url) else {
+            // meta.json 真的解不出来（更老的格式）：退回 Chapter，至少把能认出来的字段救回来
+            return (try? Disk.readJSON(Chapter.self, from: url)) ?? Chapter(number: n)
+        }
+        var ch = Chapter(number: n)
+        ch.id = meta.id
+        ch.title = meta.title
+        ch.status = meta.status
+        ch.skeleton = meta.skeleton
+        ch.summary = meta.summary
+        ch.notes = meta.notes
+        ch.cachedWords = meta.cachedWords
+        ch.updatedAt = meta.updatedAt
+        if proseFileMissing, let legacy = try? Disk.readJSON(LegacyMetaProse.self, from: url) {
+            ch.prose = legacy.prose ?? ""
+        }
+        return ch
     }
 
     // MARK: - 章节操作

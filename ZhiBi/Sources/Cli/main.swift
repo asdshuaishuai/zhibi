@@ -478,6 +478,35 @@ func runStoreTests(tmp: URL) async throws {
     check("项目存取回环", store2.project.title == "测试书" && store2.chapters.count == 2 && store2.clues.count == 1)
     check("正文以 md 落盘", FileManager.default.fileExists(atPath: ProjectLayout.proseFile(tmp, number: 1).path))
 
+    // 5.1b 骨架/状态必须能跨重启存活
+    //
+    // 曾经的写法是拿 Chapter 去解 meta.json：meta 里没有 prose 键，而 Chapter.prose 是非可选字段，
+    // 缺键必然抛 keyNotFound，被 `?? Chapter(number:)` 吞掉后每章都退化成空章——
+    // 表现是"打开工程骨架全没了"，随后自动保存把骨架从盘上永久抹掉。
+    // 这里用「存盘 → 新 store 读回」把这条路钉死（只断言内存态是测不出来的）。
+    _ = store.ensureChapter(3)
+    store.updateChapter(3) { ch in
+        ch.title = "拾刀"
+        ch.status = .skeletoned
+        var b = Beat(summary: "少年在废窑捡到断刀", purpose: "推进")
+        b.pov = "少年"; b.location = "废窑"; b.timeLabel = "当夜"; b.cast = ["少年"]
+        b.turn = "从看客到当事人"
+        ch.skeleton = ChapterSkeleton(beats: [b], endHook: "刀柄上的界字亮了一下",
+                                      mustDeliver: ["捡到断刀"], mustAvoid: ["不要解释来历"],
+                                      proposedByAI: true, humanApproved: true,
+                                      hookKind: "悬念", pov: "少年")
+    }
+    try store.saveNow()
+    let store3 = ProjectStore(rootURL: tmp)
+    try store3.load()
+    check("meta 回读不丢状态", store3.chapter(3)?.status == .skeletoned,
+          store3.chapter(3)?.status.rawValue ?? "nil")
+    check("meta 回读不丢骨架", store3.chapter(3)?.skeleton?.beats.count == 1,
+          "beats=\(store3.chapter(3)?.skeleton?.beats.count ?? -1)")
+    check("meta 回读保留场景层", store3.chapter(3)?.skeleton?.beats.first?.location == "废窑",
+          store3.chapter(3)?.skeleton?.beats.first?.location ?? "nil")
+    check("meta 回读保留章末钩子", store3.chapter(3)?.skeleton?.endHook.contains("界字") == true)
+
     // 5.2 快照与回滚
     let snap = store2.snapshotProse(chapter: 2, tag: "test")
     store2.updateChapter(2) { $0.prose = "改坏了。" }
