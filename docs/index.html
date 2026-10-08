@@ -194,13 +194,42 @@
   .foot a { color: var(--paper-dim); text-decoration: none; }
   .foot a:hover { color: var(--paper); }
 
+  /* manifesto band */
+  .voice { padding: 88px 0; border-top: 1px solid var(--hair); }
+  .voice blockquote {
+    margin: 0; font-family: var(--serif); font-weight: 700;
+    font-size: clamp(26px, 4.4vw, 46px); line-height: 1.4; letter-spacing: .01em; max-width: 22ch;
+  }
+  .voice blockquote em { font-style: normal; color: var(--cinnabar-soft); }
+  .voice .after { margin-top: 30px; display: flex; flex-wrap: wrap; gap: 10px 26px; font-size: 14.5px; color: var(--paper-dim); font-family: var(--mono); }
+  .voice .after span::before { content: "— "; color: var(--cinnabar); }
+
+  /* why / differ */
+  .why { display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: 18px; }
+  .why .card h3 { font-size: 15.5px; }
+  .why .vs { font-family: var(--mono); font-size: 11px; letter-spacing: .1em; text-transform: uppercase; color: var(--paper-faint); margin-bottom: 10px; }
+  .why .card b { color: var(--paper); font-weight: 600; }
+
+  /* who */
+  .who { display: grid; grid-template-columns: minmax(0,1fr) minmax(0,1fr); gap: 18px; }
+  .who .law-col h3 { display: flex; align-items: center; gap: 9px; }
+  .who .badge { width: 20px; height: 20px; border-radius: 50%; display: grid; place-items: center; font-size: 12px; font-family: var(--mono); }
+  .who .yes .badge { background: rgba(74,158,148,.18); color: var(--teal); border: 1px solid rgba(74,158,148,.45); }
+  .who .no .badge { background: rgba(200,69,47,.14); color: var(--cinnabar-soft); border: 1px solid rgba(200,69,47,.45); }
+
+  /* closing cta */
+  .close { text-align: center; padding: 96px 0; border-top: 1px solid var(--hair); }
+  .close h2 { font-size: clamp(30px, 5vw, 52px); margin-bottom: 12px; }
+  .close p { color: var(--paper-dim); margin: 0 auto 34px; max-width: 52ch; }
+  .close .cta { justify-content: center; }
+
   .reveal { opacity: 0; transform: translateY(14px); transition: opacity .6s ease, transform .6s ease; }
   .reveal.in { opacity: 1; transform: none; }
 
   @media (max-width: 940px) {
     .hero { grid-template-columns: minmax(0,1fr); padding-top: 66px; gap: 40px; }
     .art { margin: 0 auto; max-width: 320px; }
-    .grid, .stats, .law, .ledger, .stack, .get { grid-template-columns: minmax(0,1fr); }
+    .grid, .stats, .law, .ledger, .stack, .get, .why, .who { grid-template-columns: minmax(0,1fr); }
     .stats { grid-template-columns: repeat(2, minmax(0,1fr)); }
     .nav-links { display: none; }
     .stack div { grid-template-columns: minmax(0,1fr); gap: 4px; }
@@ -220,6 +249,7 @@
     <nav class="nav-links">
       <a href="#law">铁律</a>
       <a href="#ability">能力</a>
+      <a href="#why">为什么</a>
       <a href="#ledger">账本</a>
       <a href="#numbers">数字</a>
       <a href="#get">获取</a>
@@ -279,6 +309,19 @@
     </div>
   </section>
 </div>
+
+<!-- 宣言 -->
+<section class="voice">
+  <div class="wrap">
+    <blockquote class="reveal">写作软件这两年都在抢着<em>替你写</em>。<br>执笔不抢这支笔——<br>它替你把<em>账</em>记住。</blockquote>
+    <div class="after reveal">
+      <span>谁还活着</span>
+      <span>第 8 章那把刀收了没有</span>
+      <span>哪条感情线什么时候断的</span>
+      <span>这个钩子是不是和第 3 章撞了</span>
+    </div>
+  </div>
+</section>
 
 <!-- 铁律 -->
 <section id="law">
@@ -391,6 +434,34 @@
   </div>
 </section>
 
+<!-- 为什么是执笔 -->
+<section id="why">
+  <div class="wrap">
+    <div class="sec-head reveal">
+      <div class="kicker">Why this one</div>
+      <h2>三条路都被试过，然后才有了执笔</h2>
+      <p>下面三种方案，是长篇作者真实会走的岔路。它们各自都能撑几十章，撑不到第三百章。</p>
+    </div>
+    <div class="why">
+      <article class="card reveal">
+        <div class="vs">对比 · 开个聊天窗口让 AI 写</div>
+        <h3>模型的记性，撑不起你的体量</h3>
+        <p>聊天框的上下文是金鱼的：写到第三百章，它已经不记得第 8 章那把刀，也敢让断了手臂的角色重新举剑。执笔把「谁在什么时候知道什么、哪条伏笔种在哪、承诺几章内兑现」全部记成<b>本地可校验的账</b>，喂给模型的是造好的上下文包，不是它的回忆。</p>
+      </article>
+      <article class="card reveal">
+        <div class="vs">对比 · 大纲与世界观管理工具</div>
+        <h3>管计划容易，对账难</h3>
+        <p>传统写作工具存的是<b>你打算写什么</b>。可真正的痛苦来自「我实际写了什么」和那份计划已经分叉了。执笔逐事件把两者对账：已发生 / 疑似偏移 / 未发生 / 已取消，再算每条剧情线的健康度（健康 / 放缓 / 停滞 / 断线 / 待收束）——大纲于是变成活文档，而不是越来越不敢打开的旧计划书。</p>
+      </article>
+      <article class="card reveal">
+        <div class="vs">对比 · 只做措辞替换的去AI味插件</div>
+        <h3>换词救不了结构病</h3>
+        <p>把「一丝」换成「些许」不叫去AI味。执笔 25 项检测里有一半在管结构：对白占比是否掉进说明文腔、连续九百字有没有信息倾倒、章末钩子是否挂在具体物件上、情绪曲线是不是全章一个速度。<b>还带反向保护</b>——把句子全打碎本身就是一种新的机器指纹，同样报警。</p>
+      </article>
+    </div>
+  </div>
+</section>
+
 <!-- 账本 -->
 <section id="ledger">
   <div class="wrap">
@@ -487,6 +558,41 @@
   </div>
 </section>
 
+<!-- 适合谁 -->
+<section id="who">
+  <div class="wrap">
+    <div class="sec-head reveal">
+      <div class="kicker">Who it's for</div>
+      <h2>说清楚它适合谁，也说不适合谁</h2>
+      <p>与其让你装完再失望，不如现在就说。</p>
+    </div>
+    <div class="who">
+      <div class="law-col reveal">
+        <h3><span class="badge">✓</span>如果你是这样，它帮得上</h3>
+        <div class="sub">体量一上来，账就先崩</div>
+        <ul class="yes">
+          <li>写长篇网文 / 类型小说，一次开两三本，靠记忆已经管不住伏笔</li>
+          <li>被「设定矛盾」「角色在两地同时出现」「这条线写着写着断了」折磨过</li>
+          <li>想让人机协作，但拒绝让 AI 替你落笔——正文必须是你自己的</li>
+          <li>稿子只肯放本地，不接受「上传到我们的云端帮你管理」</li>
+          <li>已经在用 oh-story / InkOS 这类社区工作流，想要一个能读能写回的工具</li>
+        </ul>
+      </div>
+      <div class="law-col reveal">
+        <h3><span class="badge">✕</span>如果你要这些，别浪费时间</h3>
+        <div class="sub">不是做不出来，是刻意不做</div>
+        <ul class="no">
+          <li>想要「一键生成一整本书」——这个功能不存在，而且是产品铁律明确禁止的</li>
+          <li>只想要一个更漂亮的纯文本编辑器，不需要台账、对账、审查</li>
+          <li>要 Windows 或 Linux ——目前只有 macOS 14+，没有跨平台计划</li>
+          <li>完全离线、一个 API 端点都不想配 —— 理账可以离线，AI 提案不行</li>
+          <li>期待开箱即用的商业级打磨 —— 它是作者自己在用的工具，界面还会改</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+
 <!-- 技术 -->
 <section id="stack">
   <div class="wrap">
@@ -549,6 +655,17 @@ ZhiBiCli --mock-agent http://127.0.0.1:8799/v1 /tmp/zbdump
   </div>
 </section>
 
+<section class="close">
+  <div class="wrap">
+    <h2 class="reveal">笔还在你手里，<br>账终于有人记了。</h2>
+    <p class="reveal">macOS 原生 · 本地优先 · 正文是你能随时带走的纯 markdown。</p>
+    <div class="cta reveal">
+      <a class="btn btn-primary" href="https://github.com/asdshuaishuai/zhibi" target="_blank" rel="noopener">在 GitHub 上查看</a>
+      <a class="btn btn-ghost" href="#get">从源码构建</a>
+    </div>
+  </div>
+</section>
+
 <footer>
   <div class="wrap foot">
     <img src="./assets/icon-256.png" alt="" width="22" height="22" style="border-radius:5px">
@@ -556,6 +673,7 @@ ZhiBiCli --mock-agent http://127.0.0.1:8799/v1 /tmp/zbdump
     <a href="https://github.com/asdshuaishuai/zhibi" target="_blank" rel="noopener">GitHub</a>
     <a href="https://github.com/asdshuaishuai/zhibi/blob/main/ARCHITECTURE.md" target="_blank" rel="noopener">架构文档</a>
     <a href="https://github.com/asdshuaishuai/zhibi/blob/main/README.md" target="_blank" rel="noopener">功能说明</a>
+    <a href="https://github.com/asdshuaishuai/zhibi/blob/main/LICENSE" target="_blank" rel="noopener">Apache-2.0</a>
     <span style="margin-left:auto">macOS 14+ · 本地优先 · 无云端存储</span>
   </div>
 </footer>

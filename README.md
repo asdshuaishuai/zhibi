@@ -165,3 +165,25 @@ ZhiBiCli --mock-agent http://127.0.0.1:8799/v1 /tmp/zbdump   # 94 项，退出�
 - **SkillHub 去AI味技能**（Humanizer v4.1 等）：三毒判定、L1 硬规则、五维分级、禁用词表
 - **网文创作传统**：黄金三章、期待感管理、爽点类型学、打脸循环、金手指代价律、卷弧结构、断章钩子类型学
 - **传统文学创作论**：脂批「草蛇灰线，伏脉千里」、鲁迅推崇的白描、意象与留白、恩格斯「典型环境中的典型人物」、春秋笔法、韩愈「气盛言宜」、巴赫金复调
+
+## 许可
+
+Apache License 2.0 —— 全文见 [LICENSE](./LICENSE)（与 apache.org 原文逐字节一致，未作修改）。
+
+    Copyright 2026 kelthas
+
+    Licensed under the Apache License, Version 2.0 (the "License");
+    you may not use this file except in compliance with the License.
+    You may obtain a copy of the License at
+
+        https://www.apache.org/licenses/LICENSE-2.0
+
+    Unless required by applicable law or agreed to in writing, software
+    distributed under the License is distributed on an "AS IS" BASIS,
+    WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+    See the License for the specific language governing permissions and
+    limitations under the License.
+
+选它的理由（对一个人写出来的工具最合适的三点）：**可闭源商用**（不像 AGPL 那样强制衍生品同样开源）、
+**带显式专利授权**（第 3 条，避免日后被专利反咬）、**改动必须注明**（第 4 条，fork 出去的必须说明改了什么，保住上游署名）。
+衍生作品保留 `LICENSE` 与 `NOTICE`、并在改动处注明即可。
