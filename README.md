@@ -4,6 +4,8 @@
 
 完整设计文档见 [ARCHITECTURE.md](./ARCHITECTURE.md)。
 
+**官网**：<https://asdshuaishuai.github.io/zhibi/> —— 源码在本仓库 `docs/`（单文件静态页，无构建步骤），由 GitHub Pages 从 `main` 的 `/docs` 发布。
+
 ## 亮点功能速览
 
 - **专注模式**（⌘⇧F）：全窗只剩稿纸，侧栏/骨架/速记全部退场；

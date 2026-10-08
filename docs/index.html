@@ -1,0 +1,581 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>执笔 ZhiBi · 人写正文，AI 理账</title>
+<meta name="description" content="执笔（ZhiBi）是 macOS 原生的小说写作软件：AI 搭骨架、记台账、查矛盾、给建议，正文永远由作者亲笔完成。12 项 AI 能力全部以提案交付，采纳前不落盘。">
+<meta name="theme-color" content="#0e0f12">
+<meta property="og:type" content="website">
+<meta property="og:title" content="执笔 ZhiBi · 人写正文，AI 理账">
+<meta property="og:description" content="macOS 原生（SwiftUI）小说写作软件。AI 只出提案，正文永远是你亲笔写的。">
+<meta property="og:image" content="./assets/icon.png">
+<link rel="icon" type="image/png" href="./assets/icon-256.png">
+<style>
+  :root {
+    --ink: #0e0f12;
+    --ink-2: #16181d;
+    --ink-3: #1d2027;
+    --paper: #ece5d5;
+    --paper-dim: #a8a296;
+    --paper-faint: #6f6b63;
+    --cinnabar: #c8452f;
+    --cinnabar-soft: #e0684e;
+    --teal: #4a9e94;
+    --indigo: #7b8cc4;
+    --hair: rgba(236, 229, 213, .11);
+    --hair-strong: rgba(236, 229, 213, .2);
+    --serif: "Songti SC", "Noto Serif SC", "Source Han Serif SC", "SimSun", Georgia, serif;
+    --sans: -apple-system, BlinkMacSystemFont, "PingFang SC", "Helvetica Neue", "Microsoft YaHei", sans-serif;
+    --mono: "SF Mono", ui-monospace, "JetBrains Mono", Menlo, Consolas, monospace;
+    --maxw: 1120px;
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0; background: var(--ink); color: var(--paper);
+    font-family: var(--sans); font-size: 16px; line-height: 1.75;
+    -webkit-font-smoothing: antialiased;
+    background-image:
+      radial-gradient(1100px 520px at 50% -12%, rgba(200, 69, 47, .13), transparent 62%),
+      radial-gradient(760px 420px at 8% 22%, rgba(74, 158, 148, .07), transparent 60%);
+    background-attachment: fixed;
+  }
+  a { color: inherit; }
+  .wrap { max-width: var(--maxw); margin: 0 auto; padding: 0 24px; }
+
+  /* ---------- nav ---------- */
+  header.nav {
+    position: sticky; top: 0; z-index: 50;
+    background: rgba(14, 15, 18, .82); backdrop-filter: saturate(180%) blur(14px);
+    border-bottom: 1px solid var(--hair);
+  }
+  .nav-inner { display: flex; align-items: center; gap: 22px; height: 62px; }
+  .brand { display: flex; align-items: center; gap: 11px; font-family: var(--serif); font-size: 20px; letter-spacing: .04em; text-decoration: none; }
+  .brand img { width: 26px; height: 26px; border-radius: 6px; }
+  .nav-links { display: flex; gap: 22px; margin-left: auto; font-size: 14px; color: var(--paper-dim); }
+  .nav-links a { text-decoration: none; transition: color .16s; }
+  .nav-links a:hover { color: var(--paper); }
+  .gh {
+    display: inline-flex; align-items: center; gap: 7px; padding: 7px 14px;
+    border: 1px solid var(--hair-strong); border-radius: 8px; text-decoration: none;
+    font-size: 14px; background: var(--ink-2); transition: border-color .16s, transform .16s;
+  }
+  .gh:hover { border-color: var(--cinnabar); transform: translateY(-1px); }
+
+  /* ---------- hero ---------- */
+  .hero { padding: 104px 0 78px; display: grid; grid-template-columns: minmax(0,1.15fr) minmax(0,.85fr); gap: 56px; align-items: center; }
+  .eyebrow {
+    font-family: var(--mono); font-size: 12px; letter-spacing: .18em; text-transform: uppercase;
+    color: var(--cinnabar-soft); margin-bottom: 20px;
+  }
+  h1 {
+    font-family: var(--serif); font-weight: 700; margin: 0 0 6px;
+    font-size: clamp(46px, 7.2vw, 78px); line-height: 1.06; letter-spacing: .01em;
+  }
+  .latin { font-family: var(--mono); font-size: 14px; letter-spacing: .3em; color: var(--paper-faint); text-transform: uppercase; }
+  .tagline {
+    font-family: var(--serif); font-size: clamp(20px, 2.6vw, 27px); line-height: 1.6;
+    margin: 26px 0 0; color: var(--paper);
+  }
+  .tagline b { color: var(--cinnabar-soft); font-weight: 700; }
+  .lede { margin: 18px 0 0; color: var(--paper-dim); max-width: 56ch; font-size: 15.5px; }
+  .cta { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 34px; }
+  .btn {
+    display: inline-flex; align-items: center; gap: 9px; padding: 12px 22px; border-radius: 10px;
+    text-decoration: none; font-size: 15px; border: 1px solid transparent; transition: transform .16s, background .16s, border-color .16s;
+  }
+  .btn-primary { background: var(--cinnabar); color: #fff; font-weight: 600; }
+  .btn-primary:hover { background: var(--cinnabar-soft); transform: translateY(-1px); }
+  .btn-ghost { border-color: var(--hair-strong); color: var(--paper); background: var(--ink-2); }
+  .btn-ghost:hover { border-color: var(--paper-dim); transform: translateY(-1px); }
+  .meta-row { display: flex; flex-wrap: wrap; gap: 8px 20px; margin-top: 30px; font-size: 13px; color: var(--paper-faint); font-family: var(--mono); }
+
+  /* hero art: 稿纸 + 骨架导轨 */
+  .art {
+    position: relative; aspect-ratio: 1 / 1; width: 100%; max-width: 400px; margin-left: auto;
+    border: 1px solid var(--hair); border-radius: 16px; background:
+      linear-gradient(180deg, var(--ink-2), var(--ink));
+    overflow: hidden;
+  }
+  .art .rail { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; }
+  .art svg { width: 100%; height: 100%; }
+  .art .seal {
+    position: absolute; right: 18px; bottom: 16px; width: 46px; height: 46px; border-radius: 9px;
+    background: var(--cinnabar); color: #fff; display: grid; place-items: center;
+    font-family: var(--serif); font-size: 24px; box-shadow: 0 6px 22px rgba(200, 69, 47, .4);
+  }
+
+  /* ---------- sections ---------- */
+  section { padding: 76px 0; border-top: 1px solid var(--hair); }
+  .sec-head { max-width: 72ch; margin-bottom: 40px; }
+  h2 { font-family: var(--serif); font-size: clamp(28px, 4vw, 40px); margin: 0 0 14px; line-height: 1.25; }
+  .sec-head p { color: var(--paper-dim); margin: 0; font-size: 16px; }
+  .kicker { font-family: var(--mono); font-size: 12px; letter-spacing: .16em; text-transform: uppercase; color: var(--cinnabar-soft); margin-bottom: 12px; }
+
+  /* law (铁律) */
+  .law { display: grid; grid-template-columns: minmax(0,1fr) minmax(0,1fr); gap: 26px; }
+  .law-col { border: 1px solid var(--hair); border-radius: 14px; padding: 26px 28px; background: var(--ink-2); }
+  .law-col h3 { margin: 0 0 4px; font-family: var(--serif); font-size: 19px; }
+  .law-col .sub { font-size: 13px; color: var(--paper-faint); margin-bottom: 18px; }
+  .law ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 11px; font-size: 14.5px; }
+  .law li { display: grid; grid-template-columns: 18px minmax(0,1fr); gap: 10px; align-items: start; color: var(--paper-dim); }
+  .law .yes li::before { content: "→"; color: var(--teal); font-family: var(--mono); }
+  .law .no li::before { content: "✕"; color: var(--cinnabar); font-family: var(--mono); font-size: 12px; padding-top: 3px; }
+  .law .no li { color: var(--paper); }
+  .banner {
+    margin-top: 26px; border: 1px solid rgba(200, 69, 47, .38); border-left: 3px solid var(--cinnabar);
+    background: rgba(200, 69, 47, .07); border-radius: 12px; padding: 20px 24px; font-size: 15px;
+  }
+  .banner b { color: var(--cinnabar-soft); }
+
+  /* capability grid */
+  .grid { display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: 18px; }
+  .card {
+    border: 1px solid var(--hair); border-radius: 14px; padding: 24px; background: var(--ink-2);
+    transition: border-color .18s, transform .18s;
+  }
+  .card:hover { border-color: var(--hair-strong); transform: translateY(-2px); }
+  .card .ic { width: 30px; height: 30px; margin-bottom: 15px; color: var(--cinnabar-soft); }
+  .card h3 { margin: 0 0 8px; font-size: 16.5px; font-family: var(--serif); letter-spacing: .01em; }
+  .card p { margin: 0; font-size: 14px; color: var(--paper-dim); line-height: 1.72; }
+  .card .tag { display: inline-block; margin-top: 13px; font-family: var(--mono); font-size: 11px; letter-spacing: .06em; color: var(--paper-faint); border: 1px solid var(--hair); border-radius: 999px; padding: 2px 9px; }
+
+  /* ledger samples */
+  .ledger { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 18px; }
+  .pane { border: 1px solid var(--hair); border-radius: 14px; background: #0b0c0f; overflow: hidden; }
+  .pane > .bar {
+    display: flex; align-items: center; gap: 8px; padding: 12px 16px; border-bottom: 1px solid var(--hair);
+    font-family: var(--mono); font-size: 11.5px; letter-spacing: .1em; text-transform: uppercase; color: var(--paper-faint);
+    background: var(--ink-2);
+  }
+  .pane > .bar .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--cinnabar); }
+  .pane .body { padding: 18px 20px; }
+  .kv { display: grid; grid-template-columns: 88px minmax(0,1fr); gap: 6px 14px; font-size: 13.5px; }
+  .kv dt { color: var(--paper-faint); font-family: var(--mono); font-size: 11.5px; letter-spacing: .04em; padding-top: 2px; }
+  .kv dd { margin: 0; color: var(--paper); }
+  .pill { display: inline-block; font-family: var(--mono); font-size: 11px; padding: 2px 8px; border-radius: 999px; border: 1px solid var(--hair-strong); margin: 0 6px 6px 3px; }
+  .pill.warn { color: var(--cinnabar-soft); border-color: rgba(200, 69, 47, .45); background: rgba(200, 69, 47, .09); }
+  .pill.ok { color: var(--teal); border-color: rgba(74, 158, 148, .45); background: rgba(74, 158, 148, .09); }
+  .pill.dim { color: var(--paper-faint); }
+  .quote { font-family: var(--serif); font-size: 14px; color: var(--paper-dim); border-left: 2px solid var(--hair-strong); padding-left: 12px; margin: 12px 0 0; }
+  .flow { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 13px; color: var(--paper-dim); }
+  .flow span.n { font-family: var(--mono); font-size: 11px; color: var(--paper-faint); }
+  .flow i { font-style: normal; color: var(--cinnabar-soft); font-family: var(--mono); }
+
+  /* stats */
+  .stats { display: grid; grid-template-columns: repeat(4, minmax(0,1fr)); gap: 18px; }
+  .stat { border: 1px solid var(--hair); border-radius: 14px; padding: 26px 22px; text-align: center; background: var(--ink-2); }
+  .stat .num { font-family: var(--serif); font-size: 40px; line-height: 1; color: var(--paper); }
+  .stat .num em { font-style: normal; font-size: 20px; color: var(--cinnabar-soft); }
+  .stat .lbl { margin-top: 10px; font-size: 13px; color: var(--paper-dim); }
+  .stat .src { margin-top: 6px; font-family: var(--mono); font-size: 10.5px; color: var(--paper-faint); }
+
+  /* stack */
+  .stack { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 18px 34px; font-size: 14.5px; }
+  .stack div { display: grid; grid-template-columns: 130px minmax(0,1fr); gap: 14px; padding: 13px 0; border-bottom: 1px solid var(--hair); }
+  .stack dt, .stack .k { font-family: var(--mono); font-size: 12px; letter-spacing: .05em; color: var(--paper-faint); padding-top: 3px; }
+  .stack .v { color: var(--paper-dim); }
+  .stack .v code { font-family: var(--mono); font-size: 12.5px; color: var(--paper); background: var(--ink-3); padding: 1px 6px; border-radius: 5px; }
+
+  /* get */
+  .get { display: grid; grid-template-columns: minmax(0,1.1fr) minmax(0,.9fr); gap: 34px; align-items: start; }
+  pre {
+    margin: 0; padding: 20px 22px; border-radius: 12px; background: #0b0c0f; border: 1px solid var(--hair);
+    font-family: var(--mono); font-size: 13px; line-height: 1.85; overflow-x: auto; color: var(--paper-dim);
+  }
+  pre .c { color: var(--paper-faint); }
+  pre .p { color: var(--cinnabar-soft); }
+  .note { font-size: 14px; color: var(--paper-dim); }
+  .note strong { color: var(--paper); }
+
+  footer { border-top: 1px solid var(--hair); padding: 40px 0 60px; color: var(--paper-faint); font-size: 13px; }
+  .foot { display: flex; flex-wrap: wrap; gap: 14px 26px; align-items: center; }
+  .foot a { color: var(--paper-dim); text-decoration: none; }
+  .foot a:hover { color: var(--paper); }
+
+  .reveal { opacity: 0; transform: translateY(14px); transition: opacity .6s ease, transform .6s ease; }
+  .reveal.in { opacity: 1; transform: none; }
+
+  @media (max-width: 940px) {
+    .hero { grid-template-columns: minmax(0,1fr); padding-top: 66px; gap: 40px; }
+    .art { margin: 0 auto; max-width: 320px; }
+    .grid, .stats, .law, .ledger, .stack, .get { grid-template-columns: minmax(0,1fr); }
+    .stats { grid-template-columns: repeat(2, minmax(0,1fr)); }
+    .nav-links { display: none; }
+    .stack div { grid-template-columns: minmax(0,1fr); gap: 4px; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    html { scroll-behavior: auto; }
+    .reveal { opacity: 1; transform: none; transition: none; }
+    * { transition: none !important; }
+  }
+</style>
+</head>
+<body>
+
+<header class="nav">
+  <div class="wrap nav-inner">
+    <a class="brand" href="#top"><img src="./assets/icon.png" alt="执笔图标">执笔</a>
+    <nav class="nav-links">
+      <a href="#law">铁律</a>
+      <a href="#ability">能力</a>
+      <a href="#ledger">账本</a>
+      <a href="#numbers">数字</a>
+      <a href="#get">获取</a>
+    </nav>
+    <a class="gh" href="https://github.com/asdshuaishuai/zhibi" target="_blank" rel="noopener">
+      <svg width="15" height="15" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38l-.01-1.34c-2.23.48-2.7-1.07-2.7-1.07-.36-.92-.89-1.17-.89-1.17-.73-.5.05-.49.05-.49.8.06 1.23.83 1.23.83.72 1.23 1.88.87 2.34.67.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.83-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.6 7.6 0 0 1 4 0c1.53-1.03 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.52.56.83 1.28.83 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48l-.01 2.2c0 .21.15.46.55.38A8 8 0 0 0 8 0Z"/></svg>
+      GitHub
+    </a>
+  </div>
+</header>
+
+<main id="top">
+<div class="wrap">
+
+  <!-- HERO -->
+  <section class="hero" style="border-top:0;padding-left:0;padding-right:0">
+    <div>
+      <div class="eyebrow">macOS · SwiftUI · 本地优先</div>
+      <h1>执笔</h1>
+      <div class="latin">Z H I B I</div>
+      <p class="tagline">人写正文，<b>AI 理账</b>。</p>
+      <p class="lede">
+        一本长篇写到第三百章时，真正的敌人不是文笔，是账：谁还活着、谁在两地同时出现、
+        第 8 章埋的那把刀到底收没收、大纲里那条线什么时候断的。
+        执笔把这套账交给 AI 记，把笔留在你手里——
+        <strong style="color:var(--paper)">它的 12 项能力全部只产出提案，你采纳之前一个字的台账和正文都不会变。</strong>
+      </p>
+      <div class="cta">
+        <a class="btn btn-primary" href="https://github.com/asdshuaishuai/zhibi" target="_blank" rel="noopener">在 GitHub 上查看</a>
+        <a class="btn btn-ghost" href="#get">从源码构建</a>
+      </div>
+      <div class="meta-row">
+        <span>macOS 14+</span><span>·</span><span>Swift 5 / SwiftUI</span><span>·</span><span>无云端存储</span><span>·</span><span>正文是纯 markdown</span>
+      </div>
+    </div>
+    <div class="art" aria-hidden="true">
+      <div class="rail">
+        <svg viewBox="0 0 400 400" fill="none" stroke="currentColor" stroke-width="1.4">
+          <g opacity=".16" stroke="#ece5d5">
+            <line x1="70" y1="40" x2="70" y2="360"/><line x1="130" y1="40" x2="130" y2="360"/>
+            <line x1="190" y1="40" x2="190" y2="360"/><line x1="250" y1="40" x2="250" y2="360"/>
+            <line x1="310" y1="40" x2="310" y2="360"/>
+          </g>
+          <path d="M110 300 C 150 210, 150 150, 200 130 S 275 175, 300 105"
+                stroke="#4a9e94" stroke-width="2" stroke-dasharray="6 7" opacity=".85"/>
+          <g fill="#ece5d5">
+            <circle cx="110" cy="300" r="9" opacity=".22"/><circle cx="200" cy="130" r="9" opacity=".22"/><circle cx="300" cy="105" r="9" opacity=".22"/>
+          </g>
+          <g fill="#c8452f">
+            <circle cx="152" cy="238" r="6"/><circle cx="200" cy="130" r="6"/><circle cx="258" cy="146" r="6"/>
+          </g>
+          <path d="M120 340 C 140 322, 150 336, 172 328 C 196 320, 206 342, 232 334"
+                stroke="#ece5d5" stroke-width="9" stroke-linecap="round" opacity=".9"/>
+        </svg>
+      </div>
+      <div class="seal">执</div>
+    </div>
+  </section>
+</div>
+
+<!-- 铁律 -->
+<section id="law">
+  <div class="wrap">
+    <div class="sec-head reveal">
+      <div class="kicker">Product law</div>
+      <h2>铁律不是「AI 不能写正文」，<br>而是「AI 的一切产出都只是提案」</h2>
+      <p>包括整章草稿。作者采纳之前不落盘，采纳时自动留快照可回滚。完成与否以磁盘为准，不信模型口头声明。</p>
+    </div>
+    <div class="law">
+      <div class="law-col reveal">
+        <h3>AI 可以</h3>
+        <div class="sub">全部以提案形式交付，进收件箱等你处理</div>
+        <ul class="yes">
+          <li>构建核心大纲与事件时间线（作者真相 / 读者已知双栏）</li>
+          <li>盘点伏笔、登记埋点（F 编号、五档节奏、种下原文）</li>
+          <li>搭章节骨架：场景层节拍 + 章尾钩子 + 硬交付 + 伏笔触点合同</li>
+          <li>规划卷级弧光（20–40 章路标 + 伏笔收支表 + 期待感账）</li>
+          <li>写整章草稿、按你的意见修订草稿</li>
+          <li>提取记忆、一键召回上下文包与写作备忘</li>
+          <li>一键验证、全书连贯性审查（只查客观错误，只报告不代改）</li>
+          <li>埋点修复方案、大纲同步建议、去AI味逐处建议</li>
+        </ul>
+      </div>
+      <div class="law-col reveal">
+        <h3>AI 永远不可以</h3>
+        <div class="sub">这些不是提示词约定，是代码里没有那条路径</div>
+        <ul class="no">
+          <li>提案未经作者采纳就改任何台账、大纲或正文</li>
+          <li>替作者做正典决定（角色生死、世界规则、伏笔取舍）</li>
+          <li>在作者拒绝后保留数据</li>
+          <li>改正文而不留快照</li>
+          <li>声称「已完成 / 已保存 / 已采纳」——一切以落盘为准</li>
+          <li>用「风格好不好」的主观评价代替作者判断（审校只查客观错误）</li>
+        </ul>
+      </div>
+    </div>
+    <div class="banner reveal">
+      两个例外的边界也写死了：<b>骨架闸门</b>允许模型在同一轮里拿确定性检查结果自我修正，<b>一键成章</b>允许
+      草稿 → 审查 → 去AI味 自动串到底——但两者都<b>停在「采纳」之前</b>，骨架更不会被自动批准：
+      它是写前契约，属于正典决定，必须你亲自点头。
+    </div>
+  </div>
+</section>
+
+<!-- 能力 -->
+<section id="ability">
+  <div class="wrap">
+    <div class="sec-head reveal">
+      <div class="kicker">Capabilities</div>
+      <h2>把网文这门手艺，做成可执行的账</h2>
+      <p>创作法典不是往提示词里塞一段鸡汤，而是沉淀成代码能消费的知识与确定性检查——同一套法典既指导生成，也用来验收生成结果。</p>
+    </div>
+    <div class="grid">
+      <article class="card reveal">
+        <div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M4 5h7a2 2 0 0 1 2 2v12a2 2 0 0 0-2-2H4V5Z"/><path d="M20 5h-7a2 2 0 0 0-2 2v12a2 2 0 0 1 2-2h7V5Z"/></svg></div>
+        <h3>创作法典</h3>
+        <p>13 个流派档案（读者预期 / 题材禁区 / 可用爽点形态 / 开篇律 / 节奏参数 / 体系通胀控制）＋ 网文创作法（黄金三章、期待感管理、打脸循环、金手指代价律、卷弧、主角能动性）＋ 传统文学创作法（草蛇灰线、白描、意象、留白、视角距离、典型人物、春秋笔法、起承转合、文气、复调）。按能力裁剪后注入，不整本塞。</p>
+        <span class="tag">13 流派 · 7 种钩子形态</span>
+      </article>
+      <article class="card reveal">
+        <div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M12 3v18M5 8l7-5 7 5M5 16l7 5 7-5"/></svg></div>
+        <h3>卷骨架 · 章骨架</h3>
+        <p>先规划 20–40 章的卷级弧光（起承转合 + 章级路标 + 伏笔收支表 + 期待感账），认可后再逐章细化成节拍。每拍带场景层：视角贴着谁、地点、时间标记、在场人物、这一拍的转折。</p>
+        <span class="tag">写前契约</span>
+      </article>
+      <article class="card reveal">
+        <div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M4 12h5l2-6 3 12 2-6h4"/></svg></div>
+        <h3>骨架闸门</h3>
+        <p>批准之前用确定性代码给骨架打分（0–100）：到期伏笔有没有进合同、章尾钩子是否挂在具体物件上、连续几章是否同一种钩子（套版感）、视角有没有漂移、同一时间有没有人分身两地、字数预算合不合理。不合格直接回灌模型当轮自纠。</p>
+        <span class="tag">11 组检查 · 零 LLM 成本</span>
+      </article>
+      <article class="card reveal">
+        <div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg></div>
+        <h3>全书连贯性审查 ＋ 埋点修复</h3>
+        <p>死者复出、位置跳跃、人称漂移、时间线倒挂、伏笔台账烂账（种下原文对不上正文、兑现逾期、疑似已收未记账、动作日志指向不存在的章）。每条烂账都配一个<b style="color:var(--paper)">可一键采纳</b>的修复动作：补埋 / 改期 / 回收 / 搁置 / 放弃 / 校正原文 / 补登记。</p>
+        <span class="tag">20 类检查 · 只改台账不动正文</span>
+      </article>
+      <article class="card reveal">
+        <div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M3 17l6-6 4 4 8-8"/><path d="M21 7h-5v5"/></svg></div>
+        <h3>大纲实时对账</h3>
+        <p>大纲不该是建书时生成一次、之后越来越不可信的旧计划书。它把「计划」与「正文里实际发生的」逐事件对账：已发生 / 疑似偏移 / 未发生 / 已取消，再算剧情线健康度（健康 / 放缓 / 停滞 / 断线 / 待收束）与阶段完成度，产出更新提案。采纳后大纲才是活文档。</p>
+        <span class="tag">计划 vs 实际</span>
+      </article>
+      <article class="card reveal">
+        <div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M12 3c-3 4-7 5-7 9a7 7 0 0 0 14 0c0-4-4-5-7-9Z"/></svg></div>
+        <h3>去AI味</h3>
+        <p>25 项确定性检测（零成本、随打字更新）分三层：措辞层禁用词与「不是A而是B」、心理层认知动词堆叠与抽象名词密度、结构层段落等长 / 句长平坦 / 段首同构 / 对白占比 / 信息倾倒 / 转场缺失 / 万能过渡；再加网文命门（章末钩子空泛、情绪曲线平坦）。<b style="color:var(--paper)">还有反向保护</b>：把句子全打碎本身就是一种新指纹，同样报警。</p>
+        <span class="tag">25 检测器 · 三 pass · 逐条采纳</span>
+      </article>
+      <article class="card reveal">
+        <div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M13 2 4.5 13H11l-1 9 8.5-11H12l1-9Z"/></svg></div>
+        <h3>一键成章 · 分段写作</h3>
+        <p>⌘⇧W 真一键：草稿 → 一致性审查 → 去AI味 自动串到底，产出全进收件箱，停在采纳之前。3000 字以上的长章按骨架节拍切块，每块带着<b style="color:var(--paper)">上一块实际写出来的结尾</b>续写，非末块被明确要求「不要收束本章」，最后拼成一份草稿提案。</p>
+        <span class="tag">⌘⇧W · 600–2400 字/段</span>
+      </article>
+      <article class="card reveal">
+        <div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="7" cy="7" r="3"/><circle cx="17" cy="17" r="3"/><path d="M10 7h4a3 3 0 0 1 3 3v4"/></svg></div>
+        <h3>交叉记忆中枢</h3>
+        <p>双时态事实三元组（谁在从第几章起相信什么、什么时候失效）＋ 人物别名表，派生出人物关系图 / 剧情图 / 事件图三张可拖拽的图。写到 100 章不会忘第 3 章的钩子；「一键召回」按当前章造上下文包。</p>
+        <span class="tag">双时态 · 图谱</span>
+      </article>
+      <article class="card reveal">
+        <div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="3" y="4" width="18" height="14" rx="2"/><path d="M8 21h8"/></svg></div>
+        <h3>稿纸主权</h3>
+        <p>专注模式（⌘⇧F）全窗只剩稿纸；正文是权威纯 markdown，随时可以整个带走；删除即废纸篓可恢复；导出合并稿 / oh-story 目录回写 / 分卷 TXT；API Key 存 macOS 钥匙串，不落盘、不进仓库。</p>
+        <span class="tag">本地优先</span>
+      </article>
+    </div>
+  </div>
+</section>
+
+<!-- 账本 -->
+<section id="ledger">
+  <div class="wrap">
+    <div class="sec-head reveal">
+      <div class="kicker">What the ledger looks like</div>
+      <h2>账本长什么样</h2>
+      <p>下面是执笔真实的数据结构（不是界面截图，是它替你记的那本账）。每一块都是可校验的 JSON，作者也能直接读。</p>
+    </div>
+    <div class="ledger">
+      <div class="pane reveal">
+        <div class="bar"><span class="dot"></span>伏笔台账 · 一条逾期了</div>
+        <div class="body">
+          <dl class="kv">
+            <dt>编号</dt><dd>F01 —— 断刀上的「界」字</dd>
+            <dt>量级</dt><dd>大（跨卷）</dd>
+            <dt>节奏</dt><dd>即刻（约 3 章）</dd>
+            <dt>种下</dt><dd>第 1 章</dd>
+            <dt>最后推进</dt><dd>第 1 章 <span class="pill warn">已 5 章未动 → 过期</span></dd>
+            <dt>种下原文</dt><dd style="font-family:var(--serif)">「刀柄上刻着一个界字，笔画很深」</dd>
+          </dl>
+          <div class="quote">补埋 / 改期 / 回收 / 搁置 / 放弃 / 校正原文 / 补登记——每条烂账都配一个可采纳的动作；其中「补埋」故意<b style="color:var(--paper)">不</b>推进最后推进章，好让逾期警报一直响到你真的把它写进正文。</div>
+        </div>
+      </div>
+
+      <div class="pane reveal">
+        <div class="bar"><span class="dot"></span>章节骨架 · 一拍的场景层</div>
+        <div class="body">
+          <dl class="kv">
+            <dt>发生什么</dt><dd>老周追上来，交出半枚铜牌，说当年的事他知道一半</dd>
+            <dt>功能</dt><dd>埋伏笔 <span class="pill dim">[F02]</span></dd>
+            <dt>视角</dt><dd>沈砚（整章贴着谁写）</dd>
+            <dt>地点 / 时间</dt><dd>山道岔口 · 时间标记缺失</dd>
+            <dt>在场</dt><dd>沈砚，老周</dd>
+            <dt>转折</dt><dd>从隐瞒到松口</dd>
+            <dt>场景完整度</dt><dd><span class="pill ok">80%</span><span class="pill warn">闸门会追问缺的那一格</span></dd>
+          </dl>
+          <div class="quote">没有转折的拍是过渡，全章都是过渡就是注水；同一时间把同一个人放进两个地点，是 blocker。</div>
+        </div>
+      </div>
+
+      <div class="pane reveal">
+        <div class="bar"><span class="dot"></span>大纲对账 · 计划 vs 实际</div>
+        <div class="body">
+          <div class="flow" style="margin-bottom:14px">
+            <span class="n">E01</span> 计划第 1 章 <i>→</i> 已证实 <span class="pill ok">匹配度 100%</span>
+          </div>
+          <div class="flow" style="margin-bottom:14px">
+            <span class="n">E02</span> 计划第 3 章 <i>→</i> 实际第 5 章 <span class="pill warn">向后偏移 2 章 · 78%</span>
+          </div>
+          <div class="flow" style="margin-bottom:14px">
+            <span class="n">E03</span> 第 6 章骨架的章末钩子已把这条信息交给读者 <i>→</i> 建议标为「读者已知」<span class="pill dim">66%</span>
+          </div>
+          <div class="flow">
+            <span class="n">L02</span> 感情线连续 4 章没有推进 <i>→</i> 建议转入蛰伏 <span class="pill dim">70%</span>
+          </div>
+          <div class="quote">打分用 <span style="font-family:var(--mono);font-size:12.5px">max(Jaccard, 交集/短侧×0.85)</span>，消除长度不对称造成的误杀；摘要优先、正文兜底；每条建议都带人话理由与取证片段，让你看得出它凭什么这么判。</div>
+        </div>
+      </div>
+
+      <div class="pane reveal">
+        <div class="bar"><span class="dot"></span>双时态记忆 · 谁在什么时候知道什么</div>
+        <div class="body">
+          <dl class="kv">
+            <dt>沈砚</dt><dd>获得 断刀 <span class="pill dim">自第 1 章</span></dd>
+            <dt>沈砚</dt><dd>知道 刀被劈断 <span class="pill dim">自第 5 章</span></dd>
+            <dt>老周</dt><dd>知道 当年的事 <span class="pill warn">读者尚不知情 · 仅作者账本</span></dd>
+            <dt>别名</dt><dd>沈砚 ← 小砚 / 砚哥</dd>
+          </dl>
+          <div class="quote">事实带失效章，所以「第 4 章他左臂断了」不会在第 20 章又被他举起来——这类矛盾正是连贯性审查要抓的。</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- 数字 -->
+<section id="numbers">
+  <div class="wrap">
+    <div class="sec-head reveal">
+      <div class="kicker">Verification</div>
+      <h2>不打开界面也能证明它没坏</h2>
+      <p>项目自带一个无头自检 CLI 和一个 mock 模型端点。前者跑纯函数与内存账本，后者把「宿主交工具面 → 模型回调工具 → 落成提案 → 采纳 → 落盘」整条链变成可重复回归——不需要 API Key。</p>
+    </div>
+    <div class="stats">
+      <div class="stat reveal"><div class="num">280</div><div class="lbl">无头自检全通过</div><div class="src">ZhiBiCli · EXIT=0</div></div>
+      <div class="stat reveal"><div class="num">94</div><div class="lbl">宿主往返回归</div><div class="src">mock OpenAI 端点 · 零 Key</div></div>
+      <div class="stat reveal"><div class="num">25<em>/20</em></div><div class="lbl">去AI味检测器 / 连贯性检查类</div><div class="src">全部零 LLM 成本</div></div>
+      <div class="stat reveal"><div class="num">12</div><div class="lbl">AI 能力，全部只出提案</div><div class="src">每项都有 propose_* 生产者</div></div>
+    </div>
+    <p class="note reveal" style="margin-top:26px;color:var(--paper-faint);font-size:13.5px">
+      这些数字是仓库里的自检跑出来的，不是宣传口径。自检里专门有一节守「老 JSON 向后兼容」——
+      新增字段如果没配显式解码器，用户磁盘上既有的大纲和骨架会整份解不出来、静默丢失。
+    </p>
+  </div>
+</section>
+
+<!-- 技术 -->
+<section id="stack">
+  <div class="wrap">
+    <div class="sec-head reveal">
+      <div class="kicker">Under the hood</div>
+      <h2>技术取向</h2>
+    </div>
+    <div class="stack reveal">
+      <div><span class="k">界面</span><span class="v">SwiftUI（macOS 14+），原生 AppKit 混排：稿纸用 <code>NSTextView</code> 保住中文输入与富文本渲染，Markdown 只读预览走 TextKit 1 以支持表格</span></div>
+      <div><span class="k">Agent 基座</span><span class="v">按 fx / libfx 的模型在 Swift 内同构实现（会话、流式事件、checkpoint 由宿主持久化）；传输走 OpenAI 兼容 SSE + tool-calling，DeepSeek / GLM / Kimi / MiniMax / Ollama 换 baseURL 即换</span></div>
+      <div><span class="k">确定性引擎</span><span class="v">验证、连贯性审查、大纲对账、骨架闸门、去AI味扫描、记忆图谱——全部零 LLM 成本，随时可跑、结果可复现、可被自检钉死</span></div>
+      <div><span class="k">存储</span><span class="v">一个 <code>.zhibi</code> 目录就是全部：正文是权威 markdown，结构是 JSON，原子落盘、快照可回滚、无数据库、无云端</span></div>
+      <div><span class="k">凭据</span><span class="v">API Key 存 macOS 钥匙串，不写进配置文件、不进仓库、不进日志</span></div>
+      <div><span class="k">工程</span><span class="v"><code>project.yml</code> + xcodegen 生成 Xcode 工程；SwiftPM 依赖；Debug / Release 与 CLI 三套 target 全部 CI 可无头构建</span></div>
+    </div>
+  </div>
+</section>
+
+<!-- 获取 -->
+<section id="get">
+  <div class="wrap">
+    <div class="sec-head reveal">
+      <div class="kicker">Get it</div>
+      <h2>怎么跑起来</h2>
+      <p>目前从源码构建，还没有签名好的安装包。</p>
+    </div>
+    <div class="get">
+      <pre class="reveal"><span class="c"># 1. 生成 Xcode 工程</span>
+brew install xcodegen
+xcodegen generate
+
+<span class="c"># 2. 构建 App（执笔.app）</span>
+<span class="p">xcodebuild</span> -scheme ZhiBi -configuration Release \
+  -skipMacroValidation build
+
+<span class="c"># 3. 无头自检（不打开 GUI、不碰真实数据）</span>
+<span class="p">xcodebuild</span> -scheme ZhiBiCli -configuration Debug \
+  -skipMacroValidation build
+ZhiBiCli                    <span class="c"># → 280 项全通过</span>
+
+<span class="c"># 4. 不需要 Key 也验一次整条 agent 链路</span>
+python3 Scripts/mock_model_server.py 8799 /tmp/zbdump &amp;
+ZhiBiCli --mock-agent http://127.0.0.1:8799/v1 /tmp/zbdump
+                            <span class="c"># → 94 项</span></pre>
+      <div class="reveal">
+        <p class="note">
+          构建产物在 <code style="font-family:var(--mono);font-size:12.5px;color:var(--paper)">DerivedData/.../Release/执笔.app</code>，
+          直接 <code style="font-family:var(--mono);font-size:12.5px;color:var(--paper)">open</code> 就能用。
+          首次使用在「设置」里填一个 OpenAI 兼容端点的 API Key（存钥匙串），或者用 Ollama 完全本地跑。
+        </p>
+        <p class="note">
+          <strong>它现在是什么阶段：</strong>一个作者自己在用的工具，不是打磨过的商业产品。
+          界面会改，数据格式保证向后兼容——自检里有一整节专门守这条，因为丢稿子是不可原谅的。
+        </p>
+        <p class="note" style="margin-top:22px">
+          <a class="btn btn-ghost" href="https://github.com/asdshuaishuai/zhibi" target="_blank" rel="noopener">仓库 &amp; 设计文档</a>
+        </p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap foot">
+    <img src="./assets/icon-256.png" alt="" width="22" height="22" style="border-radius:5px">
+    <span>执笔 ZhiBi · 人写正文，AI 理账</span>
+    <a href="https://github.com/asdshuaishuai/zhibi" target="_blank" rel="noopener">GitHub</a>
+    <a href="https://github.com/asdshuaishuai/zhibi/blob/main/ARCHITECTURE.md" target="_blank" rel="noopener">架构文档</a>
+    <a href="https://github.com/asdshuaishuai/zhibi/blob/main/README.md" target="_blank" rel="noopener">功能说明</a>
+    <span style="margin-left:auto">macOS 14+ · 本地优先 · 无云端存储</span>
+  </div>
+</footer>
+</main>
+
+<script>
+  // 滚动淡入：无外部依赖，且尊重 prefers-reduced-motion（CSS 里已兜底）
+  (function () {
+    var els = document.querySelectorAll('.reveal');
+    if (!('IntersectionObserver' in window)) {
+      els.forEach(function (e) { e.classList.add('in'); });
+      return;
+    }
+    var io = new IntersectionObserver(function (entries) {
+      entries.forEach(function (en) {
+        if (en.isIntersecting) { en.target.classList.add('in'); io.unobserve(en.target); }
+      });
+    }, { rootMargin: '0px 0px -8% 0px', threshold: 0.05 });
+    els.forEach(function (e) { io.observe(e); });
+  })();
+</script>
+</body>
+</html>
