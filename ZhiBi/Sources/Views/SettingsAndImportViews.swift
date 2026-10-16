@@ -131,18 +131,43 @@ struct SettingsView: View {
         .formStyle(.grouped)
     }
 
-    // MARK: - 模型服务（目录 + 自定义端点 + Key）
+    // MARK: - 模型服务（端点来源二选一：预设目录 / 自定义端点）
+
+    /// 当前配置是否命中目录里的某个供应商（用于默认选中「预设」）
+    private var usingPreset: Bool {
+        !hub.providerID.isEmpty
+    }
 
     private var modelTab: some View {
         Form {
-            Section("Agent 基座（OpenAgentSDK）") {
-                Text("工具循环、流式与供应商传输都在本地进程内跑；模型侧走 OpenAI 兼容通道，DeepSeek / MiniMax / GLM / Kimi / Ollama 换 baseURL 即换。")
-                    .font(.caption).foregroundStyle(.secondary)
+            Picker("端点来源", selection: Binding(
+                get: { usingPreset ? 0 : 1 },
+                set: { source in
+                    if source == 0 {
+                        // 切回预设：恢复目录选中项（没有则选第一个支持工具调用的供应商）
+                        hub.syncSelection(baseURL: vm.config.baseURL, model: vm.config.model)
+                        if hub.providerID.isEmpty, let first = hub.providers.first {
+                            hub.selectProvider(first.id, config: vm.config)
+                        }
+                    } else {
+                        hub.providerID = ""
+                        hub.modelID = ""
+                    }
+                })) {
+                Text("预设（models.dev 目录）").tag(0)
+                Text("自定义端点").tag(1)
             }
-            catalogSection
-            Section("自定义端点（不来自目录，如局域网 Ollama）") {
-                TextField("Base URL", text: $vm.config.baseURL, onCommit: { hub.syncSelection(baseURL: vm.config.baseURL, model: vm.config.model) })
-                TextField("模型 ID", text: $vm.config.model)
+            .pickerStyle(.segmented)
+
+            if usingPreset {
+                catalogSection
+            } else {
+                Section("自定义端点（OpenAI 兼容，如局域网 Ollama）") {
+                    TextField("Base URL", text: $vm.config.baseURL)
+                    TextField("模型 ID", text: $vm.config.model)
+                    Text("任何 OpenAI 兼容服务都可用；本机 Ollama 走 http://127.0.0.1:11434/v1。")
+                        .font(.caption2).foregroundStyle(.tertiary)
+                }
             }
             Section("API Key") {
                 SecureField("API Key", text: $vm.config.apiKey)
@@ -243,8 +268,7 @@ struct SettingsView: View {
                             .textSelection(.enabled)
                     }
                 } else {
-                    Text("当前为自定义端点配置；从上方选择供应商可一键套用其端点与模型。")
-                        .font(.caption2).foregroundStyle(.tertiary)
+                    Text("选一个供应商即可套用其端点与模型。").font(.caption2).foregroundStyle(.tertiary)
                 }
             }
         }
