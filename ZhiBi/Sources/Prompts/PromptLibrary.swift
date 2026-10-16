@@ -23,6 +23,16 @@ enum PromptLibrary {
         switch capability {
         case .framework:
             return "为新书搭建初始框架：主线故事线 + 关键事件时间线 + 背景设定文档。分别用 propose_storylines / propose_outline_events / propose_canon 提案，全部提交给作者审阅。"
+        case .topicScan:
+            return "选题调研：从作者提供的平台/榜单/题材素材里提炼共性（题材方向/人设与开篇/可验证的开书建议），给出 2-3 个开书方向与依据。"
+        case .analyze:
+            return "拆书：对作者给的参考文本，从开篇钩子、人物冲突、章尾悬念、节奏四个维度拆解，每个判断都指出对应原文位置。"
+        case .organize:
+            return "整理旧稿：把散落在各章的信息整理成三类可接续的工程资料——设定与人物 / 已发生的剧情 / 后续追踪（未解伏笔）。用 propose_canon（2-4 篇）与 propose_clues 提案，作者确认后再续写。"
+        case .coverBrief:
+            return "封面设计提案：基于书名/署名/题材氛围/画面方向，产出可直接交给画师或图像模型的封面设计说明。用 propose_memo 提案。"
+        case .shortStory:
+            return "短篇成稿：围绕单一核心冲突写短篇——起冲突/推转折/落结局，转折有因果，不加无关支线。先给大纲再给全文，用 propose_draft 提交。"
         case .outlineTimeline:
             return "构建核心大纲：故事线 + 事件时间线。用 propose_storylines 与 propose_outline_events 提案。"
         case .clueLedger:
@@ -75,6 +85,129 @@ enum PromptLibrary {
         3. 每个事件必须写两条：objective_fact 是"作者真相"（客观发生了什么，含隐瞒的底牌）；reader_knowledge 是"读者已知"（读者此刻被告知了什么）。未揭晓的真相 revealed=false——这是悬念管理的基础。
         4. 主动制造"还没兑现但快要兑现"的缺口；重大反转要有前置伏笔位。
         5. 赌注递增：每个阶段的核心冲突比上一阶段更重。
+        """
+    }
+
+    // MARK: - 选题（story-long-scan：开书前的方向调研）
+
+    static func topicScanTask(material: String, ownAssets: String) -> String {
+        """
+        作者想开一本新书，先做选题调研。素材是作者从平台/榜单整理来的原始信息，可能很杂。
+
+        ## 作者提供的素材
+        \(material.isEmpty ? "（作者还没贴素材——请基于通行的网文市场常识给出保守建议，并注明'需作者补充榜单素材后复核'）" : String(material.prefix(8000)))
+
+        ## 作者手里的资产
+        \(ownAssets.isEmpty ? "（无，从零开始）" : ownAssets)
+
+        ## 输出（三段）
+        1. **题材方向**：素材里反复出现什么题材/设定/情绪点，哪些方向值得继续看。
+        2. **人设与开篇**：主角是什么人、开头什么冲突、读者为什么愿意往下看——列出共性套路与近年变化。
+        3. **开书建议**：结合作者资产给出 2-3 个候选方向；每个方向写清依据、目标读者、以及**需要先验证的地方**。
+
+        ## 纪律
+        - 共性来自多本作品的归纳，不要只盯一本的排名。
+        - 方向要能落地成一句话核心（作者可以直接拿去开书）。
+        """
+    }
+
+    // MARK: - 拆书（story-long-analyze：开头与节奏）
+
+    static func analyzeTask(referenceText: String, focus: String) -> String {
+        """
+        拆解作者提供的参考文本——好看的开头，拆开才知道为什么。
+
+        ## 参考文本
+        \(String(referenceText.prefix(12000)))
+
+        ## 拆解重点（作者指定）
+        \(focus.isEmpty ? "（不限定——按下面四维全覆盖）" : focus)
+
+        ## 四个维度（每个判断都要给原文位置：段落序号或原句摘抄）
+        1. **开篇钩子**：第一个疑问是怎么抛出来的？信息差/危机/反常，分别在第几段成立。
+        2. **人物冲突**：主角想要什么，被什么拦住？冲突是外部事件还是内部抉择。
+        3. **章尾悬念**：这段讲完后，读者为什么想翻页？钩子是什么类型（危机/反转/新信息）。
+        4. **节奏**：场景切换频率、信息释放密度、紧张与松弛的排布。
+
+        ## 输出
+        - 按维度分组；每条 = 判断 + 原文位置 + 一句「为什么成立」。
+        - 收尾给「带回自己故事」的迁移建议：换人物换处境，同类结构怎么复用。
+        - 纪律：钩子可以学，具体情节和原句不要抄。
+        """
+    }
+
+    // MARK: - 整理旧稿（story-import 的「整理成三类资料」步骤）
+
+    static func organizeLegacyTask(chapterDigest: String, knownFacts: String, knownClues: String) -> String {
+        """
+        这本书的正文已存在（导入或写了一半），账本还没建。把散落在章节里的信息整理成可接续的工程资料——先整理，作者核对后才续写。
+
+        ## 各章正文摘录（按章序）
+        \(chapterDigest.isEmpty ? "（还没有正文）" : chapterDigest)
+
+        ## 已知账本（可能为空）
+        事实：\(knownFacts.isEmpty ? "（无）" : knownFacts)
+        伏笔：\(knownClues.isEmpty ? "（无）" : knownClues)
+
+        ## 输出（三类，分开提案）
+        1. **propose_canon（2-4 篇）**：设定与人物——规则、关系、动机、当前状态。正文没写明的设定不要编：列成「待作者确认」清单放进对应篇目，标 tentative。
+        2. **propose_clues**：后续追踪——未解的伏笔、还没接的情节线；每条写 planted_chapter（首次出现的章）与 detail。
+        3. **propose_memo**：已发生剧情的时间线摘要（按章序一行一章：关键事件 + 出场人物）。
+
+        ## 纪律
+        - 只从正文提取明确写出的信息；推断要标「推断」。
+        - 缺口也是产出：哪里空白、哪里前后矛盾，单独列出让作者先确认。
+        """
+    }
+
+    // MARK: - 封面设计提案（story-cover 的文本侧：交给画师/图像模型的设计说明）
+
+    static func coverBriefTask(bookInfo: String, mood: String, direction: String) -> String {
+        """
+        给这本书出一份封面设计提案——文本侧设计说明，作者可以原样交给画师或图像模型。
+
+        ## 书籍信息
+        \(bookInfo)
+
+        ## 氛围要求
+        \(mood.isEmpty ? "（作者未指定——按题材惯例给保守方案）" : mood)
+
+        ## 画面方向（作者已想好的元素）
+        \(direction.isEmpty ? "（未指定——由你提案）" : direction)
+
+        ## 输出（一份完整设计说明）
+        1. **构图**：主体（人物/场景/物件）、视角、画面重心。
+        2. **配色**：主色/辅色/点缀（给具体色感描述，如「墨青底、朱砂点睛」）。
+        3. **文字排版**：书名位置与字体气质、署名位置、字号层级——强调书名与署名必须清晰可读、不压关键画面。
+        4. **氛围关键词**：5-8 个可直接投喂图像模型的标签。
+        5. **避雷**：要避免的元素（剧透画面/廉价感/元素堆砌）。
+        6. **两个方向**：保守版（题材惯例）与差异化版（同题材里更抓眼的一版）。
+        """
+    }
+
+    // MARK: - 短篇成稿（story-short-write：收紧冲突）
+
+    static func shortStoryTask(chapter n: Int, conflict: String, words: Int, canon: String) -> String {
+        """
+        写一篇短篇（作为第\(n)章的草稿提案）。短篇的纪律是把冲突收紧：全篇只围绕一个核心矛盾，每次转折都服务同一件事。
+
+        ## 核心冲突（作者指定，最高优先级）
+        \(conflict)
+
+        ## 篇幅
+        约 \(words) 字。转折要有因果——发现什么新事实、迫使人物改什么主意；不要靠结尾突然揭底。
+
+        ## 已有设定（可引用，不冲突）
+        \(canon.isEmpty ? "（无）" : String(canon.prefix(3000)))
+
+        ## 三步结构
+        1. **起冲突**：谁要做什么，谁不同意——开篇三段内成立。
+        2. **推转折**：新事实如何迫使人物改主意。
+        3. **落结局**：最终选择怎样回应开头——不要大团圆式硬拗。
+
+        ## 输出（propose_draft 一次提交）
+        - 先给 5 行以内大纲（三步各一行 + 章尾钩子一行），再给全文。
+        - 篇幅短，人物的选择也要写清楚。
         """
     }
 

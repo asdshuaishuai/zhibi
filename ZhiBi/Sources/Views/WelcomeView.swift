@@ -41,6 +41,7 @@ struct WelcomeView: View {
     @ObservedObject var vm: AppViewModel
     @AppStorage("shelfLayout") private var shelfLayout: ShelfLayout = .grid
     @State private var showCreate = false
+    @State private var showTopicScan = false
     @State private var projectPendingDelete: ProjectRef?
     @State private var newTitle = ""
     @State private var newGenre = ""
@@ -137,6 +138,13 @@ struct WelcomeView: View {
                         }
                         .zbGlassButton(prominent: true)
                         Button {
+                            showTopicScan = true
+                        } label: {
+                            Label("选题助手", systemImage: "lightbulb")
+                        }
+                        .zbGlassButton()
+                        .help("还没想好写什么？贴榜单/题材素材，AI 给 2-3 个开书方向（story-long-scan）")
+                        Button {
                             vm.requestImportViaPanel = true
                         } label: {
                             Label("导入", systemImage: "square.and.arrow.down")
@@ -151,6 +159,8 @@ struct WelcomeView: View {
                         VStack(spacing: 12) {
                             BookCoverTile(title: "始", size: 92)
                             Text("书架是空的").font(.title3).bold()
+                            Button("先去选题（看读者在看什么）") { showTopicScan = true }
+                                .buttonStyle(.link)
                             Text("新建一本，或导入你已有的 大纲 / 设定 / 追踪 / 正文 目录。")
                                 .font(.callout)
                                 .foregroundStyle(.secondary)
@@ -165,6 +175,10 @@ struct WelcomeView: View {
         }
         .sheet(isPresented: $showCreate) {
             createSheet
+        }
+        .sheet(isPresented: $showTopicScan) {
+            TopicScanSheet(vm: vm)
+                .frame(minWidth: ZBSpace.Sheet.wide, minHeight: 520)
         }
         // 关窗即清空表单：残留的书名/一句话核心最容易让人误建一本书
         .onChange(of: showCreate) { _, showing in

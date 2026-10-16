@@ -39,6 +39,14 @@ final class AIService: ObservableObject {
         switch capability {
         case .framework:
             return ["propose_storylines", "propose_outline_events", "propose_canon", "get_canon"]
+        case .topicScan, .coverBrief:
+            return ["propose_memo"]
+        case .analyze:
+            return ["propose_memo"]
+        case .organize:
+            return ["propose_canon", "propose_clues", "propose_memo", "get_chapter", "get_facts", "get_clues"]
+        case .shortStory:
+            return ["propose_draft", "get_canon"]
         case .outlineTimeline:
             return ["propose_storylines", "propose_outline_events", "get_outline", "get_canon"]
         case .clueLedger:
@@ -167,6 +175,121 @@ final class AIService: ObservableObject {
 
     /// 新书创建即触发：基于最小输入（书名/题材/一句话核心）搭主线 + 背景框架。
     /// 全部走提案通道，作者在收件箱审过才算数——机制与其它能力完全一致。
+    // MARK: - 选题（书架级：无 store，结果就地展示给作者参考）
+
+    /// 开书前的方向调研：不需要项目，AI 文本就地显示；作者自己决定开什么书。
+    func runTopicScanResearch(config: AgentConfig, material: String, ownAssets: String) async -> String? {
+        if let problem = validateConfig(config) {
+            lastError = problem
+            return nil
+        }
+        running = true
+        runningCapability = .topicScan
+        streamPreview = ""
+        lastError = nil
+        defer { running = false; runningCapability = nil }
+        let result = await runTextOnlyFree(config: config, capability: .topicScan,
+                                           userMessage: PromptLibrary.topicScanTask(material: material, ownAssets: ownAssets))
+        streamPreview = result ?? streamPreview
+        return result
+    }
+
+    /// 不依赖项目的纯文本通道（runTextOnly 需要 store 注入创作法典；书架级调研没有 store）
+    private func runTextOnlyFree(config: AgentConfig, capability: AICapability, userMessage: String) async -> String? {
+        do {
+            let agent = createAgent(options: AgentOptions(
+                apiKey: config.apiKey, model: config.model, baseURL: config.baseURL,
+                provider: .openai,
+                systemPrompt: PromptLibrary.systemInstruction(for: capability),
+                maxTurns: 2, permissionMode: .bypassPermissions, tools: []))
+            var filter = ThinkTagFilter()
+            var out = ""
+            for await message in agent.stream(userMessage) {
+                switch message {
+                case .partialMessage(let d): out += filter.push(d.text)
+                case .result(let d):
+                    out += filter.flush()
+                    if d.subtype != .success { lastError = d.text }
+                default: break
+                }
+            }
+            return out.trimmingCharacters(in: .whitespacesAndNewlines)
+        } catch {
+            lastError = error.localizedDescription
+            return nil
+        }
+    }
+
+    // MARK: - AI 工具箱四件（书内：拆书 / 整理旧稿 / 封面提案 / 短篇成稿）
+
+    /// 拆书：参考文本 → 钩子/冲突/悬念/节奏四维拆解（memo 提案，随书留存）
+    func runAnalyze(store: ProjectStore, config: AgentConfig, referenceText: String, focus: String) async {
+        guard !referenceText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            lastError = "先把参考文本贴进来（至少一段）。"
+            return
+        }
+        let canon = store.canonSections.map { "《\($0.title)》\($0.content)" }.joined(separator: "\n\n")
+        let message = PromptLibrary.analyzeTask(referenceText: referenceText, focus: focus)
+            + "\n\n## 本书语境（拆完的迁移建议要贴着它给）\n"
+            + "题材：\(store.project.genre)｜核心：\(store.project.premise)"
+            + (canon.isEmpty ? "" : "\n" + String(canon.prefix(2000)))
+        await run(capability: .analyze, store: store, config: config, chapter: nil, userMessage: message)
+    }
+
+    /// 整理旧稿：导入/写一半的书 → 三类工程资料提案（设定与人物/伏笔追踪/剧情时间线）
+    func runOrganize(store: ProjectStore, config: AgentConfig) async {
+        let digest = store.chapters.sorted { $0.number < $1.number }.compactMap { ch -> String? in
+            guard !ch.prose.isEmpty else { return nil }
+            return "第\(ch.number)章《\(ch.title)》：\(String(ch.prose.prefix(1200)))"
+        }.joined(separator: "\n\n")
+        let knownFacts = store.facts.map { "\($0.subject) \($0.predicate) \($0.object)（第\($0.fromChapter)章起）" }.joined(separator: "\n")
+        let knownClues = store.clues.map { "[\($0.id)] \($0.title)：\($0.detail)（\($0.status.rawValue)）" }.joined(separator: "\n")
+        await run(capability: .organize, store: store, config: config, chapter: nil,
+                  userMessage: PromptLibrary.organizeLegacyTask(
+                    chapterDigest: String(digest.prefix(30000)),
+                    knownFacts: String(knownFacts.prefix(3000)),
+                    knownClues: String(knownClues.prefix(3000))))
+    }
+
+    /// 拆书（文本变体：结果就地展示，作者决定是否存为备忘提案）
+    func runAnalyzeText(store: ProjectStore, referenceText: String, focus: String) async -> String? {
+        let canon = store.canonSections.map { "《\($0.title)》\($0.content)" }.joined(separator: "\n\n")
+        let message = PromptLibrary.analyzeTask(referenceText: referenceText, focus: focus)
+            + "\n\n## 本书语境（拆完的迁移建议要贴着它给）\n"
+            + "题材：\(store.project.genre)｜核心：\(store.project.premise)"
+            + (canon.isEmpty ? "" : "\n" + String(canon.prefix(2000)))
+        return await runTextOnly(store: store, config: AgentConfig.load(), capability: .analyze, userMessage: message)
+    }
+
+    /// 封面提案（文本变体：结果就地展示）
+    func runCoverBriefText(store: ProjectStore, mood: String, direction: String) async -> String? {
+        let title = store.project.title
+        let genre = store.project.genre.isEmpty ? "（未定）" : store.project.genre
+        let premise = store.project.premise.isEmpty ? "（未定）" : store.project.premise
+        let bookInfo = "书名：《\(title)》\n题材：\(genre)\n一句话核心：\(premise)"
+        return await runTextOnly(store: store, config: AgentConfig.load(), capability: .coverBrief,
+                                 userMessage: PromptLibrary.coverBriefTask(bookInfo: bookInfo, mood: mood, direction: direction))
+    }
+
+    /// 封面设计提案（文本侧：交给画师/图像模型的设计说明，memo 提案）
+    func runCoverBrief(store: ProjectStore, config: AgentConfig, mood: String, direction: String) async {
+        let bookInfo = """
+        书名：《\(store.project.title)》
+        题材：\(store.project.genre.isEmpty ? "（未定）" : store.project.genre)
+        一句话核心：\(store.project.premise.isEmpty ? "（未定）" : store.project.premise)
+        """
+        await run(capability: .coverBrief, store: store, config: config, chapter: nil,
+                  userMessage: PromptLibrary.coverBriefTask(bookInfo: bookInfo, mood: mood, direction: direction))
+    }
+
+    /// 短篇成稿：单一核心冲突 → 大纲+全文一份草稿提案（走既有审查/采纳流程）
+    func runShortStory(store: ProjectStore, config: AgentConfig, chapter n: Int, conflict: String, words: Int) async {
+        let canon = store.canonSections.map { "《\($0.title)》\($0.content)" }.joined(separator: "\n\n")
+        await run(capability: .shortStory, store: store, config: config, chapter: n,
+                  userMessage: PromptLibrary.shortStoryTask(chapter: n, conflict: conflict, words: words,
+                                                            canon: String(canon.prefix(3000))))
+    }
+
     func runBootstrapFramework(store: ProjectStore, config: AgentConfig, premise: String, notes: String = "") async {
         let canon = store.canonSections.map { "《\($0.title)》\($0.content)" }.joined(separator: "\n\n")
         await run(capability: .framework, store: store, config: config, chapter: nil,

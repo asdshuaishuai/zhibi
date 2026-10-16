@@ -91,48 +91,14 @@ struct SettingsView: View {
     @StateObject private var hub = ModelHubModel()
 
     var body: some View {
-        Form {
-            Section("写作目标") {
-                Stepper("每日目标：\(vm.dailyGoal) 字", value: $vm.dailyGoal, in: 200...20000, step: 100)
-            }
-            Section("外观") {
-                Picker("主题", selection: $vm.appearanceMode) {
-                    ForEach(AppearanceMode.allCases, id: \.self) { Text($0.rawValue).tag($0) }
-                }
-                .pickerStyle(.segmented)
-            }
-            catalogSection
-            Section("自定义端点（不来自目录，如局域网 Ollama）") {
-                TextField("Base URL", text: $vm.config.baseURL, onCommit: { hub.syncSelection(baseURL: vm.config.baseURL, model: vm.config.model) })
-                TextField("模型 ID", text: $vm.config.model)
-            }
-            Section("API Key 与上下文") {
-                SecureField("API Key（保存到 macOS 钥匙串，不落明文文件）", text: $vm.config.apiKey)
-                Stepper("上下文包预算：≈\(vm.config.contextTokenBudget) tokens", value: $vm.config.contextTokenBudget, in: 2000...32000, step: 1000)
-                Toggle("正文自动保存（永远先落盘）", isOn: $vm.config.autoSave)
-            }
-            HStack {
-                Spacer()
-                Button("保存设置") {
-                    vm.saveConfig()
-                    vm.store?.autoSaveEnabled = vm.config.autoSave
-                }
-                .buttonStyle(.borderedProminent)
-                .alert("API Key 没保存上", isPresented: Binding(
-                    get: { AgentConfig.lastKeySaveFailed },
-                    set: { if !$0 { AgentConfig.lastKeySaveFailed = false } })) {
-                    Button("好") {}
-                } message: {
-                    Text("钥匙串写入失败（钥匙串可能已锁定）。其余设置已保存，但重启后 API Key 不会生效。")
-                }
-            }
-            if let issue = AgentConfig.lastLoadIssue {
-                Label(issue, systemImage: "exclamationmark.triangle")
-                    .font(.caption).foregroundStyle(.orange)
-            }
+        TabView {
+            generalTab
+                .tabItem { Label("通用", systemImage: "gearshape") }
+            modelTab
+                .tabItem { Label("模型服务", systemImage: "cpu") }
+            generationTab
+                .tabItem { Label("生成与上下文", systemImage: "slider.horizontal.3") }
         }
-        .formStyle(.grouped)
-        .padding(0)
         .frame(width: ZBSpace.Sheet.standard, height: 560)
         .onAppear {
             hub.onPick = { entry in
@@ -147,8 +113,79 @@ struct SettingsView: View {
     }
 
     /// 模型目录选择（数据源 models.dev，架构对齐 ai-sdk 的 provider 抽象）
+    // MARK: - 通用（写作目标 + 外观）
+
+    private var generalTab: some View {
+        Form {
+            Section("写作目标") {
+                Stepper("每日目标：\(vm.dailyGoal) 字", value: $vm.dailyGoal, in: 200...20000, step: 100)
+            }
+            Section("外观") {
+                Picker("主题", selection: $vm.appearanceMode) {
+                    ForEach(AppearanceMode.allCases, id: \.self) { Text($0.rawValue).tag($0) }
+                }
+                .pickerStyle(.segmented)
+            }
+            HStack { Spacer(); saveButton }
+        }
+        .formStyle(.grouped)
+    }
+
+    // MARK: - 模型服务（目录 + 自定义端点 + Key）
+
+    private var modelTab: some View {
+        Form {
+            Section("Agent 基座（OpenAgentSDK）") {
+                Text("工具循环、流式与供应商传输都在本地进程内跑；模型侧走 OpenAI 兼容通道，DeepSeek / MiniMax / GLM / Kimi / Ollama 换 baseURL 即换。")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            catalogSection
+            Section("自定义端点（不来自目录，如局域网 Ollama）") {
+                TextField("Base URL", text: $vm.config.baseURL, onCommit: { hub.syncSelection(baseURL: vm.config.baseURL, model: vm.config.model) })
+                TextField("模型 ID", text: $vm.config.model)
+            }
+            Section("API Key") {
+                SecureField("API Key（保存到 macOS 钥匙串，不落明文文件）", text: $vm.config.apiKey)
+            }
+            HStack { Spacer(); saveButton }
+        }
+        .formStyle(.grouped)
+    }
+
+    // MARK: - 生成与上下文
+
+    private var generationTab: some View {
+        Form {
+            Section("生成与上下文") {
+                Stepper("上下文包预算：≈\(vm.config.contextTokenBudget) tokens", value: $vm.config.contextTokenBudget, in: 2000...32000, step: 1000)
+                Toggle("正文自动保存（永远先落盘）", isOn: $vm.config.autoSave)
+            }
+            HStack { Spacer(); saveButton }
+        }
+        .formStyle(.grouped)
+    }
+
+    private var saveButton: some View {
+        Button("保存设置") {
+            vm.saveConfig()
+            vm.store?.autoSaveEnabled = vm.config.autoSave
+        }
+        .buttonStyle(.borderedProminent)
+        .alert("API Key 没保存上", isPresented: Binding(
+            get: { AgentConfig.lastKeySaveFailed },
+            set: { if !$0 { AgentConfig.lastKeySaveFailed = false } })) {
+            Button("好") {}
+        } message: {
+            Text("钥匙串写入失败（钥匙串可能已锁定）。其余设置已保存，但重启后 API Key 不会生效。")
+        }
+    }
+
     private var catalogSection: some View {
         Section("模型目录（models.dev）") {
+            if let issue = AgentConfig.lastLoadIssue {
+                Label(issue, systemImage: "exclamationmark.triangle")
+                    .font(.caption).foregroundStyle(.orange)
+            }
             if hub.providers.isEmpty {
                 // 目录未就绪：离线兜底条目
                 VStack(alignment: .leading, spacing: 6) {

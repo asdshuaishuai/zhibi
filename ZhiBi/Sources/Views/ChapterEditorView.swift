@@ -15,6 +15,7 @@ struct ChapterEditorView: View {
     @State private var showRecall = false
     @State private var showPipeline = false
     @State private var showInbox = false
+    @State private var showToolbox = false
     @State private var bannerDismissed = false
 
     @AppStorage("focusMode") private var focusMode = false
@@ -98,6 +99,10 @@ struct ChapterEditorView: View {
         .sheet(isPresented: $showRecall) {
             RecallSheetView(vm: vm, store: store, chapterNumber: chapterNumber, directive: directive)
                 .frame(minWidth: ZBSpace.Sheet.wide, minHeight: 520)
+        }
+        .sheet(isPresented: $showToolbox) {
+            AIToolboxSheet(vm: vm, store: store, chapterNumber: chapterNumber)
+                .frame(minWidth: ZBSpace.Sheet.wide, minHeight: 560)
         }
     }
 
@@ -200,6 +205,14 @@ struct ChapterEditorView: View {
             .fixedSize()
 
             Button {
+                showToolbox = true
+            } label: {
+                Label("AI 工具箱", systemImage: "wrench.and.screwdriver")
+            }
+            .disabled(vm.ai.running)
+            .help("拆书 / 整理旧稿 / 封面提案 / 短篇成稿")
+
+            Button {
                 Task { await vm.ai.runSkeleton(store: store, config: vm.config, chapter: chapterNumber, directive: directive) }
             } label: {
                 Label("搭骨架", systemImage: "bone")
@@ -280,6 +293,13 @@ struct ChapterEditorView: View {
                     } else if vm.config.apiKey.isEmpty {
                         Text("这本还是空的。先去「设置」配 API Key，回来一句话搭框架；或者直接开写第一章。")
                             .font(.caption)
+                    } else if store.canonSections.isEmpty && store.clues.isEmpty {
+                        // 有正文没账本：导入的旧书，先整理再续写（story-import 的整理步骤）
+                        Text("这本有正文但账本是空的——先让 AI 整理旧稿（设定与人物 / 剧情时间线 / 伏笔追踪），核对后再续写。")
+                            .font(.caption)
+                        Button("整理旧稿") { showToolbox = true }
+                            .controlSize(.small).buttonStyle(.borderedProminent)
+                            .disabled(vm.ai.running)
                     } else {
                         Text("这本还是空的。")
                             .font(.caption)

@@ -7,6 +7,11 @@ import Foundation
 
 enum AICapability: String, Codable, CaseIterable {
     case framework = "搭建框架"
+    case topicScan = "选题方向"
+    case analyze = "拆书"
+    case organize = "整理旧稿"
+    case coverBrief = "封面提案"
+    case shortStory = "短篇成稿"
     case outlineTimeline = "大纲事件时间线"
     case clueLedger = "线索埋点台账"
     case chapterSkeleton = "章节骨架"

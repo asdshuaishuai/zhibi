@@ -1015,6 +1015,47 @@ func roundThreeTests() async throws {
 
 try await roundThreeTests()
 
+// MARK: - 19. 五个新能力（对标荔枝 8 Skill：scan/analyze/organize/cover/short）
+
+MainActor.assumeIsolated {
+    let font = NSFont.systemFont(ofSize: 14)
+    // prompt builder 非空 + 关键纪律词在位
+    check("选题 prompt", PromptLibrary.topicScanTask(material: "悬疑榜单", ownAssets: "想写都市").contains("开书建议"))
+    check("拆书 prompt", PromptLibrary.analyzeTask(referenceText: "参考文本", focus: "").contains("开篇钩子")
+          && PromptLibrary.analyzeTask(referenceText: "x", focus: "").contains("原文位置"))
+    check("整理旧稿 prompt", PromptLibrary.organizeLegacyTask(chapterDigest: "第一章摘要", knownFacts: "", knownClues: "")
+          .contains("propose_canon") && PromptLibrary.organizeLegacyTask(chapterDigest: "d", knownFacts: "", knownClues: "").contains("待作者确认"))
+    check("封面提案 prompt", PromptLibrary.coverBriefTask(bookInfo: "书名《x》", mood: "", direction: "").contains("两个方向"))
+    check("短篇 prompt", PromptLibrary.shortStoryTask(chapter: 1, conflict: "姐弟争老宅", words: 6000, canon: "")
+          .contains("起冲突") && PromptLibrary.shortStoryTask(chapter: 1, conflict: "c", words: 6000, canon: "").contains("propose_draft"))
+    // 中文数字溢出保护不回归（顺带钉住）
+    check("中文数字截断保护", ImportService.chineseNumeral(String(repeating: "九", count: 12)) >= 0)
+}
+
+// organize 采纳流：canon 提案 + memo 时间线落库
+@MainActor
+func organizeFlowTests() async throws {
+    let st = ProjectStore(rootURL: URL(fileURLWithPath: "/tmp/zhibi-org-\(UUID().uuidString).zhibi"))
+    st.ensureChapter(1)
+    st.updateChapter(1, countWords: false) { $0.prose = "紫渊在烧掉的巷子里跑，身后是死士。" }
+    let tools = NovelTools.all(store: st)
+    // AI 按整理旧稿的产出形态：canon 2 篇 + memo 时间线
+    _ = try? await tools.first { $0.name == "propose_canon" }?.handler("""
+    {"docs":[{"title":"设定与人物","content":"紫渊：无器之人，被追杀。","certainty":"tentative"},
+             {"title":"待作者确认","content":"追杀者身份未写明。","certainty":"blank"}]}
+    """)
+    _ = try? await tools.first { $0.name == "propose_memo" }?.handler("""
+    {"text":"第1章：巷战逃亡。"}
+    """)
+    let pending = st.proposals.filter { $0.status == .pending }
+    check("整理产出两条提案", pending.count == 2, "得到 \(pending.map(\.title))")
+    for p in pending { st.acceptProposal(p.id) }
+    check("整理采纳后账本建成", st.canonSections.count == 2 && st.canonSections.contains { $0.certainty == .open })
+}
+
+try await organizeFlowTests()
+
+
 
 
 

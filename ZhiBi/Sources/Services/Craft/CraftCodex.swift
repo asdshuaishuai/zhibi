@@ -491,6 +491,20 @@ enum CraftCodex {
         """)
 
         switch capability {
+        case .topicScan, .coverBrief:
+            // 选题/封面是书外调研，创作法典只给题材惯例参照
+            parts.append(profile.taboos.map { "- " + $0 }.joined(separator: "\n"))
+        case .analyze:
+            parts.append("拆书是学结构不是抄情节：钩子可以学，具体情节和原句不要抄。")
+            parts.append(LiteraryCraft.structure)
+            parts.append(LiteraryCraft.rhythm)
+        case .organize:
+            parts.append(LiteraryCraft.hiddenThreads)
+            parts.append("只提取正文明确写出的信息；推断要标注；缺口列出来让作者确认。")
+        case .shortStory:
+            parts.append("短篇纪律：一个核心矛盾贯穿；转折要有因果；结局回应开头。")
+            parts.append(LiteraryCraft.structure)
+            parts.append(LiteraryCraft.negativeSpace)
         case .framework, .outlineTimeline:
             parts.append(WebNovelCraft.goldenThreeChapters)
             parts.append(WebNovelCraft.expectationManagement)
