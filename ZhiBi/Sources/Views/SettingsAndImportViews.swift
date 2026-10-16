@@ -145,7 +145,9 @@ struct SettingsView: View {
                 TextField("模型 ID", text: $vm.config.model)
             }
             Section("API Key") {
-                SecureField("API Key（保存到 macOS 钥匙串，不落明文文件）", text: $vm.config.apiKey)
+                SecureField("API Key", text: $vm.config.apiKey)
+                Text("保存到 macOS 钥匙串，不落明文文件；泄露后到供应商控制台重置即可。")
+                    .font(.caption2).foregroundStyle(.tertiary)
             }
             HStack { Spacer(); saveButton }
         }
