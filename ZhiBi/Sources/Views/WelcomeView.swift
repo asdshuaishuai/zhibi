@@ -305,6 +305,7 @@ struct ShelfBookCard: View {
     @State private var style: Int?
     @State private var hovering = false
     @State private var openingFlag = false
+    @State private var svgCover: NSImage?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var resolvedStyle: Int { style ?? CoverStyle.defaultIndex(for: ref.title) }
@@ -336,6 +337,7 @@ struct ShelfBookCard: View {
         .task {
             stats = await loadStats(url: ref.url)
             style = await loadCoverStyle(url: ref.url)
+            svgCover = await ShelfCoverLoader.load(url: ref.url)
             if let meta = await loadProjectMetaAsync(url: ref.url) {
                 let target = max(1, meta.targetChapters) * max(1, meta.chapterWordTarget)
                 await MainActor.run { stats?.target = target }
@@ -349,7 +351,17 @@ struct ShelfBookCard: View {
     }
 
     private var cover: some View {
-        BookCover(title: ref.title, style: resolvedStyle, width: 132, height: 182)
+        Group {
+            if let svgCover {
+                // AI 绘制的 SVG 封面优先（作者采用过的真封面）
+                SVGCoverLayer(image: svgCover)
+                    .frame(width: 132, height: 182)
+                    .clipShape(RoundedRectangle(cornerRadius: 9))
+                    .overlay(RoundedRectangle(cornerRadius: 9).strokeBorder(Color.white.opacity(0.18)))
+            } else {
+                BookCover(title: ref.title, style: resolvedStyle, width: 132, height: 182)
+            }
+        }
             .overlay(alignment: .bottom) {
                 if let frac = progressFraction {
                     GeometryReader { geo in
@@ -442,10 +454,19 @@ struct ShelfListRow: View {
 
     @State private var stats: ShelfStats?
     @State private var openingFlag = false
+    @State private var svgCover: NSImage?
 
     var body: some View {
         HStack(spacing: 12) {
-            BookCover(title: ref.title, style: CoverStyle.defaultIndex(for: ref.title), width: 42, height: 56)
+            Group {
+                if let svgCover {
+                    SVGCoverLayer(image: svgCover)
+                        .frame(width: 42, height: 56)
+                        .clipShape(RoundedRectangle(cornerRadius: 3))
+                } else {
+                    BookCover(title: ref.title, style: CoverStyle.defaultIndex(for: ref.title), width: 42, height: 56)
+                }
+            }
             VStack(alignment: .leading, spacing: 2) {
                 Text(ref.title).font(.callout.bold()).lineLimit(1)
                 if let stats, stats.chapters > 0 {

@@ -262,24 +262,35 @@ final class AIService: ObservableObject {
     }
 
     /// 封面提案（文本变体：结果就地展示）
-    func runCoverBriefText(store: ProjectStore, mood: String, direction: String) async -> String? {
+    func runCoverBriefText(store: ProjectStore, authorName: String, mood: String, direction: String) async -> String? {
         let title = store.project.title
         let genre = store.project.genre.isEmpty ? "（未定）" : store.project.genre
         let premise = store.project.premise.isEmpty ? "（未定）" : store.project.premise
         let bookInfo = "书名：《\(title)》\n题材：\(genre)\n一句话核心：\(premise)"
         return await runTextOnly(store: store, config: AgentConfig.load(), capability: .coverBrief,
-                                 userMessage: PromptLibrary.coverBriefTask(bookInfo: bookInfo, mood: mood, direction: direction))
+                                 userMessage: PromptLibrary.coverSVGTask(bookInfo: bookInfo, authorName: authorName, mood: mood, direction: direction))
     }
 
-    /// 封面设计提案（文本侧：交给画师/图像模型的设计说明，memo 提案）
+    /// 封面绘制（SVG 代码，免提案通道：结果就地预览，作者点采用才落盘）
+    func runCoverSVG(store: ProjectStore, authorName: String, mood: String, direction: String) async -> String? {
+        let title = store.project.title
+        let genre = store.project.genre.isEmpty ? "（未定）" : store.project.genre
+        let premise = store.project.premise.isEmpty ? "（未定）" : store.project.premise
+        let bookInfo = "书名：《\(title)》\n题材：\(genre)\n一句话核心：\(premise)"
+        return await runTextOnly(store: store, config: AgentConfig.load(), capability: .coverBrief,
+                                 userMessage: PromptLibrary.coverSVGTask(bookInfo: bookInfo, authorName: authorName,
+                                                                         mood: mood, direction: direction))
+    }
+
+    /// 封面设计提案（memo 提案通道；同样产出 SVG 代码，作者从备忘里复制采用）
     func runCoverBrief(store: ProjectStore, config: AgentConfig, mood: String, direction: String) async {
-        let bookInfo = """
-        书名：《\(store.project.title)》
-        题材：\(store.project.genre.isEmpty ? "（未定）" : store.project.genre)
-        一句话核心：\(store.project.premise.isEmpty ? "（未定）" : store.project.premise)
-        """
+        let authorName = ""   // 署名留空时 prompt 会省略署名文本；作者可在工具箱输入
+        let title = store.project.title
+        let genre = store.project.genre.isEmpty ? "（未定）" : store.project.genre
+        let premise = store.project.premise.isEmpty ? "（未定）" : store.project.premise
+        let bookInfo = "书名：《\(title)》\n题材：\(genre)\n一句话核心：\(premise)"
         await run(capability: .coverBrief, store: store, config: config, chapter: nil,
-                  userMessage: PromptLibrary.coverBriefTask(bookInfo: bookInfo, mood: mood, direction: direction))
+                  userMessage: PromptLibrary.coverSVGTask(bookInfo: bookInfo, authorName: authorName, mood: mood, direction: direction))
     }
 
     /// 短篇成稿：单一核心冲突 → 大纲+全文一份草稿提案（走既有审查/采纳流程）

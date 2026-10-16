@@ -19,14 +19,14 @@ struct AIToolboxSheet: View {
 
         case analyze = "拆书"
         case organize = "整理旧稿"
-        case coverBrief = "封面提案"
+        case coverSVG = "封面绘制"
         case shortStory = "短篇成稿"
 
         var icon: String {
             switch self {
             case .analyze: return "text.magnifyingglass"
             case .organize: return "tray.and.arrow.down"
-            case .coverBrief: return "photo.artframe"
+            case .coverSVG: return "photo.artframe"
             case .shortStory: return "doc.richtext"
             }
         }
@@ -35,7 +35,7 @@ struct AIToolboxSheet: View {
             switch self {
             case .analyze: return "贴一段参考文本（建议前 3 章），AI 从钩子/冲突/悬念/节奏四维拆解，每个判断给出原文位置。学结构，不抄情节。"
             case .organize: return "正文有了、账本还没建？AI 把散在各章的信息整理成三类资料：设定与人物 / 剧情时间线 / 伏笔追踪——作者核对后再续写。"
-            case .coverBrief: return "产出一份可直接交给画师或图像模型的封面设计说明：构图/配色/文字排版/氛围关键词/避雷，附保守与差异化两版。"
+            case .coverSVG: return "AI 直接绘制 SVG 封面（书名/署名/装饰一次成形）。预览满意点「采用为本书封面」，书架即用。"
             case .shortStory: return "围绕一个核心冲突写短篇：起冲突/推转折/落结局。产出大纲+全文一份草稿提案，走既有审查采纳流程。"
             }
         }
@@ -46,8 +46,11 @@ struct AIToolboxSheet: View {
     @State private var referenceText = ""
     @State private var analyzeFocus = ""
     // 封面
+    @State private var coverAuthor = ""
     @State private var coverMood = ""
     @State private var coverDirection = ""
+    @State private var coverSVGCode = ""
+    @State private var adopted = false
     // 短篇
     @State private var shortConflict = ""
     @State private var shortWords = 6000
@@ -105,7 +108,7 @@ struct AIToolboxSheet: View {
         switch tool {
         case .analyze: return "拆解"
         case .organize: return "整理成三类资料"
-        case .coverBrief: return "出封面提案"
+        case .coverSVG: return "绘制封面"
         case .shortStory: return "写短篇草稿"
         }
     }
@@ -114,7 +117,7 @@ struct AIToolboxSheet: View {
         switch tool {
         case .analyze: return referenceText.trimmingCharacters(in: .whitespacesAndNewlines).count >= 50
         case .organize: return store.chapters.contains { !$0.prose.isEmpty }
-        case .coverBrief: return true
+        case .coverSVG: return true
         case .shortStory: return shortConflict.trimmingCharacters(in: .whitespaces).count >= 4
         }
     }
@@ -147,15 +150,17 @@ struct AIToolboxSheet: View {
                       + "正文没写明的设定 AI 会列为「待作者确认」，不会编。", systemImage: "checkmark.seal")
                     .font(.caption2).foregroundStyle(.tertiary)
             }
-        case .coverBrief:
+        case .coverSVG:
             VStack(alignment: .leading, spacing: ZBSpace.xs) {
                 Text("书名《\(store.project.title)》｜题材：\(store.project.genre.isEmpty ? "（未定）" : store.project.genre)")
                     .font(.caption).foregroundStyle(.secondary)
+                TextField("署名（可空）", text: $coverAuthor)
+                    .textFieldStyle(.roundedBorder)
                 TextField("氛围要求（如：压迫感、冷色调、史诗）", text: $coverMood)
                     .textFieldStyle(.roundedBorder)
                 TextField("画面方向（如：少年背影 + 断刀 + 雨夜；避免：剧透画面）", text: $coverDirection)
                     .textFieldStyle(.roundedBorder)
-                Text("产出是设计说明文本——交给画师或图像模型用；本应用不做图像生成。")
+                Text("产出为 SVG 代码，应用内直接渲染。预览满意点「采用为本书封面」。")
                     .font(.caption2).foregroundStyle(.tertiary)
             }
         case .shortStory:
@@ -192,7 +197,40 @@ struct AIToolboxSheet: View {
                     Text(line).font(.caption2).foregroundStyle(.secondary)
                 }
             }
-            if !resultText.isEmpty {
+            if tool == .coverSVG, !coverSVGCode.isEmpty {
+                // SVG 实时预览（600x800 缩到 180x240）+ 采用
+                HStack(alignment: .top, spacing: ZBSpace.sm) {
+                    SVGCoverLayer(image: previewImage)
+                        .frame(width: 180, height: 240)
+                        .clipShape(RoundedRectangle(cornerRadius: 8))
+                        .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(ZB.hairline))
+                    VStack(alignment: .leading, spacing: ZBSpace.xs) {
+                        Text("预览（600×800）").font(.caption).foregroundStyle(.secondary)
+                        Text("满意就采用——书架网格/列表立即换上这张封面；不满意可改氛围/画面再绘制一次。")
+                            .font(.caption2).foregroundStyle(.tertiary)
+                            .fixedSize(horizontal: false, vertical: true)
+                        HStack {
+                            Button(adopted ? "已是本书封面" : "采用为本书封面") {
+                                store.setCoverSVG(coverSVGCode)
+                                adopted = true
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .controlSize(.small)
+                            .disabled(adopted)
+                            Button("复制 SVG") {
+                                NSPasteboard.general.clearContents()
+                                NSPasteboard.general.setString(coverSVGCode, forType: .string)
+                            }
+                            .controlSize(.mini)
+                        }
+                        if adopted {
+                            Label("已采用——回书架即可看到新封面", systemImage: "checkmark.circle.fill")
+                                .font(.caption2).foregroundStyle(.green)
+                        }
+                    }
+                    Spacer()
+                }
+            } else if !resultText.isEmpty {
                 ScrollView {
                     Text(resultText)
                         .font(.caption)
@@ -208,12 +246,12 @@ struct AIToolboxSheet: View {
                         NSPasteboard.general.setString(resultText, forType: .string)
                     }
                     .controlSize(.mini)
-                    if tool == .analyze || tool == .coverBrief {
+                    if tool == .analyze {
                         Button(savedAsProposal ? "已存为备忘提案" : "存为备忘提案") {
                             Task {
                                 await store.addProposal(AIProposal(
-                                    capability: tool == .analyze ? .analyze : .coverBrief,
-                                    title: tool == .analyze ? "拆书报告" : "封面设计提案",
+                                    capability: .analyze,
+                                    title: "拆书报告",
                                     note: "AI 工具箱产出", payload: .memo(resultText)))
                                 savedAsProposal = true
                             }
@@ -232,6 +270,8 @@ struct AIToolboxSheet: View {
 
     private func run() {
         resultText = ""
+        coverSVGCode = ""
+        adopted = false
         savedAsProposal = false
         Task {
             switch tool {
@@ -240,13 +280,37 @@ struct AIToolboxSheet: View {
                 resultText = r ?? ""
             case .organize:
                 await vm.ai.runOrganize(store: store, config: vm.config)
-            case .coverBrief:
-                let r = await vm.ai.runCoverBriefText(store: store, mood: coverMood, direction: coverDirection)
-                resultText = r ?? ""
+            case .coverSVG:
+                let r = await vm.ai.runCoverSVG(store: store, authorName: coverAuthor,
+                                                mood: coverMood, direction: coverDirection)
+                if let code = Self.extractSVG(r ?? "") {
+                    coverSVGCode = code
+                } else {
+                    resultText = r ?? ""
+                    vm.ai.lastError = "AI 没有产出可解析的 SVG 代码块——点一次重试，或改写画面方向。"
+                }
             case .shortStory:
                 await vm.ai.runShortStory(store: store, config: vm.config,
                                           chapter: chapterNumber, conflict: shortConflict, words: shortWords)
             }
         }
+    }
+
+    /// 从 AI 输出中提取 ```svg / ``` 代码块；没有围栏时尝试截取 <svg…</svg>
+    static func extractSVG(_ text: String) -> String? {
+        if let start = text.range(of: "```svg"), let fence = text.range(of: "```", range: start.upperBound..<text.endIndex) {
+            let code = String(text[start.upperBound..<fence.lowerBound]).trimmingCharacters(in: .whitespacesAndNewlines)
+            if code.contains("<svg") { return code }
+        }
+        if let start = text.range(of: "<svg"), let end = text.range(of: "</svg>") {
+            return String(text[start.lowerBound...end.upperBound])
+        }
+        return nil
+    }
+
+    private var previewImage: NSImage {
+        CoverSVG.render(coverSVGCode, width: 180, height: 240)
+            ?? CoverSVG.render("<svg xmlns='http://www.w3.org/2000/svg' width='180' height='240'><rect width='180' height='240' fill='#333'/></svg>",
+                                       width: 180, height: 240)!
     }
 }

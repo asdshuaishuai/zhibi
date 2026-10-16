@@ -958,6 +958,61 @@ func roundTripTests() async throws {
 
 try await roundTripTests()
 
+// MARK: - 20. SVG 封面：提取/持久化/导出导入等价
+
+MainActor.assumeIsolated {
+    let font = NSFont.systemFont(ofSize: 14)
+    let aiOutput = """
+    给你的封面：
+    ```svg
+    <svg xmlns="http://www.w3.org/2000/svg" width="600" height="800" viewBox="0 0 600 800">
+      <rect width="600" height="800" fill="#14162b"/>
+      <text x="300" y="360" font-family="Songti SC" font-size="64" fill="#f0e6d2" text-anchor="middle">测试书名</text>
+    </svg>
+    ```
+    设计说明：深蓝底 + 暖白书名。
+    """
+    let code = CoverSVG.extractSVG(aiOutput)
+    check("SVG 代码块提取", code?.contains("<svg") == true && code?.contains("</svg>") == true)
+    check("SVG 无围栏时兜底提取", CoverSVG.extractSVG("前言 <svg xmlns=\"x\"><rect/></svg> 后记")?.hasPrefix("<svg") == true)
+    check("无 SVG 返回 nil", CoverSVG.extractSVG("只有文字，没有代码。") == nil)
+    // 渲染非空（NSImage 能解 AI 风格 SVG）
+    check("SVG 可渲染", code.flatMap { CoverSVG.render($0, width: 180, height: 240) } != nil)
+}
+
+@MainActor
+func svgCoverTests() async throws {
+    let st = ProjectStore(rootURL: URL(fileURLWithPath: "/tmp/zhibi-svg-\(UUID().uuidString).zhibi"))
+    st.ensureChapter(1)
+    let svg = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"600\" height=\"800\"><rect width=\"600\" height=\"800\" fill=\"#123\"/></svg>"
+    st.setCoverSVG(svg)
+    try? st.saveNow()
+    check("封面 SVG 落盘", FileManager.default.fileExists(atPath: st.rootURL.appendingPathComponent("cover.svg").path))
+    let reloaded = ProjectStore(rootURL: st.rootURL)
+    try? reloaded.load()
+    check("重启后封面保留", reloaded.coverSVG == svg)
+
+    // 导出→导入等价
+    let exportDir = try ExportService.exportOhStory(store: st).url
+    check("导出含封面 SVG", FileManager.default.fileExists(atPath: exportDir.appendingPathComponent("封面/cover.svg").path))
+    let scanned = ImportService.scan(exportDir)
+    check("导入扫描到封面 SVG", scanned.coverSVG == svg)
+    let dst = ProjectStore(rootURL: URL(fileURLWithPath: "/tmp/zhibi-svgdst-\(UUID().uuidString).zhibi"))
+    dst.ensureChapter(1)
+    ImportService.apply(scanned, into: dst)
+    check("导入后封面等价", dst.coverSVG == svg)
+    // 已有封面不被覆盖
+    let scanned2 = ImportService.scan(exportDir)
+    let dst2 = ProjectStore(rootURL: URL(fileURLWithPath: "/tmp/zhibi-svgdst2-\(UUID().uuidString).zhibi"))
+    dst2.ensureChapter(1)
+    dst2.setCoverSVG("<svg>自己的</svg>")
+    ImportService.apply(scanned2, into: dst2)
+    check("已有封面不被导入覆盖", dst2.coverSVG == "<svg>自己的</svg>")
+}
+
+try await svgCoverTests()
+
+
 // MARK: - 18. 三轮回合：异步加载快照 / 防抖序列化语义
 
 @MainActor
@@ -1025,7 +1080,7 @@ MainActor.assumeIsolated {
           && PromptLibrary.analyzeTask(referenceText: "x", focus: "").contains("原文位置"))
     check("整理旧稿 prompt", PromptLibrary.organizeLegacyTask(chapterDigest: "第一章摘要", knownFacts: "", knownClues: "")
           .contains("propose_canon") && PromptLibrary.organizeLegacyTask(chapterDigest: "d", knownFacts: "", knownClues: "").contains("待作者确认"))
-    check("封面提案 prompt", PromptLibrary.coverBriefTask(bookInfo: "书名《x》", mood: "", direction: "").contains("两个方向"))
+    check("封面 SVG prompt", PromptLibrary.coverSVGTask(bookInfo: "书名《x》", authorName: "", mood: "", direction: "").contains("<svg") && PromptLibrary.coverSVGTask(bookInfo: "书名《x》", authorName: "", mood: "", direction: "").contains("600") )
     check("短篇 prompt", PromptLibrary.shortStoryTask(chapter: 1, conflict: "姐弟争老宅", words: 6000, canon: "")
           .contains("起冲突") && PromptLibrary.shortStoryTask(chapter: 1, conflict: "c", words: 6000, canon: "").contains("propose_draft"))
     // 中文数字溢出保护不回归（顺带钉住）

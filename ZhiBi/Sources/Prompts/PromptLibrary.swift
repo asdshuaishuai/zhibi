@@ -162,12 +162,13 @@ enum PromptLibrary {
 
     // MARK: - 封面设计提案（story-cover 的文本侧：交给画师/图像模型的设计说明）
 
-    static func coverBriefTask(bookInfo: String, mood: String, direction: String) -> String {
+    static func coverSVGTask(bookInfo: String, authorName: String, mood: String, direction: String) -> String {
         """
-        给这本书出一份封面设计提案——文本侧设计说明，作者可以原样交给画师或图像模型。
+        为这本书绘制一张封面——直接输出 **SVG 代码**（应用内渲染，作者采用后成为书架封面）。
 
         ## 书籍信息
         \(bookInfo)
+        署名：\(authorName.isEmpty ? "（未署名，省略署名文本）" : authorName)
 
         ## 氛围要求
         \(mood.isEmpty ? "（作者未指定——按题材惯例给保守方案）" : mood)
@@ -175,13 +176,13 @@ enum PromptLibrary {
         ## 画面方向（作者已想好的元素）
         \(direction.isEmpty ? "（未指定——由你提案）" : direction)
 
-        ## 输出（一份完整设计说明）
-        1. **构图**：主体（人物/场景/物件）、视角、画面重心。
-        2. **配色**：主色/辅色/点缀（给具体色感描述，如「墨青底、朱砂点睛」）。
-        3. **文字排版**：书名位置与字体气质、署名位置、字号层级——强调书名与署名必须清晰可读、不压关键画面。
-        4. **氛围关键词**：5-8 个可直接投喂图像模型的标签。
-        5. **避雷**：要避免的元素（剧透画面/廉价感/元素堆砌）。
-        6. **两个方向**：保守版（题材惯例）与差异化版（同题材里更抓眼的一版）。
+        ## SVG 技术规范（严格遵守）
+        1. 一个完整独立的 `<svg>` 根元素：`xmlns="http://www.w3.org/2000/svg"`，`width="600" height="800" viewBox="0 0 600 800"`（3:4 网文封面比例）。
+        2. 书名文字：大号、清晰，`font-family="Songti SC, STSong, serif"`（或黑体系），`text-anchor="middle"`；署名小一号放底部。**书名与署名必须与「书籍信息」逐字一致，不得改字**。
+        3. 背景：渐变（linearGradient/radialGradient）+ 装饰形状（山影/月轮/光斑/线条，2-5 层，按题材气质取材）。
+        4. 只用 SVG 原生元素：rect/circle/ellipse/path/polygon/defs/linearGradient/radialGradient/text/tspan/g。**禁止** external image/href、滤镜 filter、动画、脚本。
+        5. 配色克制：主色 1 + 辅色 1 + 点缀 1；文字与背景对比度足够（小图也要读得清）。
+        6. 总大小控制在 20KB 以内；输出**只有一个 ```svg 代码块**，块后可附 3-5 行设计说明。
         """
     }
 

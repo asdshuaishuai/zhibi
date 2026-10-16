@@ -22,6 +22,7 @@ struct ImportItem: Identifiable {
 
 struct ImportSummary {
     var detectedLayout: String
+    var coverSVG: String?
     var items: [ImportItem] = []
     /// 从 oh-story 追踪 JSON 结构化提取
     var stages: [Stage] = []
@@ -121,6 +122,13 @@ enum ImportService {
                     summary.items.append(ImportItem(kind: .chapter, chapterNumber: num, title: title,
                                                     content: Disk.readText(f), sourceName: "正文/\(f.lastPathComponent)"))
                 }
+            }
+        }
+        // 封面 SVG（执笔导出目录；根目录 cover.svg 也认）
+        for candidate in [url.appendingPathComponent("封面/cover.svg"), url.appendingPathComponent("cover.svg")] {
+            if let svg = try? String(contentsOf: candidate, encoding: .utf8), svg.contains("<svg") {
+                summary.coverSVG = svg
+                break
             }
         }
         // 追踪 JSON：结构化提取书名 / 阶段 / 活跃伏笔 / 下一章承诺
@@ -423,6 +431,10 @@ enum ImportService {
             dismissed.append(key)
         }
         store.dismissedConflicts = dismissed
+        // 封面 SVG（目标书没有才带入；不覆盖已有封面）
+        if let svg = summary.coverSVG, store.coverSVG == nil {
+            store.setCoverSVG(svg)
+        }
         // 项目级元数据：空书（未命名）才接管，避免覆盖作者已填的
         if store.project.title == "未命名作品" { store.project.title = titleGuess(from: summary) }
         if store.project.genre.isEmpty { store.project.genre = summary.projectGenre }

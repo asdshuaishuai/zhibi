@@ -15,6 +15,8 @@ final class ProjectStore: ObservableObject {
     @Published var facts: [MemoryFact] = []
     @Published var characterAliases: [CharacterAlias] = []
     @Published var dismissedConflicts: [String]? = []
+    /// 本书封面（AI 绘制的 SVG，作者采用后持久化为 cover.svg）
+    @Published var coverSVG: String?
     @Published var proposals: [AIProposal] = []
     /// 最近一次保存失败原因（磁盘满/权限等）——UI 状态条展示
     @Published var lastSaveError: String?
@@ -56,6 +58,7 @@ final class ProjectStore: ObservableObject {
     /// 读盘快照：只读、可整体放后台（不触碰 @MainActor 的 self）
     struct LoadSnapshot {
         var project: NovelProject
+        var coverSVG: String?
         var canonSections: [CanonSection]
         var storylines: [Storyline]
         var timelineEvents: [TimelineEvent]
@@ -68,6 +71,11 @@ final class ProjectStore: ObservableObject {
 
         static func capture(rootURL: URL) throws -> LoadSnapshot {
             let project = try Disk.readJSON(NovelProject.self, from: ProjectLayout.projectFile(rootURL))
+        let coverSVG: String? = {
+            let f = rootURL.appendingPathComponent("cover.svg")
+            guard FileManager.default.fileExists(atPath: f.path) else { return nil }
+            return try? String(contentsOf: f, encoding: .utf8)
+        }()
             let sectionsFile = ProjectLayout.canonDir(rootURL).appendingPathComponent("sections.json")
             let canon: [CanonSection]
             if FileManager.default.fileExists(atPath: sectionsFile.path) {
@@ -102,7 +110,7 @@ final class ProjectStore: ObservableObject {
                     loaded.append(ch)
                 }
             }
-            return LoadSnapshot(project: project, canonSections: canon, storylines: storylines,
+            return LoadSnapshot(project: project, coverSVG: coverSVG, canonSections: canon, storylines: storylines,
                                 timelineEvents: timelineEvents, stages: stages, clues: clues, memory: memory,
                                 proposals: proposals, chapters: loaded, quarantineNotes: quarantineNotes)
         }
@@ -112,6 +120,7 @@ final class ProjectStore: ObservableObject {
     @discardableResult
     func applySnapshot(_ snapshot: LoadSnapshot) throws -> Bool {
         self.project = snapshot.project
+        self.coverSVG = snapshot.coverSVG
         self.canonSections = snapshot.canonSections
         self.storylines = snapshot.storylines
         self.timelineEvents = snapshot.timelineEvents
@@ -229,6 +238,10 @@ final class ProjectStore: ObservableObject {
             try Disk.write(Data(ch.prose.utf8), to: ProjectLayout.proseFile(rootURL, number: ch.number))
         }
         try Disk.writeJSON(project, to: ProjectLayout.projectFile(rootURL))
+        // 封面 SVG（AI 绘制/作者采用后落盘；无封面不写文件）
+        if let svg = coverSVG {
+            try Disk.write(Data(svg.utf8), to: rootURL.appendingPathComponent("cover.svg"))
+        }
         // canon 每节同步导出为可手改的 md（派生视图）；孤儿 md（用户手工放入）自动导入为新节。
         // 顺序：先算「本次将写出的真实文件名集合」（含同名 -x 后缀），再导入孤儿
         // （排除这些名字），再写 sections.json，最后写 md。否则同名节会每次保存
@@ -711,6 +724,12 @@ final class ProjectStore: ObservableObject {
         let f = DateFormatter()
         f.dateFormat = "yyyyMMdd-HHmmss"
         return f.string(from: date)
+    }
+
+    /// 采用/更新本书封面（作者显式动作；内容变了 Disk 签名自然失效）
+    func setCoverSVG(_ svg: String) {
+        coverSVG = svg
+        saveSoon()
     }
 
     /// 删除设定的磁盘 md（删除/改名时调用，避免孤儿导入把它复活成新节）

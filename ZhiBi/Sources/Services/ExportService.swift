@@ -110,6 +110,11 @@ enum ExportService {
             try write(detail, "大纲/细纲_第\(String(format: "%03d", ch.number))章_\(safeName(ch.title)).md")
         }
 
+        // 封面（AI 绘制的 SVG）
+        if let svg = store.coverSVG {
+            try write(svg, "封面/cover.svg")
+        }
+
         // 设定
         for section in store.canonSections {
             // 确定度写首行 HTML 注释：人读无感，导入侧回读（等价环需要）
