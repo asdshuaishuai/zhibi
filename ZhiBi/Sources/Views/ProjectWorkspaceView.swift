@@ -26,6 +26,7 @@ struct ProjectWorkspaceView: View {
     @State private var chapterPendingDelete: Int?
     @State private var exportMessage: String?
     @State private var showSearch = false
+    @State private var showTrajectory = false
 
     var body: some View {
         NavigationSplitView(columnVisibility: $navVisibility) {
@@ -63,6 +64,14 @@ struct ProjectWorkspaceView: View {
         .navigationSubtitle(subtitle)
         .toolbar {
             ToolbarItem(placement: .primaryAction) { searchButton }
+            ToolbarItem(placement: .primaryAction) {
+                Button {
+                    showTrajectory = true
+                } label: {
+                    Label("AI 轨迹", systemImage: "point.topleft.down.curvedto.point.bottomright.up")
+                }
+                .help("实时查看 AI 轨迹状态与历史")
+            }
             ToolbarItem(placement: .primaryAction) { exportMenu }
             ToolbarItem(placement: .primaryAction) { importButton }
             ToolbarItem(placement: .primaryAction) { saveButton }
@@ -75,6 +84,10 @@ struct ProjectWorkspaceView: View {
             Button("好") {}
         } message: {
             Text(exportMessage ?? "")
+        }
+        .sheet(isPresented: $showTrajectory) {
+            AITrajectorySheet(vm: vm, ai: vm.ai)
+                .frame(minWidth: ZBSpace.Sheet.wide, minHeight: 560)
         }
         .sheet(isPresented: $showSearch) {
             SearchSheet(vm: vm, store: store, onSelectChapter: { n in
@@ -358,7 +371,9 @@ struct AgentStatusStrip: View {
             ProgressView().controlSize(.small)
                 .padding(.top, 3)
             VStack(alignment: .leading, spacing: 3) {
-                Text("AI 正在处理：\(vm.ai.runningCapability?.rawValue ?? "")（产出将进入提案收件箱，等作者确认）")
+                Text(vm.ai.currentStep.isEmpty
+                     ? "AI 正在处理：\(vm.ai.runningCapability?.rawValue ?? "")（产出将进入提案收件箱，等作者确认）"
+                     : vm.ai.currentStep)
                     .font(.caption).bold()
                 if !vm.ai.lastToolLog.isEmpty {
                     Text(vm.ai.lastToolLog.suffix(3).joined(separator: "\n"))

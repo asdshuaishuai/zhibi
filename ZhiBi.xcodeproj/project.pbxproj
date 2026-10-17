@@ -22,6 +22,7 @@
 		35B5154796C621F2C7C03820 /* AppViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1F81B43953D09FE79B3AFE5 /* AppViewModel.swift */; };
 		40854F72CCB78D7025C87623 /* CoverDesignSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = FC2B2CBAC0D85A11849025C2 /* CoverDesignSheet.swift */; };
 		433472192499F4DAEAE3447C /* BookCover.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3933594CF3EF48D5DEBBBB80 /* BookCover.swift */; };
+		4A35816F954D809C1B75A2F4 /* AITrajectorySheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = AAD16E2D98759D27B9F3BB92 /* AITrajectorySheet.swift */; };
 		4A4B39EC392AC72AECE5A10D /* MemoryGraphView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 85DCBAAD9C9AD47FD7F3ED1F /* MemoryGraphView.swift */; };
 		4A7C72C09317E30AB197BE6F /* MemoryGraph.swift in Sources */ = {isa = PBXBuildFile; fileRef = D81F3E6470C04EE2F1FB6CB7 /* MemoryGraph.swift */; };
 		4BB1D581F698070BA1B449E9 /* ProposalModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 833C495A26924EEA95D0349B /* ProposalModels.swift */; };
@@ -128,6 +129,7 @@
 		A241F6146041ED18813AEC2E /* main.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = main.swift; sourceTree = "<group>"; };
 		A8DE908623A5523CAC58A87A /* SettingsAndImportViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsAndImportViews.swift; sourceTree = "<group>"; };
 		A952FE9D52AEF946886C389B /* AppearanceMode.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppearanceMode.swift; sourceTree = "<group>"; };
+		AAD16E2D98759D27B9F3BB92 /* AITrajectorySheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AITrajectorySheet.swift; sourceTree = "<group>"; };
 		AC9109E3AB0C4334D6B85333 /* SearchSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SearchSheet.swift; sourceTree = "<group>"; };
 		AE9DBF3881CF0ECAC24D6BA3 /* StatsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StatsView.swift; sourceTree = "<group>"; };
 		B1F81B43953D09FE79B3AFE5 /* AppViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppViewModel.swift; sourceTree = "<group>"; };
@@ -295,6 +297,7 @@
 			isa = PBXGroup;
 			children = (
 				5169AA37AB960EE584365DD3 /* AIToolboxSheet.swift */,
+				AAD16E2D98759D27B9F3BB92 /* AITrajectorySheet.swift */,
 				3933594CF3EF48D5DEBBBB80 /* BookCover.swift */,
 				3CA77D9DB47DD6623FCBB11F /* ChapterEditorView.swift */,
 				ED1008100FF4B150910026A2 /* CharactersView.swift */,
@@ -473,6 +476,7 @@
 				A99B6A43B772FE084B32A37B /* AILint.swift in Sources */,
 				AC710ED36EF8B57F165FDE88 /* AIService.swift in Sources */,
 				62FFC06EEEFD46CC556938A3 /* AIToolboxSheet.swift in Sources */,
+				4A35816F954D809C1B75A2F4 /* AITrajectorySheet.swift in Sources */,
 				FC9A113F6ECF94FF3926BE3C /* AgentConfig.swift in Sources */,
 				9E6745BC9D48773D735A3815 /* AgentKernel.swift in Sources */,
 				35B5154796C621F2C7C03820 /* AppViewModel.swift in Sources */,

@@ -13,6 +13,25 @@ final class AIService: ObservableObject {
     @Published var lastToolLog: [String] = []
     /// 上一次运行新登记的提案数（nil = 本次运行未统计/无新增）
     @Published var lastRunNewProposals: Int?
+    // MARK: AI 轨迹（实时 + 会话历史；新的在前，上限 200 条）
+    struct AITraceEntry: Identifiable, Equatable {
+        var id = UUID()
+        let at: Date
+        let capability: String
+        let event: String
+        let detail: String
+        let isError: Bool
+    }
+    @Published var trajectory: [AITraceEntry] = []
+    @Published var currentStep = ""   // 运行中的当前步骤（状态栏实时显示）
+
+    /// 记录一条轨迹（会话内历史；不落盘）
+    private func trace(_ capability: AICapability, _ event: String, detail: String = "", isError: Bool = false) {
+        trajectory.insert(AITraceEntry(at: Date(), capability: capability.rawValue,
+                                       event: event, detail: detail, isError: isError), at: 0)
+        if trajectory.count > 200 { trajectory.removeLast(trajectory.count - 200) }
+        currentStep = isError ? "" : "\(capability.rawValue) · \(event)"
+    }
 
     /// 私有/本机地址判定：局域网模型（LM Studio / Ollama / llama.cpp）不需要 API Key，
     /// 且 http 明文在内网可接受
@@ -114,6 +133,7 @@ final class AIService: ObservableObject {
         lastError = nil
         lastToolLog = []
         lastRunNewProposals = nil
+        trace(capability, "开始处理")
         defer {
             running = false
             runningCapability = nil
@@ -122,8 +142,10 @@ final class AIService: ObservableObject {
         do {
             if let problem = validateConfig(config) {
                 lastError = problem
+                trace(capability, "中止", detail: problem, isError: true)
                 return
             }
+            trace(capability, "准备上下文与工具（\(tools(for: capability, store: store, chapter: chapter).count) 个工具）")
             let toolset = tools(for: capability, store: store, chapter: chapter)
             // 创作法典集中注入：流派契约 + 网文创作法 + 传统文学创作法，按能力裁剪。
             // 骨架任务书里已经内嵌（位置更靠前、还带着近章钩子形态），这里跳过避免重复。
@@ -157,13 +179,18 @@ final class AIService: ObservableObject {
                     if streamPreview.count > 4000 { streamPreview = String(streamPreview.suffix(4000)) }
                 case .toolUse(let data):
                     lastToolLog.append("🛠 \(data.toolName)")
+                    trace(capability, "调用 \(data.toolName)", detail: String(data.input.prefix(120)))
+                    currentStep = "\(capability.rawValue) · \(data.toolName)"
                 case .toolResult(let data):
                     lastToolLog.append("↳ \(String(data.content.prefix(120)))")
+                    trace(capability, data.isError ? "工具报错" : "工具完成",
+                          detail: String(data.content.prefix(120)), isError: data.isError)
                 case .result(let data):
                     streamPreview += previewFilter.flush()
                     if streamPreview.count > 4000 { streamPreview = String(streamPreview.suffix(4000)) }
                     if data.subtype != .success {
                         runProblems.append(data.text)
+                        trace(capability, "运行异常", detail: data.text, isError: true)
                     }
                 default:
                     break
