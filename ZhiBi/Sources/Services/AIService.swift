@@ -14,23 +14,46 @@ final class AIService: ObservableObject {
     /// 上一次运行新登记的提案数（nil = 本次运行未统计/无新增）
     @Published var lastRunNewProposals: Int?
 
-    /// 供应商连通性预检：Key 缺失 / 远程明文 HTTP（API Key 会明文出网）/ 端点非法
+    /// 私有/本机地址判定：局域网模型（LM Studio / Ollama / llama.cpp）不需要 API Key，
+    /// 且 http 明文在内网可接受
+    static func isPrivateOrLocal(_ host: String) -> Bool {
+        let h = host.lowercased()
+        if ["localhost", "127.0.0.1", "::1"].contains(h) { return true }
+        if h.hasSuffix(".local") || h.hasSuffix(".internal") { return true }
+        // 私有网段：10.0.0.0/8、172.16-31、192.168
+        if h.hasPrefix("10.") || h.hasPrefix("192.168.") { return true }
+        if h.hasPrefix("172.") {
+            let second = h.split(separator: ".").dropFirst().first.flatMap { Int($0) } ?? 0
+            if (16...31).contains(second) { return true }
+        }
+        return false
+    }
+
+    /// 供应商连通性预检：
+    /// - 公网 https 端点必须有 API Key
+    /// - 公网 http 端点拒绝（明文出网）
+    /// - 本机/局域网端点（LM Studio / Ollama / 局域网推理机）两者都豁免
     func validateConfig(_ config: AgentConfig) -> String? {
         let trimmed = config.baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmed.isEmpty {
             return "Base URL 为空——在设置里填模型端点（或从目录选供应商）。"
         }
-        guard let endpoint = URL(string: trimmed) else {
+        guard let endpoint = URL(string: trimmed), let host = endpoint.host else {
             return "Base URL 无效：\(trimmed)"
         }
-        let isLoopback = ["localhost", "127.0.0.1", "::1"].contains(endpoint.host?.lowercased() ?? "")
-        if endpoint.scheme?.lowercased() == "http", !isLoopback {
-            return "远程 API 地址不要用 http://（API Key 会明文出网），请改用 https://；本地 Ollama 不受限制。"
+        let local = Self.isPrivateOrLocal(host)
+        if endpoint.scheme?.lowercased() == "http", !local {
+            return "远程 API 地址不要用 http://（API Key 会明文出网），请改用 https://；本机/局域网模型不受限制。"
         }
-        if config.apiKey.isEmpty, !isLoopback {
+        if config.apiKey.isEmpty, !local {
             return AgentError.noAPIKey.localizedDescription
         }
         return nil
+    }
+
+    /// 空 Key 传 nil，避免 SDK 拼出空的 Authorization 头（部分本地服务端会拒）
+    static func effectiveKey(_ config: AgentConfig) -> String? {
+        config.apiKey.isEmpty ? nil : config.apiKey
     }
 
     /// 任务 → 该能力可用的工具名子集。
@@ -114,7 +137,7 @@ final class AIService: ObservableObject {
                                           written: written, target: store.project.targetChapters)
             }
             let agent = createAgent(options: AgentOptions(
-                apiKey: config.apiKey,
+                apiKey: Self.effectiveKey(config),
                 model: config.model,
                 baseURL: config.baseURL,
                 provider: .openai,
@@ -215,7 +238,7 @@ final class AIService: ObservableObject {
         let bookInfo = "书名：《\(title)》\n题材：\(g)\n一句话核心：\(premiseText)"
         do {
             let agent = createAgent(options: AgentOptions(
-                apiKey: config.apiKey, model: config.model, baseURL: config.baseURL,
+                apiKey: Self.effectiveKey(config), model: config.model, baseURL: config.baseURL,
                 provider: .openai,
                 systemPrompt: PromptLibrary.systemInstruction(for: .coverBrief),
                 maxTurns: 2, permissionMode: .bypassPermissions, tools: []))
@@ -245,7 +268,7 @@ final class AIService: ObservableObject {
     private func runTextOnlyFree(config: AgentConfig, capability: AICapability, userMessage: String) async -> String? {
         do {
             let agent = createAgent(options: AgentOptions(
-                apiKey: config.apiKey, model: config.model, baseURL: config.baseURL,
+                apiKey: Self.effectiveKey(config), model: config.model, baseURL: config.baseURL,
                 provider: .openai,
                 systemPrompt: PromptLibrary.systemInstruction(for: capability),
                 maxTurns: 2, permissionMode: .bypassPermissions, tools: []))
@@ -733,7 +756,7 @@ final class AIService: ObservableObject {
         }
         do {
             let agent = createAgent(options: AgentOptions(
-                apiKey: config.apiKey,
+                apiKey: Self.effectiveKey(config),
                 model: config.model,
                 baseURL: config.baseURL,
                 provider: .openai,

@@ -1045,6 +1045,32 @@ func classifyTests() async throws {
 
 try await classifyTests()
 
+// MARK: - 22. 端点预检判定矩阵（局域网模型无 Key 必须可用）
+
+MainActor.assumeIsolated {
+    let ai = AIService()
+    var c = AgentConfig()
+    // 局域网 http + 无 Key：放行（用户主场景）
+    c.baseURL = "http://192.168.31.75:9931"; c.apiKey = ""
+    check("局域网模型无 Key 放行", ai.validateConfig(c) == nil, "得到 \(ai.validateConfig(c) ?? "nil")")
+    // 本机 Ollama：放行
+    c.baseURL = "http://127.0.0.1:11434/v1"
+    check("本机 Ollama 放行", ai.validateConfig(c) == nil)
+    // 公网 https 无 Key：拒绝
+    c.baseURL = "https://api.deepseek.com"
+    check("公网 https 无 Key 拒绝", ai.validateConfig(c)?.contains("API Key") == true)
+    // 公网 http：拒绝（明文出网）
+    c.baseURL = "http://api.deepseek.com"
+    check("公网 http 拒绝", ai.validateConfig(c)?.contains("http") == true)
+    // 域名伪装 localhost 不再绕过
+    c.baseURL = "https://localhost.evil.com/v1"; c.apiKey = ""
+    check("域名伪装不再绕过", ai.validateConfig(c)?.contains("API Key") == true)
+    // 172.16-31 私有段放行
+    c.baseURL = "http://172.16.8.9:8080"
+    check("172 私有段放行", ai.validateConfig(c) == nil)
+}
+
+
 
 
 // MARK: - 18. 三轮回合：异步加载快照 / 防抖序列化语义
