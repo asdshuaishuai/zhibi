@@ -132,11 +132,13 @@ struct ClueBoardView: View {
                     }
                     store.logClueAction(clueID: c.id, chapter: currentChapter, kind: kind,
                                         note: "状态改为「\(s.rawValue)」")
+                    vm.showToast("[\(c.id)] \(c.title) → \(s.rawValue)")
                 }
             }
             Divider()
             Button("记一笔推进（本章）") {
                 store.logClueAction(clueID: c.id, chapter: currentChapter, kind: .develop)
+                vm.showToast("[\(c.id)] 已记推进（第\(currentChapter)章）")
             }
         } label: {
             Text(c.status.rawValue)

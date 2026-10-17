@@ -35,6 +35,21 @@ final class AppViewModel: ObservableObject {
     /// AI 状态条触发的跨视图跳转（如"查看提案"→收件箱）
     @Published var projectOpenError: String?
     @Published var openingProject = false
+    /// 全局轻提示（操作反馈）：自动 2.6s 消失，点一下可提前关
+    @Published var toast: String?
+    @Published var toastSuccess = true
+    private var toastTask: Task<Void, Never>?
+
+    func showToast(_ text: String, success: Bool = true) {
+        toast = text
+        toastSuccess = success
+        toastTask?.cancel()
+        toastTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 2_600_000_000)
+            guard !Task.isCancelled else { return }
+            self?.toast = nil
+        }
+    }
     @Published var navigateToSection: WorkspaceSection?
 
     let ai = AIService()
@@ -154,14 +169,25 @@ final class AppViewModel: ObservableObject {
 
     // MARK: - 导入
 
+    @Published var importScanning = false
+
+    /// 大目录扫描放后台（主线程同步读会卡界面），预览窗先开并显示扫描状态
     func beginImport(urls: [URL]) {
         guard let url = urls.first else { return }
         let isDir = url.isDirectoryURL
-        importPreview = isDir ? ImportService.scan(url) : ImportService.scanSingleFile(url)
-        let guess = ImportService.titleGuess(from: importPreview ?? ImportSummary(detectedLayout: ""))
-        importNewProjectTitle = guess == "导入作品" ? url.deletingPathExtension().lastPathComponent : guess
-        importTargetNewProject = true
+        importScanning = true
+        importPreview = nil
         showImportPreview = true
+        Task {
+            let summary = isDir
+                ? await Task.detached(priority: .userInitiated) { ImportService.scan(url) }.value
+                : ImportService.scanSingleFile(url)
+            importPreview = summary
+            let guess = ImportService.titleGuess(from: summary)
+            importNewProjectTitle = guess == "导入作品" ? url.deletingPathExtension().lastPathComponent : guess
+            importTargetNewProject = true
+            importScanning = false
+        }
     }
 
     func confirmImport(intoExisting existing: ProjectStore? = nil) {
@@ -187,8 +213,10 @@ final class AppViewModel: ObservableObject {
             importedInto = store
         }
         importPreview = nil
+        showToast("导入完成：\(preview.chapters) 章 · 设定/大纲 \(preview.canon + preview.outlines) 篇")
         // 有 AI 配置时，导入完成自动做设定归类（提案制：结果进收件箱，作者审阅采纳）
         if let store = importedInto, !config.apiKey.isEmpty, !store.canonSections.isEmpty {
+            showToast("导入完成——AI 正在归类设定，稍后去收件箱审阅")
             Task { await ai.runCanonClassify(store: store, config: config) }
         }
     }

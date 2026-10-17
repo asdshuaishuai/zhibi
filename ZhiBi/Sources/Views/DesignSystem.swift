@@ -183,3 +183,45 @@ struct BookCoverTile: View {
         )
     }
 }
+
+
+// MARK: - 全局轻提示（操作反馈 toast）
+
+struct ZBToastModifier: ViewModifier {
+    @ObservedObject var vm: AppViewModel
+
+    func body(content: Content) -> some View {
+        content
+            .overlay(alignment: .top) {
+                if let text = vm.toast {
+                    HStack(spacing: 8) {
+                        Image(systemName: vm.toastSuccess ? "checkmark.circle.fill" : "info.circle.fill")
+                            .foregroundStyle(vm.toastSuccess ? Color.green : Color.accentColor)
+                        Text(text)
+                            .lineLimit(2)
+                        Button {
+                            vm.toast = nil
+                        } label: {
+                            Image(systemName: "xmark")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    .font(.caption)
+                    .padding(.horizontal, ZBSpace.md).padding(.vertical, 10)
+                    .background(.thinMaterial, in: Capsule())
+                    .overlay(Capsule().strokeBorder(ZB.hairline.opacity(0.7)))
+                    .shadow(color: .black.opacity(0.18), radius: 10, y: 4)
+                    .padding(.top, ZBSpace.md)
+                    .transition(.move(edge: .top).combined(with: .opacity))
+                    .onTapGesture {}
+                }
+            }
+            .animation(ZBMotion.standard(reduceMotion: false), value: vm.toast)
+    }
+}
+
+extension View {
+    func zbToast(_ vm: AppViewModel) -> some View { modifier(ZBToastModifier(vm: vm)) }
+}

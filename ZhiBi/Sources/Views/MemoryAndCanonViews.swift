@@ -329,6 +329,7 @@ struct MemoryView: View {
 // MARK: - 设定
 
 struct CanonView: View {
+    @ObservedObject var vm: AppViewModel
     @ObservedObject var store: ProjectStore
     @State private var selectedSection: UUID?
     @State private var newTitle = ""
@@ -411,6 +412,7 @@ struct CanonView: View {
                             selectedSection = nil
                             store.deleteCanonMarkdown(title: removed.title)
                             store.saveSoon()
+                            vm.showToast("已删除「\(removed.title)」（md 已同步清理）")
                         } label: { Image(systemName: "trash") }
                         .controlSize(.small)
                     }

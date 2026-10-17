@@ -61,6 +61,8 @@ struct AIToolboxSheet: View {
     // 运行结果（纯文本类）
     @State private var resultText = ""
     @State private var savedAsProposal = false
+    @State private var copiedText = false
+    @State private var copiedSVG = false
     @State private var showSaveFailed = false
 
     private var needsStore: Bool { tool == .organize || tool == .shortStory }
@@ -231,9 +233,11 @@ struct AIToolboxSheet: View {
                             .buttonStyle(.borderedProminent)
                             .controlSize(.small)
                             .disabled(adopted)
-                            Button("复制 SVG") {
+                            Button(copiedSVG ? "已复制 ✓" : "复制 SVG") {
                                 NSPasteboard.general.clearContents()
                                 NSPasteboard.general.setString(coverSVGCode, forType: .string)
+                                copiedSVG = true
+                                Task { try? await Task.sleep(nanoseconds: 1_500_000_000); copiedSVG = false }
                             }
                             .controlSize(.mini)
                         }
@@ -255,9 +259,11 @@ struct AIToolboxSheet: View {
                 HStack {
                     Text("结果已生成（\(resultText.count) 字）。").font(.caption2).foregroundStyle(.secondary)
                     Spacer()
-                    Button("复制全文") {
+                    Button(copiedText ? "已复制 ✓" : "复制全文") {
                         NSPasteboard.general.clearContents()
                         NSPasteboard.general.setString(resultText, forType: .string)
+                        copiedText = true
+                        Task { try? await Task.sleep(nanoseconds: 1_500_000_000); copiedText = false }
                     }
                     .controlSize(.mini)
                     if tool == .analyze {
@@ -274,7 +280,7 @@ struct AIToolboxSheet: View {
                         .disabled(savedAsProposal)
                     }
                 }
-            } else if !ai.running, tool == .organize || tool == .shortStory {
+            } else if !ai.running, tool == .organize || tool == .shortStory || tool == .canonClassify {
                 Text("完成——产出已进「提案收件箱」，去逐条审阅采纳。").font(.caption).foregroundStyle(.green)
             }
         }
@@ -294,8 +300,10 @@ struct AIToolboxSheet: View {
                 resultText = r ?? ""
             case .organize:
                 await ai.runOrganize(store: store, config: vm.config)
+                vm.showToast("旧稿整理完成——\(vm.ai.lastRunNewProposals ?? 0) 条提案待审")
             case .canonClassify:
                 await ai.runCanonClassify(store: store, config: vm.config)
+                vm.showToast("设定归类完成——\(vm.ai.lastRunNewProposals ?? 0) 条提案待审")
             case .coverSVG:
                 let r = await ai.runCoverSVG(store: store, authorName: coverAuthor,
                                                 mood: coverMood, direction: coverDirection)

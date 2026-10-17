@@ -59,6 +59,7 @@ struct ProjectWorkspaceView: View {
             }
         }
         .navigationTitle(store.project.title)
+        .zbToast(vm)
         .navigationSubtitle(subtitle)
         .toolbar {
             ToolbarItem(placement: .primaryAction) { searchButton }
@@ -130,7 +131,7 @@ struct ProjectWorkspaceView: View {
         case .memory:
             MemoryView(store: store)
         case .canon:
-            CanonView(store: store)
+            CanonView(vm: vm, store: store)
         case .inbox:
             ProposalInboxView(vm: vm, store: store)
         case .graph:
@@ -222,6 +223,7 @@ struct ProjectWorkspaceView: View {
             Button("删除（含快照，不可恢复）", role: .destructive) {
                 if selectedChapter == ch.number { selectedChapter = nil }
                 store.deleteChapter(ch.number)
+                vm.showToast("已删除《\(ch.title.isEmpty ? "第\(ch.number)章" : ch.title)》（可在废纸篓找回）", success: true)
                 chapterPendingDelete = nil
             }
         } message: {

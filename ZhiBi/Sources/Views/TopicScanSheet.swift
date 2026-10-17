@@ -48,10 +48,11 @@ struct TopicScanSheet: View {
             HStack {
                 Spacer()
                 Button("取消") { dismiss() }
-                Button(copied ? "已复制" : "复制结果") {
+                Button(copied ? "已复制 ✓" : "复制结果") {
                     NSPasteboard.general.clearContents()
                     NSPasteboard.general.setString(resultText, forType: .string)
                     copied = true
+                    Task { try? await Task.sleep(nanoseconds: 1_500_000_000); copied = false }
                 }
                 .disabled(resultText.isEmpty)
                 Button(ai.running ? "调研中…" : "开始调研") {

@@ -31,7 +31,14 @@ struct ImportPreviewSheet: View {
                 Text("当前没有打开的作品，请选择「导入为新书」。").font(.caption).foregroundStyle(.orange)
             }
 
-            if let s = vm.importPreview {
+            if vm.importScanning {
+                VStack(spacing: ZBSpace.sm) {
+                    ProgressView().controlSize(.regular)
+                    Text("正在扫描目录与正文（大书可能需要几秒）…")
+                        .font(.callout).foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if let s = vm.importPreview {
                 Text("识别到 \(s.chapters) 章 · \(s.canon) 份设定 · \(s.outlines) 份大纲")
                     .font(.callout.bold())
                 Table(of: ImportItem.self, selection: .constant(Set<ImportItem.ID>())) {
@@ -52,6 +59,12 @@ struct ImportPreviewSheet: View {
                         TableRow(item)
                     }
                 }
+            } else {
+                VStack {
+                    ProgressView().controlSize(.small)
+                    Text("准备导入预览…").font(.caption).foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
 
             HStack {
@@ -60,14 +73,17 @@ struct ImportPreviewSheet: View {
                 Spacer()
                 Button("取消") { dismiss() }
                 Button("确认导入") {
+                    let chapters = vm.importPreview?.chapters ?? 0
+                    let canon = vm.importPreview?.canon ?? 0
                     if vm.importTargetNewProject {
                         vm.confirmImport()
                     } else if let store = vm.store {
                         vm.confirmImport(intoExisting: store)
                     }
-                    dismiss()
+                    vm.showToast("导入完成：\(chapters) 章 · 设定/大纲 \(canon) 篇" + (vm.config.apiKey.isEmpty ? "" : "；AI 正在归类设定"))
                 }
                 .buttonStyle(.borderedProminent)
+                .disabled(vm.importScanning)
             }
         }
         .padding(ZBSpace.lg)

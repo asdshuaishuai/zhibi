@@ -84,7 +84,7 @@ struct ChapterEditorView: View {
         .animation(ZBMotion.standard(reduceMotion: reduceMotion), value: showSkeletonEditor)
         .onAppear { store.autoSaveEnabled = vm.config.autoSave }
         .sheet(isPresented: $showSnapshots) {
-            SnapshotBrowser(store: store, chapterNumber: chapterNumber)
+            SnapshotBrowser(vm: vm, store: store, chapterNumber: chapterNumber)
         }
         .sheet(isPresented: $showPipeline) {
             PipelineSheet(vm: vm, store: store, chapterNumber: chapterNumber)
@@ -190,6 +190,7 @@ struct ChapterEditorView: View {
                 Button {
                     if let latest = store.snapshots(chapter: chapterNumber).first {
                         store.restoreSnapshot(chapter: chapterNumber, name: latest.name)
+                        vm.showToast("已回滚到「\(latest.name)」")
                     }
                 } label: {
                     Label("回滚到最近快照", systemImage: "arrow.counterclockwise")
@@ -527,6 +528,7 @@ struct RecallSheetView: View {
 // MARK: - 快照浏览器
 
 struct SnapshotBrowser: View {
+    @ObservedObject var vm: AppViewModel
     @ObservedObject var store: ProjectStore
     let chapterNumber: Int
     @Environment(\.dismiss) private var dismiss
@@ -543,6 +545,7 @@ struct SnapshotBrowser: View {
                         Button("预览") { preview = snap }.controlSize(.small)
                         Button("回滚到此版本", role: .destructive) {
                             store.restoreSnapshot(chapter: chapterNumber, name: snap.name)
+                            vm.showToast("已回滚到「\(snap.name)」")
                             dismiss()
                         }
                         .controlSize(.small)
@@ -671,13 +674,14 @@ struct SkeletonPanel: View {
     }
 
     private func beatCard(beat: Beat) -> some View {
-        BeatCardView(store: store, chapterNumber: chapterNumber, beat: beat)
+        BeatCardView(vm: vm, store: store, chapterNumber: chapterNumber, beat: beat)
     }
 }
 
 // MARK: - 单个骨架拍卡片（独立视图：保住结构同一性，编辑一拍不再全量重建）
 
 struct BeatCardView: View {
+    @ObservedObject var vm: AppViewModel
     @ObservedObject var store: ProjectStore
     let chapterNumber: Int
     let beat: Beat
@@ -800,6 +804,7 @@ struct BeatCardView: View {
                 Button("合入正文") {
                     let text = current.draftText
                     guard !text.isEmpty else { return }
+                    vm.showToast("节拍草稿已合入第\(chapterNumber)章正文")
                     store.updateChapter(chapterNumber) { ch in
                         if !ch.prose.isEmpty { ch.prose += "\n\n" }
                         ch.prose += text
