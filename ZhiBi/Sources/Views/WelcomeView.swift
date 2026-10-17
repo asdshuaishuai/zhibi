@@ -341,22 +341,6 @@ struct ShelfBookCard: View {
         .animation(ZBMotion.curve(ZBMotion.standard, reduceMotion: reduceMotion), value: hovering)
         .onTapGesture { onOpen() }
         .onHover { hovering = $0 }
-        .overlay(alignment: .topTrailing) {
-            if hovering {
-                Button {
-                    onCoverDesign()
-                } label: {
-                    Image(systemName: "photo.artframe")
-                        .font(.caption)
-                        .padding(5)
-                        .background(.thinMaterial, in: Circle())
-                }
-                .buttonStyle(.plain)
-                .help("AI 封面设计（SVG 绘制）")
-                .padding(6)
-                .transition(.opacity)
-            }
-        }
         .contextMenu {
             Button("AI 封面设计…") { onCoverDesign() }
             Button("在访达中显示") { onReveal() }
@@ -407,17 +391,30 @@ struct ShelfBookCard: View {
             }
             .overlay(alignment: .topTrailing) {
                 if hovering {
-                    Button {
-                        Task { style = await onCycleStyle() }
-                    } label: {
-                        Image(systemName: "arrow.triangle.2.circlepath")
-                            .font(.system(size: 10, weight: .semibold))
-                            .foregroundStyle(.white)
-                            .frame(width: 22, height: 22)
-                            .background(Circle().fill(.black.opacity(0.45)))
+                    HStack(spacing: 4) {
+                        Button {
+                            Task { style = await onCycleStyle() }
+                        } label: {
+                            Image(systemName: "arrow.triangle.2.circlepath")
+                                .font(.system(size: 10, weight: .semibold))
+                                .foregroundStyle(.white)
+                                .frame(width: 22, height: 22)
+                                .background(Circle().fill(.black.opacity(0.45)))
+                        }
+                        .buttonStyle(.plain)
+                        .help("换一种封面")
+                        Button {
+                            onCoverDesign()
+                        } label: {
+                            Image(systemName: "photo.artframe")
+                                .font(.system(size: 10, weight: .semibold))
+                                .foregroundStyle(.white)
+                                .frame(width: 22, height: 22)
+                                .background(Circle().fill(.black.opacity(0.45)))
+                        }
+                        .buttonStyle(.plain)
+                        .help("AI 封面设计（SVG 绘制）")
                     }
-                    .buttonStyle(.plain)
-                    .help("换一种封面")
                     .transition(.opacity)
                     .padding(6)
                 }
