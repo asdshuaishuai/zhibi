@@ -89,6 +89,10 @@ extension AppViewModel {
 struct SettingsView: View {
     @ObservedObject var vm: AppViewModel
     @StateObject private var hub = ModelHubModel()
+    /// 保存成功反馈（1.5s 后自动消失）
+    @State private var savedFlash = false
+    /// 选目录模型后按上下文元信息自动调整包预算的提示
+    @State private var budgetNote = ""
 
     var body: some View {
         TabView {
@@ -104,6 +108,15 @@ struct SettingsView: View {
             hub.onPick = { entry in
                 vm.config.baseURL = entry.baseURL
                 vm.config.model = entry.modelID
+                // 上下文包预算按 models.dev 元信息自动对齐：取模型上下文的一半
+                // （留足输出与回复空间），夹在 2K–32K 的既有步进范围内
+                if let limit = entry.contextLimit {
+                    let budget = max(2000, min(32000, limit / 2))
+                    vm.config.contextTokenBudget = budget
+                    budgetNote = "已按「\(entry.modelName)」的上下文自动调整包预算 ≈\(budget) tokens"
+                } else {
+                    budgetNote = ""
+                }
             }
             hub.loadInitial()
         }
@@ -193,11 +206,21 @@ struct SettingsView: View {
     }
 
     private var saveButton: some View {
-        Button("保存设置") {
+        Button {
             vm.saveConfig()
             vm.store?.autoSaveEnabled = vm.config.autoSave
+            savedFlash = true
+            Task {
+                try? await Task.sleep(nanoseconds: 1_500_000_000)
+                await MainActor.run { savedFlash = false }
+            }
+        } label: {
+            Label(savedFlash ? "已保存 ✓" : "保存设置",
+                  systemImage: savedFlash ? "checkmark.circle.fill" : "square.and.arrow.down")
         }
         .buttonStyle(.borderedProminent)
+        .tint(savedFlash ? .green : .accentColor)
+        .disabled(savedFlash)
         .alert("API Key 没保存上", isPresented: Binding(
             get: { AgentConfig.lastKeySaveFailed },
             set: { if !$0 { AgentConfig.lastKeySaveFailed = false } })) {
@@ -260,6 +283,9 @@ struct SettingsView: View {
                        let m = p.models.first(where: { $0.id == hub.modelID }) {
                         Text(m.capabilitySummary)
                             .font(.caption2).foregroundStyle(.secondary)
+                        if !budgetNote.isEmpty {
+                            Text(budgetNote).font(.caption2).foregroundStyle(.teal)
+                        }
                         if !m.toolCall {
                             Text("该模型不支持工具调用——执笔的提案工具依赖工具调用，请换同供应商其他模型。")
                                 .font(.caption2).foregroundStyle(.orange)
