@@ -21,6 +21,8 @@ enum PromptLibrary {
 
     private static func taskBrief(for capability: AICapability) -> String {
         switch capability {
+        case .canonClassify:
+            return "设定归类：对每篇设定文档给出分类与可选的规范化改名。用 propose_canon_classify 提案。"
         case .framework:
             return "为新书搭建初始框架：主线故事线 + 关键事件时间线 + 背景设定文档。分别用 propose_storylines / propose_outline_events / propose_canon 提案，全部提交给作者审阅。"
         case .topicScan:
@@ -85,6 +87,31 @@ enum PromptLibrary {
         3. 每个事件必须写两条：objective_fact 是"作者真相"（客观发生了什么，含隐瞒的底牌）；reader_knowledge 是"读者已知"（读者此刻被告知了什么）。未揭晓的真相 revealed=false——这是悬念管理的基础。
         4. 主动制造"还没兑现但快要兑现"的缺口；重大反转要有前置伏笔位。
         5. 赌注递增：每个阶段的核心冲突比上一阶段更重。
+        """
+    }
+
+    // MARK: - 设定归类（story-import 的分类步骤：导入后自动/手动触发）
+
+    static func canonClassifyTask(sections: String) -> String {
+        """
+        把作者的设定文档归入固定分类，并给可读性更好的规范标题。
+
+        ## 待归类文档（标题 | 字数 | 内容摘录）
+        \(sections)
+
+        ## 分类口径（六选一）
+        - **世界观**：世界规则、地理、历史、组织架构的底层设定。
+        - **势力人物**：人物卡、势力阵营、人物关系。
+        - **修炼体系**：力量/能力体系、等级、功法（非玄幻题材=对应的核心能力体系）。
+        - **剧情大纲**：主线/阶段/章节细纲/事件排期。
+        - **题材规则**：题材惯例、禁区、文风约定、写作注意事项。
+        - **未分类**：实在无法判断的（宁入此类，不要硬猜）。
+
+        ## 纪律
+        - title 必须与待归类文档标题**逐字一致**（宿主按标题回写）。
+        - 改名建议：加两位序号前缀（如「01·世界观总纲」）让设定页有序；改名撞名会被跳过，不会丢文档。
+        - 「大纲·xxx」这类导入生成的标题，改名时去掉冗余前缀。
+        - 拿不准的分类用「未分类」，不要硬猜。
         """
     }
 

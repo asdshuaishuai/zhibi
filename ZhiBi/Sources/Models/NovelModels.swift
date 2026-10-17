@@ -36,7 +36,23 @@ struct CanonSection: Codable, Identifiable {
     var title: String
     var content: String = ""
     var certainty: Certainty = .tentative
+    /// 设定分类（CanonCategory.rawValue；旧档无此键解码为默认值）
+    var category: String = CanonCategory.uncategorized.rawValue
     var updatedAt: Date = Date()
+}
+
+/// 设定分类（设定页按此分组；AI 归类提案写回这里）
+enum CanonCategory: String, Codable, CaseIterable {
+    case worldview = "世界观"
+    case faction = "势力人物"
+    case powerSystem = "修炼体系"
+    case plotOutline = "剧情大纲"
+    case themeRules = "题材规则"
+    case uncategorized = "未分类"
+
+    static func match(_ raw: String) -> CanonCategory {
+        CanonCategory(rawValue: raw) ?? .uncategorized
+    }
 }
 
 // MARK: - 故事线（oh-story L 编号 / NarraCat storylines）

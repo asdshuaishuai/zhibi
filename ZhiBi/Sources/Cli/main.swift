@@ -1012,6 +1012,40 @@ func svgCoverTests() async throws {
 
 try await svgCoverTests()
 
+// MARK: - 21. 设定归类：提案登记 → 采纳写类别与改名
+
+@MainActor
+func classifyTests() async throws {
+    let st = ProjectStore(rootURL: URL(fileURLWithPath: "/tmp/zhibi-clz-\(UUID().uuidString).zhibi"))
+    st.canonSections = [
+        CanonSection(title: "世界观总纲", content: "命数九层", certainty: .canon),
+        CanonSection(title: "紫渊人物卡", content: "无器之人", certainty: .tentative),
+        CanonSection(title: "大纲·主线", content: "追杀开局", certainty: .tentative),
+    ]
+    let tool = NovelTools.all(store: st).first { $0.name == "propose_canon_classify" }
+    let args = """
+    {"note":"按内容归类","classifications":[
+      {"title":"世界观总纲","category":"世界观"},
+      {"title":"紫渊人物卡","category":"势力人物","rename":"01·紫渊"},
+      {"title":"大纲·主线","category":"剧情大纲"},
+      {"title":"不存在的文档","category":"世界观"}]}
+    """
+    _ = try? await tool?.handler(args)
+    let pending = st.proposals.filter { $0.status == .pending }
+    check("归类提案登记", pending.count == 1)
+    guard let pid = pending.first?.id else { return }
+    st.acceptProposal(pid)
+    check("类别写回", st.canonSections.first { $0.title == "世界观总纲" }?.category == "世界观"
+          && st.canonSections.first { $0.title == "01·紫渊" }?.category == "势力人物")
+    check("改名撞名保护", st.canonSections.allSatisfy { $0.title != "不存在的文档" })
+    check("归类后分组口径", CanonCategory.match("势力人物") == .faction)
+    // CanonCategory 兜底：非法 raw 不崩
+    check("非法类别兜底未分类", CanonCategory.match("胡说八道") == .uncategorized)
+}
+
+try await classifyTests()
+
+
 
 // MARK: - 18. 三轮回合：异步加载快照 / 防抖序列化语义
 

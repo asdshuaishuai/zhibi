@@ -338,15 +338,23 @@ struct CanonView: View {
             List(selection: Binding(
                 get: { selectedSection.map(SectionID.init) },
                 set: { selectedSection = $0?.id })) {
-                ForEach(store.canonSections) { s in
-                    HStack {
-                        Text(s.title).font(.callout)
-                        Spacer()
-                        Text(s.certainty.rawValue)
-                            .font(.caption2)
-                            .foregroundStyle(s.certainty == .canon ? Color.green : (s.certainty == .tentative ? Color.orange : Color.secondary))
+                let grouped = CanonCategory.allCases.map { cat in
+                    (cat, store.canonSections.filter { $0.category == cat.rawValue }
+                        .sorted { $0.title < $1.title })
+                }.filter { !$0.1.isEmpty }
+                ForEach(grouped, id: \.0.rawValue) { group in
+                    Section("「\(group.0.rawValue)」 \(group.1.count)") {
+                        ForEach(group.1) { s in
+                            HStack {
+                                Text(s.title).font(.callout)
+                                Spacer()
+                                Text(s.certainty.rawValue)
+                                    .font(.caption2)
+                                    .foregroundStyle(s.certainty == .canon ? Color.green : (s.certainty == .tentative ? Color.orange : Color.secondary))
+                            }
+                            .tag(SectionID(s.id))
+                        }
                     }
-                    .tag(SectionID(s.id))
                 }
                 HStack {
                     TextField("新文档名", text: $newTitle)
@@ -385,6 +393,18 @@ struct CanonView: View {
                             ForEach(Certainty.allCases, id: \.self) { Text($0.rawValue).tag($0) }
                         }
                         .controlSize(.small)
+                        Picker("类别", selection: Binding(
+                            get: { CanonCategory.match(store.canonSections.indices.contains(idx) ? store.canonSections[idx].category : "") },
+                            set: { cat in
+                                if store.canonSections.indices.contains(idx) {
+                                    store.canonSections[idx].category = cat.rawValue
+                                    store.saveSoon()
+                                }
+                            })) {
+                            ForEach(CanonCategory.allCases, id: \.self) { Text($0.rawValue).tag($0) }
+                        }
+                        .controlSize(.small)
+                        .help("设定分类——AI 归类提案会写到这里；也可手动改")
                         Button(role: .destructive) {
                             guard store.canonSections.indices.contains(idx) else { return }
                             let removed = store.canonSections.remove(at: idx)

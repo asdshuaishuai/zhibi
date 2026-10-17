@@ -323,6 +323,30 @@ struct ProposalInboxView: View {
         case .memo(let text):
             MarkdownPreview(markdown: text, fontSize: 13)
                 .frame(minHeight: 100)
+        case .canonClassify(let items):
+            VStack(alignment: .leading, spacing: 6) {
+                ForEach(items) { item in
+                    HStack(alignment: .top, spacing: 8) {
+                        Text(item.title).font(.caption).frame(maxWidth: 180, alignment: .leading)
+                        Image(systemName: "arrow.right").font(.caption2).foregroundStyle(.tertiary)
+                        Text(item.category)
+                            .font(.caption.bold())
+                            .padding(.horizontal, 6).padding(.vertical, 2)
+                            .background(Color.accentColor.opacity(0.12))
+                            .foregroundStyle(Color.accentColor)
+                            .cornerRadius(4)
+                        if let rename = item.rename, !rename.isEmpty, rename != item.title {
+                            Text("改名：\(rename)").font(.caption2).foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        if let note = item.note, !note.isEmpty {
+                            Text(note).font(.caption2).foregroundStyle(.tertiary)
+                        }
+                    }
+                }
+                Text("采纳 = 写回分类与改名（按现有标题匹配；改名撞名自动跳过，不丢文档）。")
+                    .font(.caption2).foregroundStyle(.tertiary)
+            }
         case .canon(let docs):
             VStack(alignment: .leading, spacing: 8) {
                 ForEach(docs) { d in

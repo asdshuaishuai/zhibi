@@ -17,6 +17,7 @@ struct AIToolboxSheet: View {
     enum Tool: String, CaseIterable, Identifiable {
         var id: String { rawValue }
 
+        case canonClassify = "设定归类"
         case analyze = "拆书"
         case organize = "整理旧稿"
         case coverSVG = "封面绘制"
@@ -24,6 +25,7 @@ struct AIToolboxSheet: View {
 
         var icon: String {
             switch self {
+            case .canonClassify: return "square.grid.3x3.square"
             case .analyze: return "text.magnifyingglass"
             case .organize: return "tray.and.arrow.down"
             case .coverSVG: return "photo.artframe"
@@ -34,6 +36,7 @@ struct AIToolboxSheet: View {
         var intro: String {
             switch self {
             case .analyze: return "贴一段参考文本（建议前 3 章），AI 从钩子/冲突/悬念/节奏四维拆解，每个判断给出原文位置。学结构，不抄情节。"
+            case .canonClassify: return "AI 读全部设定文档，逐篇给出分类（世界观/势力人物/修炼体系/剧情大纲/题材规则）与规范改名建议。采纳后设定页按类别分组。"
             case .organize: return "正文有了、账本还没建？AI 把散在各章的信息整理成三类资料：设定与人物 / 剧情时间线 / 伏笔追踪——作者核对后再续写。"
             case .coverSVG: return "AI 直接绘制 SVG 封面（书名/署名/装饰一次成形）。预览满意点「采用为本书封面」，书架即用。"
             case .shortStory: return "围绕一个核心冲突写短篇：起冲突/推转折/落结局。产出大纲+全文一份草稿提案，走既有审查采纳流程。"
@@ -106,6 +109,7 @@ struct AIToolboxSheet: View {
 
     private var runLabel: String {
         switch tool {
+        case .canonClassify: return "开始归类"
         case .analyze: return "拆解"
         case .organize: return "整理成三类资料"
         case .coverSVG: return "绘制封面"
@@ -115,16 +119,25 @@ struct AIToolboxSheet: View {
 
     private var inputReady: Bool {
         switch tool {
+        case .canonClassify: return !store.canonSections.isEmpty
         case .analyze: return referenceText.trimmingCharacters(in: .whitespacesAndNewlines).count >= 50
-        case .organize: return store.chapters.contains { !$0.prose.isEmpty }
-        case .coverSVG: return true
-        case .shortStory: return shortConflict.trimmingCharacters(in: .whitespaces).count >= 4
+        case .organize, .coverSVG, .shortStory: return true
         }
     }
 
     @ViewBuilder
     private var inputSection: some View {
         switch tool {
+        case .canonClassify:
+            VStack(alignment: .leading, spacing: ZBSpace.xs) {
+                Label("将归类 \(store.canonSections.count) 篇设定文档", systemImage: "square.grid.3x3.square")
+                    .font(.caption)
+                if store.canonSections.isEmpty {
+                    Text("还没有设定文档。").font(.caption).foregroundStyle(.orange)
+                }
+                Text("产出走提案通道：每篇 → 类别（可附带规范改名）。采纳后设定页按类别分组。")
+                    .font(.caption2).foregroundStyle(.tertiary)
+            }
         case .analyze:
             VStack(alignment: .leading, spacing: ZBSpace.xs) {
                 Text("参考文本（\(referenceText.count) 字，建议 ≥ 1000）")
@@ -280,10 +293,12 @@ struct AIToolboxSheet: View {
                 resultText = r ?? ""
             case .organize:
                 await vm.ai.runOrganize(store: store, config: vm.config)
+            case .canonClassify:
+                await vm.ai.runCanonClassify(store: store, config: vm.config)
             case .coverSVG:
                 let r = await vm.ai.runCoverSVG(store: store, authorName: coverAuthor,
                                                 mood: coverMood, direction: coverDirection)
-                if let code = Self.extractSVG(r ?? "") {
+                if let code = CoverSVG.extractSVG(r ?? "") {
                     coverSVGCode = code
                 } else {
                     resultText = r ?? ""
@@ -296,17 +311,6 @@ struct AIToolboxSheet: View {
         }
     }
 
-    /// 从 AI 输出中提取 ```svg / ``` 代码块；没有围栏时尝试截取 <svg…</svg>
-    static func extractSVG(_ text: String) -> String? {
-        if let start = text.range(of: "```svg"), let fence = text.range(of: "```", range: start.upperBound..<text.endIndex) {
-            let code = String(text[start.upperBound..<fence.lowerBound]).trimmingCharacters(in: .whitespacesAndNewlines)
-            if code.contains("<svg") { return code }
-        }
-        if let start = text.range(of: "<svg"), let end = text.range(of: "</svg>") {
-            return String(text[start.lowerBound...end.upperBound])
-        }
-        return nil
-    }
 
     private var previewImage: NSImage {
         CoverSVG.render(coverSVGCode, width: 180, height: 240)

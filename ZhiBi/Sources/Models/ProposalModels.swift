@@ -7,6 +7,7 @@ import Foundation
 
 enum AICapability: String, Codable, CaseIterable {
     case framework = "搭建框架"
+    case canonClassify = "设定归类"
     case topicScan = "选题方向"
     case analyze = "拆书"
     case organize = "整理旧稿"
@@ -44,6 +45,15 @@ struct ChapterDraft: Codable {
 
 // MARK: - 设定文档提案（背景框架落地：AI 只提案，人批准后入设定库）
 
+/// 设定归类提案条目：按现有标题精确匹配，写回类别（可附带改名）
+struct CanonClassItem: Codable, Identifiable {
+    var id: UUID = UUID()
+    var title: String            // 现有文档标题（精确匹配）
+    var category: String         // CanonCategory 中文 rawValue
+    var rename: String?          // 可选新标题（撞名则跳过改名，只改类别）
+    var note: String?
+}
+
 struct CanonDocProposal: Codable, Identifiable {
     var id: UUID = UUID()
     var title: String            // 设定文档标题（世界观 / 势力人物 / 修炼体系…）
@@ -64,6 +74,7 @@ enum ProposalPayload: Codable {
     case deslop(DeslopReport)
     case memo(String)
     case canon([CanonDocProposal])
+    case canonClassify([CanonClassItem])
     /// 埋点修复：可一键采纳的伏笔台账修正（ContinuityAuditor 产出）
     case clueFixes([ClueFix])
     /// 大纲同步：可一键采纳的大纲更新（OutlineSync 产出）

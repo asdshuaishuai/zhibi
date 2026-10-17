@@ -166,8 +166,10 @@ final class AppViewModel: ObservableObject {
 
     func confirmImport(intoExisting existing: ProjectStore? = nil) {
         guard let preview = importPreview else { return }
+        var importedInto: ProjectStore?
         if let existing {
             ImportService.apply(preview, into: existing)
+            importedInto = existing
         } else {
             let title = importNewProjectTitle.isEmpty ? "导入作品" : importNewProjectTitle
             let base = ProjectLayout.safeFileName(title)
@@ -182,8 +184,13 @@ final class AppViewModel: ObservableObject {
             store.project.title = title
             ImportService.apply(preview, into: store)
             open(store: store)
+            importedInto = store
         }
         importPreview = nil
+        // 有 AI 配置时，导入完成自动做设定归类（提案制：结果进收件箱，作者审阅采纳）
+        if let store = importedInto, !config.apiKey.isEmpty, !store.canonSections.isEmpty {
+            Task { await ai.runCanonClassify(store: store, config: config) }
+        }
     }
 
     // MARK: - 去AI味建议采纳（首条采纳前自动快照，可回滚）

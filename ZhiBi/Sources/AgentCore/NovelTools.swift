@@ -21,6 +21,7 @@ enum NovelTools {
             proposeDeslop(store: store, chapter: chapter),
             proposeMemo(store: store),
             proposeCanon(store: store),
+            proposeCanonClassify(store: store),
             getChapter(store: store),
             getClues(store: store),
             getOutline(store: store),
@@ -525,6 +526,29 @@ enum NovelTools {
             let p = try decode(Payload.self, args)
             await store.addProposal(AIProposal(capability: .recallMemo, title: "写作备忘", note: p.note ?? "", payload: .memo(p.text)))
             return "已登记为提案「写作备忘」。"
+        }
+    }
+
+    static func proposeCanonClassify(store: ProjectStore) -> AgentTool {
+        AgentTool(
+            name: "propose_canon_classify",
+            description: "提交设定归类提案：对宿主列出的每篇设定文档给出分类（世界观/势力人物/修炼体系/剧情大纲/题材规则/未分类）与可选改名。按现有标题精确匹配；改名撞名会被跳过。",
+            parametersJSON: """
+            {"type": "object", "properties": {"note": {"type": "string"}, "classifications": {"type": "array", "items": {"type": "object", "properties": {"title": {"type": "string", "description": "现有文档标题，逐字一致"}, "category": {"type": "string", "enum": ["世界观", "势力人物", "修炼体系", "剧情大纲", "题材规则", "未分类"]}, "rename": {"type": "string", "description": "可选：规范化后的新标题（加序号前缀如「01·」）"}, "note": {"type": "string"}}, "required": ["title", "category"]}}}, "required": ["classifications"]}
+            """
+        ) { args in
+            struct C: Decodable { let title: String; let category: String; let rename: String?; let note: String? }
+            struct P: Decodable { let note: String?; let classifications: [C] }
+            let p = try decode(P.self, args)
+            let items = p.classifications.map {
+                CanonClassItem(title: $0.title, category: $0.category, rename: $0.rename, note: $0.note)
+            }
+            await store.addProposal(AIProposal(
+                capability: .canonClassify,
+                title: "设定归类（\(items.count) 篇）",
+                note: p.note ?? "采纳后设定页按类别分组展示。",
+                payload: .canonClassify(items)))
+            return "已登记归类提案 \(items.count) 条，等待作者审阅。"
         }
     }
 

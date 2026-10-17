@@ -540,6 +540,16 @@ final class ProjectStore: ObservableObject {
                 }
             }
             updateChapter(n) { $0.summary = summary }
+        case .canonClassify(let items):
+            // 归类：按标题精确匹配写类别；改名撞名则只改类别（保护既有文档）
+            for item in items {
+                guard let idx = canonSections.firstIndex(where: { $0.title == item.title }) else { continue }
+                canonSections[idx].category = CanonCategory.match(item.category).rawValue
+                if let rename = item.rename, !rename.isEmpty, rename != item.title,
+                   !canonSections.contains(where: { $0.title == rename }) {
+                    canonSections[idx].title = rename
+                }
+            }
         case .canon(let docs):
             // 设定是作者主权：同题不覆盖（作者可能手改过），只追加新题
             // 确定度用中文 rawValue 存储；AI 侧传英文键，这里映射

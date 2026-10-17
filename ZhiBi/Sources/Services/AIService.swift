@@ -47,6 +47,8 @@ final class AIService: ObservableObject {
             return ["propose_canon", "propose_clues", "propose_memo", "get_chapter", "get_facts", "get_clues"]
         case .shortStory:
             return ["propose_draft", "get_canon"]
+        case .canonClassify:
+            return ["propose_canon_classify"]
         case .outlineTimeline:
             return ["propose_storylines", "propose_outline_events", "get_outline", "get_canon"]
         case .clueLedger:
@@ -291,6 +293,21 @@ final class AIService: ObservableObject {
         let bookInfo = "书名：《\(title)》\n题材：\(genre)\n一句话核心：\(premise)"
         await run(capability: .coverBrief, store: store, config: config, chapter: nil,
                   userMessage: PromptLibrary.coverSVGTask(bookInfo: bookInfo, authorName: authorName, mood: mood, direction: direction))
+    }
+
+    /// 设定归类：读全部设定文档 → 每篇给分类与可选改名（提案，作者采纳后生效）
+    func runCanonClassify(store: ProjectStore, config: AgentConfig) async {
+        guard !store.canonSections.isEmpty else {
+            lastError = "还没有设定文档可归类。"
+            return
+        }
+        let listing = store.canonSections.enumerated().map { i, sec -> String in
+            let digest = sec.content
+                .replacingOccurrences(of: "\n", with: " ")
+            return "\(i + 1). 「\(sec.title)」（\(sec.content.count) 字）：\(String(digest.prefix(200)))"
+        }.joined(separator: "\n")
+        await run(capability: .canonClassify, store: store, config: config, chapter: nil,
+                  userMessage: PromptLibrary.canonClassifyTask(sections: listing))
     }
 
     /// 短篇成稿：单一核心冲突 → 大纲+全文一份草稿提案（走既有审查/采纳流程）

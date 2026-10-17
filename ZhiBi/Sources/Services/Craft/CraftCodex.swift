@@ -491,6 +491,8 @@ enum CraftCodex {
         """)
 
         switch capability {
+        case .canonClassify:
+            parts.append("归类是整理不是改写：只动类别与标题，内容一字不改。")
         case .topicScan, .coverBrief:
             // 选题/封面是书外调研，创作法典只给题材惯例参照
             parts.append(profile.taboos.map { "- " + $0 }.joined(separator: "\n"))
