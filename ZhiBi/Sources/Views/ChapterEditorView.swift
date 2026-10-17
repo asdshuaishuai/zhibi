@@ -101,7 +101,7 @@ struct ChapterEditorView: View {
                 .frame(minWidth: ZBSpace.Sheet.wide, minHeight: 520)
         }
         .sheet(isPresented: $showToolbox) {
-            AIToolboxSheet(vm: vm, store: store, chapterNumber: chapterNumber)
+            AIToolboxSheet(vm: vm, store: store, ai: vm.ai, chapterNumber: chapterNumber)
                 .frame(minWidth: ZBSpace.Sheet.wide, minHeight: 560)
         }
     }

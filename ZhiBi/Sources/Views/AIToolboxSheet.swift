@@ -10,6 +10,7 @@ import SwiftUI
 struct AIToolboxSheet: View {
     @ObservedObject var vm: AppViewModel
     @ObservedObject var store: ProjectStore
+    @ObservedObject var ai: AIService
     let chapterNumber: Int
     @Environment(\.dismiss) private var dismiss
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -76,7 +77,7 @@ struct AIToolboxSheet: View {
                 .pickerStyle(.segmented)
                 .labelsHidden()
                 Spacer()
-                if vm.ai.running {
+                if ai.running {
                     ProgressView().controlSize(.small)
                 }
             }
@@ -93,7 +94,7 @@ struct AIToolboxSheet: View {
                 Button("取消") { dismiss() }
                 Button(runLabel) { run() }
                     .buttonStyle(.borderedProminent)
-                    .disabled(vm.ai.running || !inputReady)
+                    .disabled(ai.running || !inputReady)
             }
         }
         .padding(ZBSpace.lg)
@@ -101,7 +102,7 @@ struct AIToolboxSheet: View {
 
         // 结果区（纯文本类工具就地展示；提案类完成后提示去收件箱）
         .overlay(alignment: .bottom) {
-            if vm.ai.running || !resultText.isEmpty || vm.ai.lastError != nil || !vm.ai.lastToolLog.isEmpty {
+            if ai.running || !resultText.isEmpty || ai.lastError != nil || !ai.lastToolLog.isEmpty {
                 resultFooter
             }
         }
@@ -201,12 +202,12 @@ struct AIToolboxSheet: View {
     private var resultFooter: some View {
         VStack(alignment: .leading, spacing: ZBSpace.xs) {
             Divider()
-            if let err = vm.ai.lastError {
+            if let err = ai.lastError {
                 Label(err, systemImage: "exclamationmark.triangle.fill")
                     .font(.caption).foregroundStyle(.orange)
             }
-            if vm.ai.running {
-                ForEach(vm.ai.lastToolLog.suffix(2), id: \.self) { line in
+            if ai.running {
+                ForEach(ai.lastToolLog.suffix(2), id: \.self) { line in
                     Text(line).font(.caption2).foregroundStyle(.secondary)
                 }
             }
@@ -273,7 +274,7 @@ struct AIToolboxSheet: View {
                         .disabled(savedAsProposal)
                     }
                 }
-            } else if !vm.ai.running, tool == .organize || tool == .shortStory {
+            } else if !ai.running, tool == .organize || tool == .shortStory {
                 Text("完成——产出已进「提案收件箱」，去逐条审阅采纳。").font(.caption).foregroundStyle(.green)
             }
         }
@@ -289,23 +290,23 @@ struct AIToolboxSheet: View {
         Task {
             switch tool {
             case .analyze:
-                let r = await vm.ai.runAnalyzeText(store: store, referenceText: referenceText, focus: analyzeFocus)
+                let r = await ai.runAnalyzeText(store: store, referenceText: referenceText, focus: analyzeFocus)
                 resultText = r ?? ""
             case .organize:
-                await vm.ai.runOrganize(store: store, config: vm.config)
+                await ai.runOrganize(store: store, config: vm.config)
             case .canonClassify:
-                await vm.ai.runCanonClassify(store: store, config: vm.config)
+                await ai.runCanonClassify(store: store, config: vm.config)
             case .coverSVG:
-                let r = await vm.ai.runCoverSVG(store: store, authorName: coverAuthor,
+                let r = await ai.runCoverSVG(store: store, authorName: coverAuthor,
                                                 mood: coverMood, direction: coverDirection)
                 if let code = CoverSVG.extractSVG(r ?? "") {
                     coverSVGCode = code
                 } else {
                     resultText = r ?? ""
-                    vm.ai.lastError = "AI 没有产出可解析的 SVG 代码块——点一次重试，或改写画面方向。"
+                    ai.lastError = "AI 没有产出可解析的 SVG 代码块——点一次重试，或改写画面方向。"
                 }
             case .shortStory:
-                await vm.ai.runShortStory(store: store, config: vm.config,
+                await ai.runShortStory(store: store, config: vm.config,
                                           chapter: chapterNumber, conflict: shortConflict, words: shortWords)
             }
         }

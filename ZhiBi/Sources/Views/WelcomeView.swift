@@ -179,11 +179,11 @@ struct WelcomeView: View {
             createSheet
         }
         .sheet(isPresented: $showTopicScan) {
-            TopicScanSheet(vm: vm)
+            TopicScanSheet(vm: vm, ai: vm.ai)
                 .frame(minWidth: ZBSpace.Sheet.wide, minHeight: 520)
         }
         .sheet(item: $coverDesignRef) { designRef in
-            CoverDesignSheet(ref: designRef, vm: vm, onAdopted: { coverRefresh = UUID() })
+            CoverDesignSheet(ref: designRef, vm: vm, ai: vm.ai, onAdopted: { coverRefresh = UUID() })
                 .frame(minWidth: ZBSpace.Sheet.wide, minHeight: 560)
         }
         // 关窗即清空表单：残留的书名/一句话核心最容易让人误建一本书

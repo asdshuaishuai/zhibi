@@ -7,6 +7,7 @@ import SwiftUI
 
 struct TopicScanSheet: View {
     @ObservedObject var vm: AppViewModel
+    @ObservedObject var ai: AIService
     @Environment(\.dismiss) private var dismiss
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -26,7 +27,7 @@ struct TopicScanSheet: View {
                 Text("story-long-scan · 先找方向，再看自己能不能写")
                     .font(.caption).foregroundStyle(.secondary)
                 Spacer()
-                if vm.ai.running { ProgressView().controlSize(.small) }
+                if ai.running { ProgressView().controlSize(.small) }
             }
 
             Text("把平台/榜单上你看到的题材、人设、开篇钩子贴进来（越具体越好；\"FQ 榜单悬疑\"这类概述也行）。AI 提炼共性后给 2-3 个开书方向与依据。")
@@ -53,10 +54,10 @@ struct TopicScanSheet: View {
                     copied = true
                 }
                 .disabled(resultText.isEmpty)
-                Button(vm.ai.running ? "调研中…" : "开始调研") {
+                Button(ai.running ? "调研中…" : "开始调研") {
                     resultText = ""
                     Task {
-                        if let r = await vm.ai.runTopicScanResearch(config: vm.config,
+                        if let r = await ai.runTopicScanResearch(config: vm.config,
                                                                     material: material,
                                                                     ownAssets: ownAssets) {
                             withAnimation(ZBMotion.standard(reduceMotion: reduceMotion)) {
@@ -66,12 +67,12 @@ struct TopicScanSheet: View {
                     }
                 }
                 .buttonStyle(.borderedProminent)
-                .disabled(vm.ai.running || !inputReady)
+                .disabled(ai.running || !inputReady)
             }
 
-            if vm.ai.running {
+            if ai.running {
                 ScrollView {
-                    Text(vm.ai.streamPreview.isEmpty ? "…" : vm.ai.streamPreview)
+                    Text(ai.streamPreview.isEmpty ? "…" : ai.streamPreview)
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -87,7 +88,7 @@ struct TopicScanSheet: View {
                 }
                 .background(Color(nsColor: .underPageBackgroundColor))
                 .cornerRadius(8)
-            } else if let err = vm.ai.lastError {
+            } else if let err = ai.lastError {
                 Label(err, systemImage: "exclamationmark.triangle.fill")
                     .font(.caption).foregroundStyle(.orange)
             } else {
@@ -97,6 +98,6 @@ struct TopicScanSheet: View {
         }
         .padding(ZBSpace.lg)
         .frame(minWidth: ZBSpace.Sheet.wide, minHeight: 520)
-        .onDisappear { vm.ai.lastError = nil }
+        .onDisappear { ai.lastError = nil }
     }
 }

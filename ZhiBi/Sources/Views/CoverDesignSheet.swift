@@ -9,6 +9,8 @@ import AppKit
 struct CoverDesignSheet: View {
     let ref: ProjectRef
     @ObservedObject var vm: AppViewModel
+    /// 直接观察 AIService：running/lastError/streamPreview 变化才会驱动本 sheet 重渲染
+    @ObservedObject var ai: AIService
     var onAdopted: () -> Void
     @Environment(\.dismiss) private var dismiss
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -22,7 +24,7 @@ struct CoverDesignSheet: View {
     @State private var metaGenre = ""
     @State private var metaPremise = ""
 
-    private var inputReady: Bool { !vm.ai.running }
+    private var inputReady: Bool { !ai.running }
 
     var body: some View {
         VStack(alignment: .leading, spacing: ZBSpace.sm) {
@@ -30,7 +32,7 @@ struct CoverDesignSheet: View {
                 Text("封面设计").font(.headline)
                 Text("《\\(ref.title)》· LLM 直接绘制 SVG").font(.caption).foregroundStyle(.secondary)
                 Spacer()
-                if vm.ai.running { ProgressView().controlSize(.small) }
+                if ai.running { ProgressView().controlSize(.small) }
             }
 
             Text("LLM 按 600×800（3:4）直接产出 SVG：渐变背景/装饰形状/书名署名一次成形。预览满意点「采用」，书架立即换上。")
@@ -48,24 +50,24 @@ struct CoverDesignSheet: View {
             HStack {
                 Spacer()
                 Button("取消") { dismiss() }
-                Button(vm.ai.running ? "绘制中…" : "绘制封面") {
+                Button(ai.running ? "绘制中…" : "绘制封面") {
                     run()
                 }
                 .buttonStyle(.borderedProminent)
-                .disabled(vm.ai.running)
+                .disabled(ai.running)
             }
 
             // 绘制状态卡：运行中有进度与流式预览，失败有明确原因
-            if vm.ai.running {
+            if ai.running {
                 VStack(alignment: .leading, spacing: ZBSpace.xs) {
                     HStack(spacing: ZBSpace.xs) {
                         ProgressView().controlSize(.small)
                         Text("LLM 正在绘制封面（通常 10~30 秒）——先出构图与配色，文字最后落。")
                             .font(.caption).bold()
                     }
-                    if !vm.ai.streamPreview.isEmpty {
+                    if !ai.streamPreview.isEmpty {
                         ScrollView {
-                            Text(vm.ai.streamPreview)
+                            Text(ai.streamPreview)
                                 .font(.system(size: 10, design: .monospaced))
                                 .foregroundStyle(.secondary)
                                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -78,7 +80,7 @@ struct CoverDesignSheet: View {
                 .padding(ZBSpace.sm)
                 .background(Color.accentColor.opacity(0.06))
                 .cornerRadius(8)
-            } else if let err = vm.ai.lastError, svgCode.isEmpty {
+            } else if let err = ai.lastError, svgCode.isEmpty {
                 Label(err, systemImage: "exclamationmark.triangle.fill")
                     .font(.caption).foregroundStyle(.orange)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -142,7 +144,7 @@ struct CoverDesignSheet: View {
         let moodText = mood
         let dirText = direction
         Task {
-            if let raw = await vm.ai.runCoverSVGForBook(
+            if let raw = await ai.runCoverSVGForBook(
                 config: vm.config,
                 bookTitle: ref.title,
                 genre: metaGenre,
@@ -168,7 +170,7 @@ struct CoverDesignSheet: View {
             adopted = true
             onAdopted()
         } catch {
-            vm.ai.lastError = "封面写入失败：\\(error.localizedDescription)"
+            ai.lastError = "封面写入失败：\\(error.localizedDescription)"
         }
     }
 }
