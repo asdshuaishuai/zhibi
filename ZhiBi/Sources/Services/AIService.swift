@@ -196,6 +196,48 @@ final class AIService: ObservableObject {
         return result
     }
 
+    /// 书架级封面绘制（对标 story-cover）：不打开项目，直接对 ProjectRef 出 SVG 封面。
+    /// 元信息从 project.json 读取；产出就地预览，作者采用才写 cover.svg。
+    func runCoverSVGForBook(config: AgentConfig, bookTitle: String, genre: String, premise: String,
+                            authorName: String, mood: String, direction: String) async -> String? {
+        if let problem = validateConfig(config) {
+            lastError = problem
+            return nil
+        }
+        running = true
+        runningCapability = .coverBrief
+        streamPreview = ""
+        lastError = nil
+        defer { running = false; runningCapability = nil }
+        let title = bookTitle
+        let g = genre.isEmpty ? "（未定）" : genre
+        let premiseText = premise.isEmpty ? "（未定）" : premise
+        let bookInfo = "书名：《\(title)》\n题材：\(g)\n一句话核心：\(premiseText)"
+        do {
+            let agent = createAgent(options: AgentOptions(
+                apiKey: config.apiKey, model: config.model, baseURL: config.baseURL,
+                provider: .openai,
+                systemPrompt: PromptLibrary.systemInstruction(for: .coverBrief),
+                maxTurns: 2, permissionMode: .bypassPermissions, tools: []))
+            var filter = ThinkTagFilter()
+            var out = ""
+            for await message in agent.stream(PromptLibrary.coverSVGTask(bookInfo: bookInfo, authorName: authorName,
+                                                                         mood: mood, direction: direction)) {
+                switch message {
+                case .partialMessage(let d): out += filter.push(d.text)
+                case .result(let d):
+                    out += filter.flush()
+                    if d.subtype != .success { lastError = d.text }
+                default: break
+                }
+            }
+            return out.trimmingCharacters(in: .whitespacesAndNewlines)
+        } catch {
+            lastError = error.localizedDescription
+            return nil
+        }
+    }
+
     /// 不依赖项目的纯文本通道（runTextOnly 需要 store 注入创作法典；书架级调研没有 store）
     private func runTextOnlyFree(config: AgentConfig, capability: AICapability, userMessage: String) async -> String? {
         do {

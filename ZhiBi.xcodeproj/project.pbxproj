@@ -20,6 +20,7 @@
 		2C0E8BB1172B2360ED8510DB /* ZhiBiApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 57A4AC91728475A17315AB76 /* ZhiBiApp.swift */; };
 		329B927968DD10B65F36B995 /* CraftCodex.swift in Sources */ = {isa = PBXBuildFile; fileRef = 38C055309609F0A96A3889ED /* CraftCodex.swift */; };
 		35B5154796C621F2C7C03820 /* AppViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1F81B43953D09FE79B3AFE5 /* AppViewModel.swift */; };
+		40854F72CCB78D7025C87623 /* CoverDesignSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = FC2B2CBAC0D85A11849025C2 /* CoverDesignSheet.swift */; };
 		433472192499F4DAEAE3447C /* BookCover.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3933594CF3EF48D5DEBBBB80 /* BookCover.swift */; };
 		4A4B39EC392AC72AECE5A10D /* MemoryGraphView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 85DCBAAD9C9AD47FD7F3ED1F /* MemoryGraphView.swift */; };
 		4A7C72C09317E30AB197BE6F /* MemoryGraph.swift in Sources */ = {isa = PBXBuildFile; fileRef = D81F3E6470C04EE2F1FB6CB7 /* MemoryGraph.swift */; };
@@ -145,6 +146,7 @@
 		F6615822875FE4D9E8C09829 /* MarkdownPreview.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownPreview.swift; sourceTree = "<group>"; };
 		F92E55FCFC8B89B7827D0F51 /* OutlineSync.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OutlineSync.swift; sourceTree = "<group>"; };
 		FC177BEC977F220E191AF37A /* ZhiBi.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = ZhiBi.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		FC2B2CBAC0D85A11849025C2 /* CoverDesignSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoverDesignSheet.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -297,6 +299,7 @@
 				3CA77D9DB47DD6623FCBB11F /* ChapterEditorView.swift */,
 				ED1008100FF4B150910026A2 /* CharactersView.swift */,
 				B85387468E5BFF6999C7E32C /* ClueBoardView.swift */,
+				FC2B2CBAC0D85A11849025C2 /* CoverDesignSheet.swift */,
 				0AB87DF6723082F1EAB19FBC /* DesignSystem.swift */,
 				5314F4D05F25C0C7182B41E3 /* GlassTheme.swift */,
 				F6615822875FE4D9E8C09829 /* MarkdownPreview.swift */,
@@ -482,6 +485,7 @@
 				9E75DEA6D836A6735C20784A /* ClueModels.swift in Sources */,
 				7DBBADB280EC84C8E8F57516 /* ContextPackBuilder.swift in Sources */,
 				AADDE5FA5C78C5F58991973A /* ContinuityAuditor.swift in Sources */,
+				40854F72CCB78D7025C87623 /* CoverDesignSheet.swift in Sources */,
 				00693E2F60040EBE3D370C76 /* CoverSVG.swift in Sources */,
 				F006AF974A9BF9E7856A11A9 /* CraftCodex.swift in Sources */,
 				01FB9B604C2857A0508A2428 /* DesignSystem.swift in Sources */,

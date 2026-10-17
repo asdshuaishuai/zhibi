@@ -42,6 +42,8 @@ struct WelcomeView: View {
     @AppStorage("shelfLayout") private var shelfLayout: ShelfLayout = .grid
     @State private var showCreate = false
     @State private var showTopicScan = false
+    @State private var coverDesignRef: ProjectRef?
+    @State private var coverRefresh = UUID()
     @State private var projectPendingDelete: ProjectRef?
     @State private var newTitle = ""
     @State private var newGenre = ""
@@ -180,6 +182,10 @@ struct WelcomeView: View {
             TopicScanSheet(vm: vm)
                 .frame(minWidth: ZBSpace.Sheet.wide, minHeight: 520)
         }
+        .sheet(item: $coverDesignRef) { designRef in
+            CoverDesignSheet(ref: designRef, vm: vm, onAdopted: { coverRefresh = UUID() })
+                .frame(minWidth: ZBSpace.Sheet.wide, minHeight: 560)
+        }
         // 关窗即清空表单：残留的书名/一句话核心最容易让人误建一本书
         .onChange(of: showCreate) { _, showing in
             if !showing { resetCreateForm() }
@@ -205,10 +211,12 @@ struct WelcomeView: View {
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 148, maximum: 176), spacing: 26)],
                           spacing: 30) {
                     ForEach(books) { ref in
-                        ShelfBookCard(ref: ref, onOpen: { vm.openProject(ref) },
+                        ShelfBookCard(ref: ref, coverRefresh: coverRefresh,
+                                      onOpen: { vm.openProject(ref) },
                                       onReveal: { NSWorkspace.shared.activateFileViewerSelecting([ref.url]) },
                                       onDelete: { projectPendingDelete = ref },
-                                      onCycleStyle: { await vm.cycleCoverStyle(for: ref) })
+                                      onCycleStyle: { await vm.cycleCoverStyle(for: ref) },
+                                      onCoverDesign: { coverDesignRef = ref })
                     }
                 }
                 .padding(.horizontal, 26)
@@ -224,10 +232,11 @@ struct WelcomeView: View {
                     ForEach(rows.indices, id: \.self) { r in
                         HStack(alignment: .bottom, spacing: 30) {
                             ForEach(rows[r]) { ref in
-                                ShelfBookCard(ref: ref, onOpen: { vm.openProject(ref) },
+                                ShelfBookCard(ref: ref, coverRefresh: coverRefresh, onOpen: { vm.openProject(ref) },
                                               onReveal: { NSWorkspace.shared.activateFileViewerSelecting([ref.url]) },
                                               onDelete: { projectPendingDelete = ref },
-                                              onCycleStyle: { await vm.cycleCoverStyle(for: ref) })
+                                              onCycleStyle: { await vm.cycleCoverStyle(for: ref) },
+                                              onCoverDesign: { coverDesignRef = ref })
                             }
                         }
                         .padding(.horizontal, 26)
@@ -255,7 +264,8 @@ struct WelcomeView: View {
                         ShelfListRow(ref: ref,
                                      onOpen: { vm.openProject(ref) },
                                      onReveal: { NSWorkspace.shared.activateFileViewerSelecting([ref.url]) },
-                                     onDelete: { projectPendingDelete = ref })
+                                     onDelete: { projectPendingDelete = ref },
+                                     onCoverDesign: { coverDesignRef = ref })
                     }
                 }
                 .padding(.horizontal, 22)
@@ -296,10 +306,12 @@ struct ShelfStats {
 
 struct ShelfBookCard: View {
     let ref: ProjectRef
+    var coverRefresh: UUID = UUID()
     let onOpen: () -> Void
     let onReveal: () -> Void
     let onDelete: () -> Void
     var onCycleStyle: () async -> Int? = { nil }
+    var onCoverDesign: () -> Void = {}
 
     @State private var stats: ShelfStats?
     @State private var style: Int?
@@ -329,12 +341,29 @@ struct ShelfBookCard: View {
         .animation(ZBMotion.curve(ZBMotion.standard, reduceMotion: reduceMotion), value: hovering)
         .onTapGesture { onOpen() }
         .onHover { hovering = $0 }
+        .overlay(alignment: .topTrailing) {
+            if hovering {
+                Button {
+                    onCoverDesign()
+                } label: {
+                    Image(systemName: "photo.artframe")
+                        .font(.caption)
+                        .padding(5)
+                        .background(.thinMaterial, in: Circle())
+                }
+                .buttonStyle(.plain)
+                .help("AI 封面设计（SVG 绘制）")
+                .padding(6)
+                .transition(.opacity)
+            }
+        }
         .contextMenu {
+            Button("AI 封面设计…") { onCoverDesign() }
             Button("在访达中显示") { onReveal() }
             Divider()
             Button("删除…", role: .destructive) { onDelete() }
         }
-        .task {
+        .task(id: "\(coverRefresh.uuidString)-\(ref.url.path)") {
             stats = await loadStats(url: ref.url)
             style = await loadCoverStyle(url: ref.url)
             svgCover = await ShelfCoverLoader.load(url: ref.url)
@@ -451,6 +480,7 @@ struct ShelfListRow: View {
     let onOpen: () -> Void
     let onReveal: () -> Void
     let onDelete: () -> Void
+    var onCoverDesign: () -> Void = {}
 
     @State private var stats: ShelfStats?
     @State private var openingFlag = false

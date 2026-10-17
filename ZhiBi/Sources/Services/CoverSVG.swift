@@ -42,6 +42,11 @@ enum CoverSVG {
 enum ShelfCoverLoader {
     private static let cache = NSCache<NSString, NSImage>()
 
+    /// 封面重绘/采用后让缓存失效，强制下次加载重新解码
+    static func invalidate(url: URL) {
+        cache.removeObject(forKey: url.appendingPathComponent("cover.svg").path as NSString)
+    }
+
     static func load(url: URL) async -> NSImage? {
         let file = url.appendingPathComponent("cover.svg")
         let key = file.path as NSString
