@@ -55,9 +55,36 @@ struct CoverDesignSheet: View {
                 .disabled(vm.ai.running)
             }
 
-            if let err = vm.ai.lastError, vm.ai.running == false, svgCode.isEmpty {
+            // 绘制状态卡：运行中有进度与流式预览，失败有明确原因
+            if vm.ai.running {
+                VStack(alignment: .leading, spacing: ZBSpace.xs) {
+                    HStack(spacing: ZBSpace.xs) {
+                        ProgressView().controlSize(.small)
+                        Text("LLM 正在绘制封面（通常 10~30 秒）——先出构图与配色，文字最后落。")
+                            .font(.caption).bold()
+                    }
+                    if !vm.ai.streamPreview.isEmpty {
+                        ScrollView {
+                            Text(vm.ai.streamPreview)
+                                .font(.system(size: 10, design: .monospaced))
+                                .foregroundStyle(.secondary)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                        .frame(height: 110)
+                        .background(Color(nsColor: .underPageBackgroundColor))
+                        .cornerRadius(6)
+                    }
+                }
+                .padding(ZBSpace.sm)
+                .background(Color.accentColor.opacity(0.06))
+                .cornerRadius(8)
+            } else if let err = vm.ai.lastError, svgCode.isEmpty {
                 Label(err, systemImage: "exclamationmark.triangle.fill")
                     .font(.caption).foregroundStyle(.orange)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(ZBSpace.sm)
+                    .background(Color.orange.opacity(0.08))
+                    .cornerRadius(8)
             }
 
             if let preview {

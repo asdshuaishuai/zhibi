@@ -224,9 +224,12 @@ final class AIService: ObservableObject {
             for await message in agent.stream(PromptLibrary.coverSVGTask(bookInfo: bookInfo, authorName: authorName,
                                                                          mood: mood, direction: direction)) {
                 switch message {
-                case .partialMessage(let d): out += filter.push(d.text)
+                case .partialMessage(let d):
+                    out += filter.push(d.text)
+                    streamPreview = String(out.suffix(600))   // 绘制过程实时反馈
                 case .result(let d):
                     out += filter.flush()
+                    streamPreview = ""
                     if d.subtype != .success { lastError = d.text }
                 default: break
                 }
