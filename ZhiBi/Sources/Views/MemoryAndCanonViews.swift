@@ -4,11 +4,13 @@ import SwiftUI
 
 struct MemoryView: View {
     @ObservedObject var store: ProjectStore
+    var vm: AppViewModel?
 
     enum Tab: String, CaseIterable {
         case ledger = "事实账本"
         case conflicts = "矛盾体检"
         case subjects = "人物归一"
+        case dossiers = "长程档案"
     }
 
     @State private var tab: Tab = .ledger
@@ -44,13 +46,14 @@ struct MemoryView: View {
                 ForEach(Tab.allCases, id: \.self) { Text($0.rawValue).tag($0) }
             }
             .pickerStyle(.segmented)
-            .frame(width: 420)
+            .frame(width: 520)
             .padding(10)
 
             switch tab {
             case .ledger: ledgerTab
             case .conflicts: conflictsTab
             case .subjects: subjectsTab
+            case .dossiers: dossiersTab
             }
         }
         .background(ZB.canvas)
@@ -105,6 +108,86 @@ struct MemoryView: View {
     }
 
     // MARK: 页签 1：事实账本
+
+    // MARK: 长程档案（跨全书检索记忆）
+
+    @State private var dossierQuery = ""
+
+    private var dossiersTab: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: ZBSpace.xs) {
+                Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+                TextField("检索：人物 / 物件 / 地名 / 任意词（跨全书档案卡）", text: $dossierQuery)
+                    .textFieldStyle(.roundedBorder)
+                if let vm {
+                    Button("提取本章档案卡") {
+                        Task { await vm.ai.runDossierExtract(store: store, config: vm.config, chapter: store.currentChapter) }
+                    }
+                    .controlSize(.small)
+                    .disabled(vm.ai.running || store.chapter(store.currentChapter)?.prose.isEmpty ?? true)
+                    .help("对当前章跑一次档案提取（提案，采纳后入检索库）")
+                }
+            }
+            .padding(10)
+
+            Divider()
+
+            if store.dossiers.isEmpty {
+                VStack(spacing: ZBSpace.sm) {
+                    Image(systemName: "books.vertical").font(.largeTitle).foregroundStyle(.secondary)
+                    Text("还没有档案卡").font(.headline)
+                    Text("档案卡是每章的跨全书检索记忆：场景/人物/推进/悬念/关键物件与台词。\n写完后在章节编辑器「AI 协作 → 提取档案卡」或上方按钮生成，采纳后入此库。")
+                        .font(.caption).foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                ScrollView {
+                    let results: [ChapterDossier] = dossierQuery.isEmpty
+                        ? store.dossiers.sorted { $0.chapter > $1.chapter }
+                        : DossierIndex.build(from: store.dossiers).search(dossierQuery, limit: 30)
+                    LazyVStack(alignment: .leading, spacing: ZBSpace.xs) {
+                        if !dossierQuery.isEmpty {
+                            Text("命中 \(results.count) 章").font(.caption).foregroundStyle(.secondary)
+                        }
+                        ForEach(results) { d in
+                            dossierCard(d)
+                        }
+                    }
+                    .padding(10)
+                }
+            }
+        }
+    }
+
+    private func dossierCard(_ d: ChapterDossier) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Text("第\(d.chapter)章").font(.caption.bold()).foregroundStyle(Color.accentColor)
+                Text(d.headline).font(.callout)
+                Spacer()
+            }
+            if !d.cast.isEmpty {
+                Text("出场：" + d.cast.joined(separator: "、"))
+                    .font(.caption2).foregroundStyle(.secondary)
+            }
+            if !d.relics.isEmpty {
+                Text("细节：" + d.relics.joined(separator: "；"))
+                    .font(.caption2).foregroundStyle(.tertiary)
+                    .lineLimit(2)
+            }
+            if !d.hooks.isEmpty {
+                Text("悬念：" + d.hooks.joined(separator: "；"))
+                    .font(.caption2).foregroundStyle(.orange.opacity(0.85))
+                    .lineLimit(1)
+            }
+        }
+        .padding(ZBSpace.sm)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(ZB.card)
+        .cornerRadius(8)
+        .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(ZB.hairline.opacity(0.7)))
+    }
 
     private var ledgerTab: some View {
         VStack(spacing: 0) {

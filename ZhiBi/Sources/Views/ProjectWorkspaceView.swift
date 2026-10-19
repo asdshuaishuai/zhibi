@@ -142,7 +142,7 @@ struct ProjectWorkspaceView: View {
         case .characters:
             CharactersView(store: store)
         case .memory:
-            MemoryView(store: store)
+            MemoryView(store: store, vm: vm)
         case .canon:
             CanonView(vm: vm, store: store)
         case .inbox:

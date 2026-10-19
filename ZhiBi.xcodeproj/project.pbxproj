@@ -37,7 +37,9 @@
 		6A044353D365F658DF719D54 /* ChapterEditorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3CA77D9DB47DD6623FCBB11F /* ChapterEditorView.swift */; };
 		6B224B0EFF7BBC6B98E6CFA8 /* ProjectWorkspaceView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 87A12625DCE6F7B9BE81EC20 /* ProjectWorkspaceView.swift */; };
 		6DA35BEA61F006059FCFF065 /* AgentKernel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 62FF6B74E24958613D5696CD /* AgentKernel.swift */; };
+		758FB516AF155192BCE5B971 /* DossierMemory.swift in Sources */ = {isa = PBXBuildFile; fileRef = F126364577EA6148C40B8212 /* DossierMemory.swift */; };
 		7DBBADB280EC84C8E8F57516 /* ContextPackBuilder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 73B9D0F5C5D85313593997D8 /* ContextPackBuilder.swift */; };
+		7FDF3C450DBAB1F54B0B95E7 /* DossierMemory.swift in Sources */ = {isa = PBXBuildFile; fileRef = F126364577EA6148C40B8212 /* DossierMemory.swift */; };
 		82DFFE8EEFDD871CA85072C8 /* AILint.swift in Sources */ = {isa = PBXBuildFile; fileRef = D24109F8BBBFCE15821A35F3 /* AILint.swift */; };
 		8492FC3B1853AB61FBC0CD27 /* MemoryHub.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9E48C84DAF0F5A6EB9F9E370 /* MemoryHub.swift */; };
 		874CDCA30631C6766CAC34A4 /* ChapterModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3F918D5AC25FBF1D7AA91135 /* ChapterModels.swift */; };
@@ -145,6 +147,7 @@
 		EC2627A25E1F0210583F89DC /* AIService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AIService.swift; sourceTree = "<group>"; };
 		ED1008100FF4B150910026A2 /* CharactersView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CharactersView.swift; sourceTree = "<group>"; };
 		EFCBDCBAA19FAB8D89D65B31 /* ClueModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClueModels.swift; sourceTree = "<group>"; };
+		F126364577EA6148C40B8212 /* DossierMemory.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DossierMemory.swift; sourceTree = "<group>"; };
 		F6615822875FE4D9E8C09829 /* MarkdownPreview.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownPreview.swift; sourceTree = "<group>"; };
 		F92E55FCFC8B89B7827D0F51 /* OutlineSync.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OutlineSync.swift; sourceTree = "<group>"; };
 		FC177BEC977F220E191AF37A /* ZhiBi.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = ZhiBi.app; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -204,6 +207,14 @@
 				D8564138587ABEAC002A4B68 /* ProjectStore.swift */,
 			);
 			path = Persistence;
+			sourceTree = "<group>";
+		};
+		6F64CCD132AF273BBEF431ED /* Memory */ = {
+			isa = PBXGroup;
+			children = (
+				F126364577EA6148C40B8212 /* DossierMemory.swift */,
+			);
+			path = Memory;
 			sourceTree = "<group>";
 		};
 		7847387BA101F06C69919D76 /* Sources */ = {
@@ -339,6 +350,7 @@
 				29830050D85A9F2D758BB0CC /* SkeletonGate.swift */,
 				636E894AA41D2F164868F6DE /* Validator.swift */,
 				9916FFA3BC2949D657BF088C /* Craft */,
+				6F64CCD132AF273BBEF431ED /* Memory */,
 				7B7BCDD8BBB4F317A351FDC7 /* MemoryGraph */,
 				CEEA9862FA21FD25E09FE661 /* ModelHub */,
 			);
@@ -449,6 +461,7 @@
 				876638256403F817B9BDF5CD /* ContinuityAuditor.swift in Sources */,
 				FDFB5364F94B2390B8A9EA9D /* CoverSVG.swift in Sources */,
 				329B927968DD10B65F36B995 /* CraftCodex.swift in Sources */,
+				758FB516AF155192BCE5B971 /* DossierMemory.swift in Sources */,
 				F54387575F51B636DF68B6C9 /* ExportService.swift in Sources */,
 				239E7CEDB043898D630BED65 /* ImportService.swift in Sources */,
 				D8AFEF334526DAA579FCCC46 /* MarkdownLite.swift in Sources */,
@@ -493,6 +506,7 @@
 				00693E2F60040EBE3D370C76 /* CoverSVG.swift in Sources */,
 				F006AF974A9BF9E7856A11A9 /* CraftCodex.swift in Sources */,
 				01FB9B604C2857A0508A2428 /* DesignSystem.swift in Sources */,
+				7FDF3C450DBAB1F54B0B95E7 /* DossierMemory.swift in Sources */,
 				1AF963D9595D18CEF3DFF486 /* ExportService.swift in Sources */,
 				169192E9D97F7D3E12DB4517 /* GlassTheme.swift in Sources */,
 				8AF11B4F365558786EB55430 /* ImportService.swift in Sources */,

@@ -49,6 +49,8 @@ enum ProjectLayout {
     static func stagesFile(_ root: URL) -> URL { root.appendingPathComponent("stages.json") }
 
     static func cluesFile(_ root: URL) -> URL { root.appendingPathComponent("clues.json") }
+    /// 长程记忆：章档案卡
+    static func dossiersFile(_ root: URL) -> URL { root.appendingPathComponent("dossiers.json") }
     static func memoryFile(_ root: URL) -> URL { root.appendingPathComponent("memory.json") }
     static func projectFile(_ root: URL) -> URL { root.appendingPathComponent("project.json") }
     static func checkpointsDir(_ root: URL) -> URL { root.appendingPathComponent("checkpoints", isDirectory: true) }

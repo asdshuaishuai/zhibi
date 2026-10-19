@@ -177,6 +177,12 @@ struct ChapterEditorView: View {
                 }
                 .keyboardShortcut("m", modifiers: [.command, .shift])
                 Button {
+                    Task { await vm.ai.runDossierExtract(store: store, config: vm.config, chapter: chapterNumber) }
+                } label: {
+                    Label("提取档案卡（长程记忆）", systemImage: "books.vertical")
+                }
+                .help("本章的场景/人物/推进/悬念/关键细节 → 跨全书可检索的档案卡")
+                Button {
                     Task { await vm.ai.runClueInventory(store: store, config: vm.config, scope: "") }
                 } label: {
                     Label("AI 盘点伏笔（全书）", systemImage: "link")

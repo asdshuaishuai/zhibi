@@ -22,6 +22,7 @@ enum NovelTools {
             proposeMemo(store: store),
             proposeCanon(store: store),
             proposeCanonClassify(store: store),
+            proposeDossier(store: store, chapter: chapter),
             getChapter(store: store),
             getClues(store: store),
             getOutline(store: store),
@@ -529,6 +530,40 @@ enum NovelTools {
         }
     }
 
+    static func proposeDossier(store: ProjectStore, chapter: Int) -> AgentTool {
+        AgentTool(
+            name: "propose_dossier",
+            description: "提交本章长程记忆档案卡（场景/人物/推进/拐点/悬念/关键物件与台词）。这是跨全书检索的记忆锚点：relics 里放带专名的物料与原句，写到后面的章节要靠它召回本章细节。",
+            parametersJSON: """
+            {"type":"object","properties":{"headline":{"type":"string"},"scenes":{"type":"array","items":{"type":"string"}},"cast":{"type":"array","items":{"type":"string"}},"advances":{"type":"array","items":{"type":"string"}},"turns":{"type":"array","items":{"type":"string"}},"hooks":{"type":"array","items":{"type":"string"}},"relics":{"type":"array","items":{"type":"string"}}},"required":["headline"]}
+            """
+        ) { args in
+            struct P: Decodable {
+                let headline: String
+                let scenes: [String]?
+                let cast: [String]?
+                let advances: [String]?
+                let turns: [String]?
+                let hooks: [String]?
+                let relics: [String]?
+            }
+            let p = try decode(P.self, args)
+            var card = ChapterDossier(chapter: chapter, headline: p.headline)
+            card.scenes = p.scenes ?? []
+            card.cast = p.cast ?? []
+            card.advances = p.advances ?? []
+            card.turns = p.turns ?? []
+            card.hooks = p.hooks ?? []
+            card.relics = p.relics ?? []
+            await store.addProposal(AIProposal(
+                capability: .dossierExtract, chapterNumber: chapter,
+                title: "第\(chapter)章 档案卡（长程记忆）",
+                note: "采纳后进入跨全书检索记忆库——后续章节写作时自动召回相关历史细节。",
+                payload: .dossier(card)))
+            return "已登记档案卡提案，等待作者确认。"
+        }
+    }
+
     static func proposeCanonClassify(store: ProjectStore) -> AgentTool {
         AgentTool(
             name: "propose_canon_classify",
@@ -659,6 +694,7 @@ enum NovelTools {
             ("propose_skeleton", proposeSkeleton(store: store, chapter: n)),
             ("propose_draft", proposeDraft(store: store, chapter: n)),
             ("propose_memory", proposeMemory(store: store, chapter: n)),
+            ("propose_dossier", proposeDossier(store: store, chapter: n)),
             ("propose_validation", proposeValidation(store: store, chapter: n)),
             ("propose_deslop", proposeDeslop(store: store, chapter: n)),
         ]

@@ -323,6 +323,18 @@ struct ProposalInboxView: View {
         case .memo(let text):
             MarkdownPreview(markdown: text, fontSize: 13)
                 .frame(minHeight: 100)
+        case .dossier(let d):
+            VStack(alignment: .leading, spacing: 6) {
+                Text(d.headline).font(.callout.bold())
+                if !d.scenes.isEmpty { labeled("场景", d.scenes) }
+                if !d.cast.isEmpty { labeled("出场", d.cast) }
+                if !d.advances.isEmpty { labeled("推进", d.advances) }
+                if !d.turns.isEmpty { labeled("拐点", d.turns) }
+                if !d.hooks.isEmpty { labeled("悬念", d.hooks) }
+                if !d.relics.isEmpty { labeled("关键细节（检索锚点）", d.relics) }
+                Text("采纳 = 进入跨全书检索记忆库；后续章节写作时自动召回相关历史细节。")
+                    .font(.caption2).foregroundStyle(.tertiary)
+            }
         case .canonClassify(let items):
             VStack(alignment: .leading, spacing: 6) {
                 ForEach(items) { item in
@@ -427,6 +439,15 @@ struct ProposalInboxView: View {
                 Text("采纳 = 把大纲从「建书时的计划」同步成「剧情实际的样子」。取消的事件不删记录，只标记，保留曾经计划过什么的痕迹。")
                     .font(.caption2).foregroundStyle(.tertiary)
             }
+        }
+    }
+
+    @ViewBuilder
+    private func labeled(_ title: String, _ items: [String]) -> some View {
+        HStack(alignment: .top, spacing: 6) {
+            Text(title).font(.caption2.bold()).foregroundStyle(.secondary)
+                .frame(width: 76, alignment: .leading)
+            Text(items.joined(separator: "；")).font(.caption2)
         }
     }
 

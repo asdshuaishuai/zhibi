@@ -17,6 +17,8 @@ final class ProjectStore: ObservableObject {
     @Published var dismissedConflicts: [String]? = []
     /// 本书封面（AI 绘制的 SVG，作者采用后持久化为 cover.svg）
     @Published var coverSVG: String?
+    /// 长程记忆：章档案卡（每章一张，跨全书可检索）
+    @Published var dossiers: [ChapterDossier] = []
     @Published var proposals: [AIProposal] = []
     /// 最近一次保存失败原因（磁盘满/权限等）——UI 状态条展示
     @Published var lastSaveError: String?
@@ -66,6 +68,7 @@ final class ProjectStore: ObservableObject {
         var clues: [Clue]
         var memory: MemoryFile?
         var proposals: [AIProposal]
+        var dossiers: [ChapterDossier]
         var chapters: [Chapter]
         var quarantineNotes: [String]
 
@@ -88,6 +91,7 @@ final class ProjectStore: ObservableObject {
             let stages = (try? Disk.readJSON([Stage].self, from: ProjectLayout.stagesFile(rootURL))) ?? []
             let clues = (try? Disk.readJSON([Clue].self, from: ProjectLayout.cluesFile(rootURL))) ?? []
             let memory = try? Disk.readJSON(MemoryFile.self, from: ProjectLayout.memoryFile(rootURL))
+            let dossiers = (try? Disk.readJSON([ChapterDossier].self, from: ProjectLayout.dossiersFile(rootURL))) ?? []
             let proposals = (try? Disk.readJSON([AIProposal].self, from: ProjectLayout.proposalsFile(rootURL))) ?? []
 
             var loaded: [Chapter] = []
@@ -112,7 +116,7 @@ final class ProjectStore: ObservableObject {
             }
             return LoadSnapshot(project: project, coverSVG: coverSVG, canonSections: canon, storylines: storylines,
                                 timelineEvents: timelineEvents, stages: stages, clues: clues, memory: memory,
-                                proposals: proposals, chapters: loaded, quarantineNotes: quarantineNotes)
+                                proposals: proposals, dossiers: dossiers, chapters: loaded, quarantineNotes: quarantineNotes)
         }
     }
 
@@ -130,6 +134,7 @@ final class ProjectStore: ObservableObject {
         self.characterAliases = snapshot.memory?.aliases ?? []
         self.dismissedConflicts = snapshot.memory?.dismissedConflicts ?? []
         self.proposals = snapshot.proposals
+        self.dossiers = snapshot.dossiers
         self.chapters = snapshot.chapters.sorted { $0.number < $1.number }
         dirtyChapters.removeAll()
         if !snapshot.quarantineNotes.isEmpty {
@@ -289,6 +294,7 @@ final class ProjectStore: ObservableObject {
         try Disk.writeJSON(clues, to: ProjectLayout.cluesFile(rootURL))
         try Disk.writeJSON(MemoryFile(facts: facts, aliases: characterAliases, dismissedConflicts: dismissedConflicts), to: ProjectLayout.memoryFile(rootURL))
         try Disk.writeJSON(proposals, to: ProjectLayout.proposalsFile(rootURL))
+        try Disk.writeJSON(dossiers, to: ProjectLayout.dossiersFile(rootURL))
         dirtyChapters.removeAll()
         if canonWriteFailed {
             // 其余账本已全部落盘；把单节 md 导出失败升级为可展示的错误（不阻塞保存本身）
@@ -562,6 +568,11 @@ final class ProjectStore: ObservableObject {
             for f in fixes { applyClueFix(f) }
         case .outlineUpdates(let updates):
             for u in updates { applyOutlineUpdate(u) }
+        case .dossier(let d):
+            var card = d
+            if card.chapter == 0 { card.chapter = chapter ?? 0 }
+            guard card.chapter > 0 else { return false }
+            upsertDossier(card)
         case .report, .deslop, .memo:
             break // 报告类提案已展示在收件箱，无需入库
         }
@@ -734,6 +745,17 @@ final class ProjectStore: ObservableObject {
         let f = DateFormatter()
         f.dateFormat = "yyyyMMdd-HHmmss"
         return f.string(from: date)
+    }
+
+    /// 写入/更新一张章档案卡（记忆提取采纳时调用）
+    func upsertDossier(_ dossier: ChapterDossier) {
+        if let idx = dossiers.firstIndex(where: { $0.chapter == dossier.chapter }) {
+            dossiers[idx] = dossier
+        } else {
+            dossiers.append(dossier)
+        }
+        dossiers.sort { $0.chapter < $1.chapter }
+        saveSoon()
     }
 
     /// 采用/更新本书封面（作者显式动作；内容变了 Disk 签名自然失效）

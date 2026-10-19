@@ -19,6 +19,7 @@ enum AICapability: String, Codable, CaseIterable {
     case chapterDraft = "一键写作"
     case chapterRevise = "按意见修复"
     case memoryExtract = "记忆提取"
+    case dossierExtract = "档案卡提取"
     case validation = "一致性验证"
     case continuityAudit = "全书连贯性审查"
     case outlineSync = "大纲同步"
@@ -75,6 +76,7 @@ enum ProposalPayload: Codable {
     case memo(String)
     case canon([CanonDocProposal])
     case canonClassify([CanonClassItem])
+    case dossier(ChapterDossier)
     /// 埋点修复：可一键采纳的伏笔台账修正（ContinuityAuditor 产出）
     case clueFixes([ClueFix])
     /// 大纲同步：可一键采纳的大纲更新（OutlineSync 产出）

@@ -491,6 +491,8 @@ enum CraftCodex {
         """)
 
         switch capability {
+        case .dossierExtract:
+            parts.append("档案卡是给未来的自己看的检索索引：专名（物件/地名/称呼）与原句比抽象概括值钱。")
         case .canonClassify:
             parts.append("归类是整理不是改写：只动类别与标题，内容一字不改。")
         case .topicScan, .coverBrief:

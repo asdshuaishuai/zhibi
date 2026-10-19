@@ -1045,6 +1045,70 @@ func classifyTests() async throws {
 
 try await classifyTests()
 
+// MARK: - 23. 长程记忆：档案卡 / 倒排索引 / 跨全书召回
+
+MainActor.assumeIsolated {
+    // 索引与检索
+    let d1 = ChapterDossier(chapter: 3, headline: "紫渊夺刀脱身",
+                            scenes: ["临渊区·废弃巷"], cast: ["紫渊（亡命）", "哑叔（暗助）"],
+                            advances: ["紫渊失去军包"], turns: ["从绝望到孤注一掷"],
+                            hooks: ["哑叔身份成谜"], relics: ["缺了半截的紫檀短刀", "他说：留——"])
+    let d2 = ChapterDossier(chapter: 12, headline: "雾隐照面",
+                            scenes: ["雾隐潮汐·外围"], cast: ["紫渊", "白零"],
+                            advances: ["双线并汇"], turns: [], hooks: ["白零的天书"],
+                            relics: ["雾中的白色衣角", "半截紫檀短刀再次出现"])
+    let d3 = ChapterDossier(chapter: 40, headline: "白零开书",
+                            scenes: ["森海王庭·祭坛"], cast: ["白零"], advances: ["天书第一页打开"],
+                            turns: [], hooks: [], relics: ["无字天书"])
+    let idx = DossierIndex.build(from: [d1, d2, d3])
+    check("档案索引构建", idx.coverage.chapters == 3 && idx.coverage.tokens > 10)
+
+    // 关键词召回：应当召回第 12 章（同时含紫渊+短刀）
+    let hits = idx.search("紫檀短刀", limit: 5)
+    check("物件召回", hits.contains { $0.chapter == 12 } && hits.contains { $0.chapter == 3 }, "得到 \(hits.map(\.chapter))")
+    // 实体轨迹
+    check("实体轨迹", idx.entityTrace("紫渊").map(\.chapter).sorted() == [3, 12])
+    check("实体轨迹（哑叔）", idx.entityTrace("哑叔").map(\.chapter) == [3])
+
+    // 本地图：长程召回注入上下文包
+    let st = ProjectStore(rootURL: URL(fileURLWithPath: "/tmp/zhibi-ltm-\(UUID().uuidString).zhibi"))
+    st.ensureChapter(41)
+    st.dossiers = [d1, d2, d3]
+    _ = st.activeClues(currentChapter: 41)
+    let recall = DossierRecall.recall(store: st, forChapter: 41, limit: 5)
+    check("长程召回非空", !recall.dossiers.isEmpty, "命中 \(recall.dossiers.map(\.chapter))")
+    check("召回块可注入", recall.asBlock.contains("第"))
+
+    let pack = ContextPackBuilder.build(store: st, forChapter: 41, budget: 12000)
+    check("上下文包含历史档案块", pack.blocks.contains { $0.title.contains("历史档案召回") },
+          "块：\(pack.blocks.map(\.title))")
+}
+
+@MainActor
+func ltmAsyncTests() async throws {
+    // 档案卡提案：登记 → 采纳 → 落库 + 持久化
+    let st = ProjectStore(rootURL: URL(fileURLWithPath: "/tmp/zhibi-ltm2-\(UUID().uuidString).zhibi"))
+    st.ensureChapter(41)
+    let bound = NovelTools.bindChapter(tools: NovelTools.all(store: st), store: st, chapter: 41)
+    let tool = bound.first { $0.name == "propose_dossier" }
+    _ = try? await tool?.handler("""
+    {"headline":"测试章事件","cast":["甲"],"relics":["青玉令牌"],"hooks":["令牌来路"]}
+    """)
+    if let p = st.proposals.first(where: { $0.capability == .dossierExtract }) {
+        st.acceptProposal(p.id)
+        check("采纳后入档案库", st.dossiers.contains { $0.chapter == 41 && $0.relics.contains("青玉令牌") })
+        try? st.saveNow()
+        let reloaded = ProjectStore(rootURL: st.rootURL)
+        try? reloaded.load()
+        check("档案卡持久化", reloaded.dossiers.contains { $0.chapter == 41 })
+    } else {
+        check("档案卡提案登记", false)
+    }
+}
+
+try await ltmAsyncTests()
+
+
 // MARK: - 22. 端点预检判定矩阵（局域网模型无 Key 必须可用）
 
 MainActor.assumeIsolated {

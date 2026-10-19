@@ -91,6 +91,8 @@ final class AIService: ObservableObject {
             return ["propose_draft", "get_canon"]
         case .canonClassify:
             return ["propose_canon_classify"]
+        case .dossierExtract:
+            return ["propose_dossier"]
         case .outlineTimeline:
             return ["propose_storylines", "propose_outline_events", "get_outline", "get_canon"]
         case .clueLedger:
@@ -388,6 +390,20 @@ final class AIService: ObservableObject {
         let bookInfo = "书名：《\(title)》\n题材：\(genre)\n一句话核心：\(premise)"
         await run(capability: .coverBrief, store: store, config: config, chapter: nil,
                   userMessage: PromptLibrary.coverSVGTask(bookInfo: bookInfo, authorName: authorName, mood: mood, direction: direction))
+    }
+
+    /// 长程记忆档案卡：从本章正文提取可检索的结构化档案（提案，采纳后入记忆库）
+    func runDossierExtract(store: ProjectStore, config: AgentConfig, chapter n: Int) async {
+        guard let ch = store.chapter(n), !ch.prose.isEmpty else {
+            lastError = "第\(n)章还没有正文。"
+            return
+        }
+        let existing = store.dossiers.filter { $0.chapter < n && $0.chapter >= n - 3 }
+            .map { "第\($0.chapter)章：\($0.headline)" }
+            .joined(separator: "\n")
+        await run(capability: .dossierExtract, store: store, config: config, chapter: n,
+                  userMessage: PromptLibrary.dossierExtractTask(
+                    chapter: n, chapterTitle: ch.title, prose: ch.prose, existing: existing))
     }
 
     /// 设定归类：读全部设定文档 → 每篇给分类与可选改名（提案，作者采纳后生效）

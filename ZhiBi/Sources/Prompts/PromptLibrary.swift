@@ -23,6 +23,8 @@ enum PromptLibrary {
         switch capability {
         case .canonClassify:
             return "设定归类：对每篇设定文档给出分类与可选的规范化改名。用 propose_canon_classify 提案。"
+        case .dossierExtract:
+            return "为本章建立长程记忆档案卡：场景序列/出场人物/剧情推进/情绪拐点/悬念/关键物件与台词。用 propose_dossier 提案。这是跨全书检索的记忆锚点——写到 80 章时要靠它找回第 12 章的细节，所以具体名词（物件名/地名/称呼/台词片段）比抽象概括值钱得多。"
         case .framework:
             return "为新书搭建初始框架：主线故事线 + 关键事件时间线 + 背景设定文档。分别用 propose_storylines / propose_outline_events / propose_canon 提案，全部提交给作者审阅。"
         case .topicScan:
@@ -87,6 +89,33 @@ enum PromptLibrary {
         3. 每个事件必须写两条：objective_fact 是"作者真相"（客观发生了什么，含隐瞒的底牌）；reader_knowledge 是"读者已知"（读者此刻被告知了什么）。未揭晓的真相 revealed=false——这是悬念管理的基础。
         4. 主动制造"还没兑现但快要兑现"的缺口；重大反转要有前置伏笔位。
         5. 赌注递增：每个阶段的核心冲突比上一阶段更重。
+        """
+    }
+
+    // MARK: - 长程记忆档案卡（跨全书可检索的记忆锚点）
+
+    static func dossierExtractTask(chapter n: Int, chapterTitle: String, prose: String, existing: String) -> String {
+        """
+        为第\(n)章《\(chapterTitle)》建立长程记忆档案卡。这是**跨全书检索**的记忆锚点：写到第 80 章时，作者和 AI 要靠这张卡找回本章的细节。
+
+        ## 本章正文
+        \(String(prose.prefix(14000)))
+
+        ## 已有档案卡（避免重复）
+        \(existing.isEmpty ? "（无）" : existing)
+
+        ## 要求（用 propose_dossier 提案）
+        - **headline**：一句话说清本章发生了什么（≤60 字，含关键实体名）。
+        - **scenes**：场景序列 2-5 条，每条「地点·推进的事」——具体地名/建筑名。
+        - **cast**：出场人物，格式「人名（出场方式/做了什么）」。
+        - **advances**：不可逆的剧情推进（谁失去了什么/改变了什么立场/揭示了什么）——只写真正改变状态的。
+        - **turns**：情绪拐点（紧张从哪开始/何时反转/何处松弛）。
+        - **hooks**：本章埋下/推进/回收的悬念（对应伏笔编号若有）。
+        - **relics**：**最有检索价值的具体细节**——关键物件（带专名）、重要台词片段（原句）、数字、信物、伤痕、地名。这是长程召回时的金矿，宁多勿少（5-12 条）。
+
+        ## 纪律
+        - 只写正文里明确出现的；不推断、不补全。
+        - relics 要有专名/原句，不要「一把刀」这种泛称——写「缺了半截的紫檀短刀」。
         """
     }
 

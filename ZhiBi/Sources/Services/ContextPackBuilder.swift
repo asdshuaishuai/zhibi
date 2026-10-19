@@ -68,6 +68,13 @@ enum ContextPackBuilder {
             add("活跃伏笔（本章需要考虑的账）", lines.joined(separator: "\n"), cap: 1400)
         }
 
+        // 长程记忆召回：从全书档案卡里检索与本章相关的历史细节（写到 80 章也能找回
+        // 第 12 章的具体物料/台词）——这是"长期记忆"真正生效的通道
+        let recall = DossierRecall.recall(store: store, forChapter: n, limit: 5)
+        if !recall.dossiers.isEmpty {
+            add("历史档案召回（跨全书检索到的相关细节）", recall.asBlock, protected: false, cap: 1600)
+        }
+
         // 角色状态折叠（截至 n-1 章有效的公开事实，按主体折叠）
         var bySubject: [String: [MemoryFact]] = [:]
         for f in store.facts where f.isValid(atChapter: n - 1) && f.publicToReader {
