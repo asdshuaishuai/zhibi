@@ -1267,6 +1267,62 @@ func acceptOutcomeTests() async throws {
 
 try await acceptOutcomeTests()
 
+// MARK: - 28. 质量反馈回路：拒收理由 / 采纳率统计 / 反馈注入 / 修订历史保留
+
+@MainActor
+func qualityLoopTests() async throws {
+    let st = ProjectStore(rootURL: URL(fileURLWithPath: "/tmp/zhibi-ql-\(UUID().uuidString).zhibi"))
+    st.ensureChapter(1)
+    // 构造流水：2 采纳 1 拒收（带理由）1 待审
+    st.addProposal(AIProposal(capability: .chapterSkeleton, chapterNumber: 1, title: "骨架A", payload: .memo("a")))
+    st.addProposal(AIProposal(capability: .chapterSkeleton, chapterNumber: 2, title: "骨架B", payload: .memo("b")))
+    st.addProposal(AIProposal(capability: .chapterSkeleton, chapterNumber: 3, title: "骨架C", payload: .memo("c")))
+    st.addProposal(AIProposal(capability: .chapterDraft, chapterNumber: 1, title: "草稿A", payload: .memo("d")))
+    // 按标题精确定位（addProposal 头插，数组顺序是倒序，不能用下标假设）
+    func idOf(_ title: String) -> UUID? { st.proposals.first { $0.title == title }?.id }
+    if let a = idOf("骨架A") { st.acceptProposal(a) }
+    if let b = idOf("骨架B") { st.acceptProposal(b) }
+    if let c = idOf("骨架C") { st.rejectProposal(c, reason: "质量不够") }
+    // 草稿A 保持 pending
+
+    let stats = QualityStats.derive(from: st.proposals)
+    check("采纳率统计", stats.totalAccepted == 2 && stats.totalRejected == 1 && stats.totalPending == 1
+          && abs(stats.overallRate - 2.0/3.0) < 0.01,
+          "acc=\(stats.totalAccepted) rej=\(stats.totalRejected) rate=\(stats.overallRate)")
+    check("分能力统计", stats.byCapability.contains { $0.capability == "章节骨架" && $0.accepted == 2 && $0.rejected == 1 },
+          "buckets=\(stats.byCapability.map { "\($0.capability):\($0.accepted)/\($0.rejected)/\($0.pending)" })")
+    check("拒收原因聚合", stats.rejectReasons.contains { $0.reason == "质量不够" && $0.count == 1 })
+
+    // 拒收理由注入 prompt
+    let rejected = st.proposals.filter { $0.capability == .chapterSkeleton && $0.status == .rejected }
+        .map { (title: $0.title, reason: $0.rejectReason ?? "") }
+    let feedback = PromptLibrary.qualityFeedback(for: .chapterSkeleton, rejected: rejected)
+    check("反馈注入非空", feedback.contains("质量不够") && feedback.contains("骨架C"),
+          "rejected=\(rejected.map(\.title)) feedback=[\(feedback.prefix(160))]")
+    check("无拒收不注入", PromptLibrary.qualityFeedback(for: .deslop, rejected: []).isEmpty)
+
+    // 修订历史保留：草稿采纳后仍可继续修订（历史不丢）
+    var draft = ChapterDraft(chapter: 5, text: "第一版正文", version: 1)
+    draft.feedbackHistory = [DraftFeedback(feedback: "节奏太慢", fromVersion: 1)]
+    st.addProposal(AIProposal(capability: .chapterDraft, chapterNumber: 5, title: "第5章草稿", payload: .draft(draft)))
+    if let pid = st.proposals.first(where: { $0.chapterNumber == 5 })?.id {
+        st.acceptProposal(pid)   // 采纳后 pending 里没有草稿了
+        check("采纳后 pending 无草稿", st.latestDraftProposal(for: 5) == nil)
+        check("任意状态可回退找到", st.latestAnyDraftProposal(for: 5) != nil)
+        if let any = st.latestAnyDraftProposal(for: 5), let restored = st.draftPayload(of: any) {
+            check("修订历史随采纳保留", restored.feedbackHistory.count == 1
+                  && restored.feedbackHistory[0].feedback == "节奏太慢")
+        } else {
+            check("修订历史随采纳保留", false)
+        }
+    } else {
+        check("草稿提案登记", false)
+    }
+}
+
+try await qualityLoopTests()
+
+
 
 
 

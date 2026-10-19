@@ -24,6 +24,7 @@ struct ProposalInboxView: View {
                 Toggle("只看待确认", isOn: $filterPendingOnly)
                     .toggleStyle(.checkbox)
                     .font(.caption)
+                qualityBadge
                 Button("清空已裁决") {
                     store.proposals.removeAll { $0.status != .pending }
                     store.saveSoon()
@@ -114,9 +115,19 @@ struct ProposalInboxView: View {
                 if p.status == .pending {
                     HStack {
                         Spacer()
-                        Button("拒绝", role: .destructive) {
-                            store.rejectProposal(p.id)
+                        Menu {
+                            Button("质量不够（泛泛而谈/空话）") { store.rejectProposal(p.id, reason: "质量不够") }
+                            Button("与设定/前文冲突") { store.rejectProposal(p.id, reason: "与设定冲突") }
+                            Button("不合我的方向（跑题）") { store.rejectProposal(p.id, reason: "方向不符") }
+                            Button("太啰嗦/信息重复") { store.rejectProposal(p.id, reason: "冗余") }
+                            Divider()
+                            Button("拒绝（不填理由）") { store.rejectProposal(p.id) }
+                        } label: {
+                            Text("拒绝").foregroundStyle(.red)
                         }
+                        .menuStyle(.borderlessButton)
+                        .fixedSize()
+                        .help("拒收理由会进质量账本——AI 产出改进的依据")
                         Button("接受并入库") {
                             store.acceptProposal(p.id)
                         }
@@ -140,6 +151,41 @@ struct ProposalInboxView: View {
             .background(Color.accentColor.opacity(0.12))
             .foregroundStyle(Color.accentColor)
             .cornerRadius(6)
+    }
+
+    // MARK: - 质量账本徽章（采纳率 + 分能力 + 拒收原因）
+
+    private var qualityBadge: some View {
+        let stats = QualityStats.derive(from: store.proposals)
+        return Menu {
+            Section("总体") {
+                Text("采纳 \(stats.totalAccepted)｜拒收 \(stats.totalRejected)｜待审 \(stats.totalPending)")
+                Text("采纳率 \(Int(stats.overallRate * 100))%")
+            }
+            if !stats.byCapability.isEmpty {
+                Section("分能力") {
+                    ForEach(stats.byCapability, id: \.capability) { b in
+                        Text("\(b.capability)：采纳 \(b.accepted)/拒 \(b.rejected)/待 \(b.pending)（\(Int(b.acceptanceRate * 100))%）")
+                    }
+                }
+            }
+            if !stats.rejectReasons.isEmpty {
+                Section("拒收原因") {
+                    ForEach(stats.rejectReasons, id: \.reason) { r in
+                        Text("\(r.reason) × \(r.count)")
+                    }
+                }
+            }
+        } label: {
+            HStack(spacing: 4) {
+                Image(systemName: "chart.bar.doc.horizontal")
+                Text("采纳率 \(Int(stats.overallRate * 100))%")
+            }
+            .font(.caption2)
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+        .help("质量账本：采纳率与拒收原因（拒收理由会回灌给 AI 改进）")
     }
 
     // MARK: - 负载渲染

@@ -100,6 +100,62 @@ struct AIProposal: Codable, Identifiable {
     var status: ProposalStatus = .pending
     var createdAt: Date = Date()
     var decidedAt: Date?
+    /// 拒收理由（质量反馈回路：拒收是最有价值的信号，不能无声丢弃）
+    var rejectReason: String?
+}
+
+// MARK: - 质量账本（采纳率与拒收原因统计；从提案流水派生，零额外记账）
+
+struct QualityStats {
+    struct Bucket {
+        var capability: String
+        var accepted = 0
+        var rejected = 0
+        var pending = 0
+        var acceptanceRate: Double {
+            let decided = accepted + rejected
+            return decided == 0 ? 0 : Double(accepted) / Double(decided)
+        }
+    }
+
+    var byCapability: [Bucket] = []
+    var totalAccepted = 0
+    var totalRejected = 0
+    var totalPending = 0
+    /// 拒收原因聚合（原因 → 次数，倒序）
+    var rejectReasons: [(reason: String, count: Int)] = []
+
+    var overallRate: Double {
+        let decided = totalAccepted + totalRejected
+        return decided == 0 ? 0 : Double(totalAccepted) / Double(decided)
+    }
+
+    /// 从提案流水派生统计（quality 反馈的主入口）
+    static func derive(from proposals: [AIProposal]) -> QualityStats {
+        var stats = QualityStats()
+        var buckets: [String: Bucket] = [:]
+        var reasons: [String: Int] = [:]
+        for p in proposals {
+            var b = buckets[p.capability.rawValue] ?? Bucket(capability: p.capability.rawValue)
+            switch p.status {
+            case .accepted: b.accepted += 1; stats.totalAccepted += 1
+            case .rejected:
+                b.rejected += 1; stats.totalRejected += 1
+                if let r = p.rejectReason, !r.isEmpty {
+                    reasons[r, default: 0] += 1
+                } else {
+                    reasons["（未填理由）", default: 0] += 1
+                }
+            case .pending: b.pending += 1; stats.totalPending += 1
+            }
+            buckets[p.capability.rawValue] = b
+        }
+        stats.byCapability = buckets.values
+            .filter { $0.accepted + $0.rejected + $0.pending > 0 }
+            .sorted { ($0.accepted + $0.rejected + $0.pending) > ($1.accepted + $1.rejected + $1.pending) }
+        stats.rejectReasons = reasons.map { ($0.key, $0.value) }.sorted { $0.count > $1.count }
+        return stats
+    }
 }
 
 // MARK: - 验证报告

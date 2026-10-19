@@ -177,7 +177,7 @@ final class AIService: ObservableObject {
             let toolset = tools(for: capability, store: store, chapter: chapter)
             // 创作法典集中注入：流派契约 + 网文创作法 + 传统文学创作法，按能力裁剪。
             // 骨架任务书里已经内嵌（位置更靠前、还带着近章钩子形态），这里跳过避免重复。
-            let taskMessage: String
+            var taskMessage: String
             if capability == .chapterSkeleton {
                 taskMessage = userMessage
             } else {
@@ -186,6 +186,12 @@ final class AIService: ObservableObject {
                     + PromptLibrary.craft(for: capability, genre: store.project.genre,
                                           written: written, target: store.project.targetChapters)
             }
+            // 质量反馈回路：把同类能力近期被拒的理由带给模型（拒收是最有价值的信号）
+            let recentRejects = store.proposals
+                .filter { $0.capability == capability && $0.status == .rejected }
+                .prefix(5)
+                .map { (title: $0.title, reason: $0.rejectReason ?? "") }
+            taskMessage += PromptLibrary.qualityFeedback(for: capability, rejected: Array(recentRejects))
             let agent = createAgent(options: AgentOptions(
                 apiKey: Self.effectiveKey(config),
                 model: config.model,
@@ -981,7 +987,9 @@ final class AIService: ObservableObject {
     }
 
     func runRevision(store: ProjectStore, config: AgentConfig, chapter n: Int, feedback: String) async {
-        guard let proposal = store.latestDraftProposal(for: n),
+        // pending 草稿优先；已无 pending（比如上一版已采纳进正文）时回退到最近任意状态的
+        // 草稿——修订历史（feedbackHistory）不随采纳丢失，继续修订仍带着全部历史意见
+        guard let proposal = store.latestDraftProposal(for: n) ?? store.latestAnyDraftProposal(for: n),
               var draft = store.draftPayload(of: proposal) else {
             lastError = "还没有可修订的草稿——先在流水线里写一版。"
             return

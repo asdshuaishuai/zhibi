@@ -477,10 +477,11 @@ final class ProjectStore: ObservableObject {
         saveSoon()
     }
 
-    func rejectProposal(_ id: UUID) {
+    func rejectProposal(_ id: UUID, reason: String? = nil) {
         guard let idx = proposals.firstIndex(where: { $0.id == id }) else { return }
         proposals[idx].status = .rejected
         proposals[idx].decidedAt = Date()
+        proposals[idx].rejectReason = reason
         saveSoon()
     }
 
@@ -666,7 +667,10 @@ final class ProjectStore: ObservableObject {
             outcome.total += 1
             outcome.applied += 1
         case .report, .deslop, .memo:
-            break // 报告类提案已展示在收件箱，无需入库
+            // 报告类提案（验证/去AI味/备忘）本就是「已阅」语义，无需入库——
+            // 采纳动作对它们是有效决定，计 1 项成功（否则永远无法标记已采纳）
+            outcome.total += 1
+            outcome.applied += 1
         }
         return outcome
     }
@@ -772,6 +776,16 @@ final class ProjectStore: ObservableObject {
     func latestDraftProposal(for n: Int) -> AIProposal? {
         proposals.first { p in
             guard p.chapterNumber == n, p.status == .pending else { return false }
+            if case .draft = p.payload { return true }
+            return false
+        }
+    }
+
+    /// 某章最近一份**任意状态**的草稿提案（含已采纳/已拒绝）。
+    /// 修订历史的价值不随采纳消失——采纳后继续修订时用它恢复 feedbackHistory。
+    func latestAnyDraftProposal(for n: Int) -> AIProposal? {
+        proposals.first { p in
+            guard p.chapterNumber == n else { return false }
             if case .draft = p.payload { return true }
             return false
         }

@@ -92,6 +92,17 @@ enum PromptLibrary {
         """
     }
 
+    /// 质量反馈段：近期被拒的同类产出与原因（让模型知道前几次为什么被打回）
+    static func qualityFeedback(for capability: AICapability, rejected: [(title: String, reason: String)]) -> String {
+        guard !rejected.isEmpty else { return "" }
+        let lines = rejected.prefix(5).map { "- 曾被拒：「\($0.title)」原因：\($0.reason.isEmpty ? "未填" : $0.reason)" }
+        return """
+
+        ## 前几次同类产出被作者拒收的原因（避免重蹈覆辙）
+        \(lines.joined(separator: "\n"))
+        """
+    }
+
     // MARK: - 长程记忆档案卡（跨全书可检索的记忆锚点）
 
     static func dossierExtractTask(chapter n: Int, chapterTitle: String, prose: String, existing: String,
