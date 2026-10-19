@@ -1185,6 +1185,89 @@ func budgetTests() async throws {
 
 try await budgetTests()
 
+// MARK: - 27. 采纳不静默丢弃：部分/全部未入库保持待审 + 清单可解释
+
+@MainActor
+func acceptOutcomeTests() async throws {
+    let st = ProjectStore(rootURL: URL(fileURLWithPath: "/tmp/zhibi-ao-\(UUID().uuidString).zhibi"))
+    st.ensureChapter(1)
+    st.storylines = [Storyline(id: "L01", name: "已有主线", kind: .main, isThroughLine: true, status: .active)]
+
+    // ① 全部未入库：故事线编号全撞 → applied=0 → 保持 pending + 清单
+    let dupTool = NovelTools.bindChapter(tools: NovelTools.all(store: st), store: st, chapter: nil)
+        .first { $0.name == "propose_storylines" }
+    _ = try? await dupTool?.handler("""
+    {"storylines":[{"id":"L01","name":"撞号线","kind":"main"}]}
+    """)
+    if let p = st.proposals.first(where: { $0.capability == .outlineTimeline }) {
+        st.acceptProposal(p.id)
+        let stillPending = st.proposals.first { $0.id == p.id }?.status == .pending
+        check("全未入库保持待审", stillPending && st.lastAcceptIssues != nil,
+              "status=\(st.proposals.first { $0.id == p.id }?.status.rawValue ?? "-")")
+        check("清单说明原因", st.lastAcceptIssues?.contains("未采纳") == true,
+              "得到 \(st.lastAcceptIssues ?? "-")")
+    } else {
+        check("撞号提案登记", false)
+    }
+
+    // ② 部分入库：预置一条同 (id, 章) 事件，再构造含「重复+新」的 payload
+    st.timelineEvents = [TimelineEvent(id: "E01", chapter: 2, objectiveFact: "旧", readerKnowledge: "o")]
+    await st.addProposal(AIProposal(
+        capability: .outlineTimeline, chapterNumber: 2, title: "混合事件提案",
+        payload: .outlineEvents([
+            TimelineEvent(id: "E01", chapter: 2, objectiveFact: "重复（已存在）", readerKnowledge: "x"),
+            TimelineEvent(id: "E50", chapter: 3, objectiveFact: "新的", readerKnowledge: "y"),
+        ])))
+    if let p = st.proposals.first(where: { $0.title == "混合事件提案" }) {
+        let before = st.timelineEvents.count
+        st.acceptProposal(p.id)
+        check("部分入库保持待审", st.proposals.first { $0.id == p.id }?.status == .pending
+              && st.lastAcceptIssues?.contains("部分采纳") == true,
+              "issues=\(st.lastAcceptIssues ?? "-")")
+        check("已入库项已生效", st.timelineEvents.count == before + 1, "before=\(before) after=\(st.timelineEvents.count)")
+        // 重试不重复：再采纳一次，E50 不重复
+        let countAfterFirst = st.timelineEvents.count
+        st.acceptProposal(p.id)
+        check("重试不重复入库", st.timelineEvents.count == countAfterFirst,
+              "first=\(countAfterFirst) retry=\(st.timelineEvents.count)")
+    } else {
+        check("混合事件提案登记", false)
+    }
+
+    // ③ canonClassify 标题未匹配 → 计入清单
+    st.canonSections = [CanonSection(title: "世界观", content: "x")]
+    let clTool = NovelTools.all(store: st).first { $0.name == "propose_canon_classify" }
+    _ = try? await clTool?.handler("""
+    {"classifications":[{"title":"不存在的文档","category":"世界观"}]}
+    """)
+    if let p = st.proposals.first(where: { $0.capability == .canonClassify }) {
+        st.acceptProposal(p.id)
+        check("标题未匹配保持待审", st.proposals.first { $0.id == p.id }?.status == .pending
+              && st.lastAcceptIssues?.contains("未找到") == true,
+              "issues=\(st.lastAcceptIssues ?? "-")")
+    } else {
+        check("归类提案登记", false)
+    }
+
+    // ④ 全部成功：清空清单并标已采纳
+    let st2 = ProjectStore(rootURL: URL(fileURLWithPath: "/tmp/zhibi-ao2-\(UUID().uuidString).zhibi"))
+    st2.ensureChapter(1)
+    _ = try? await NovelTools.bindChapter(tools: NovelTools.all(store: st2), store: st2, chapter: 1)
+        .first { $0.name == "propose_dossier" }?.handler("""
+        {"headline":"成功案例","relics":["令牌"]}
+        """)
+    if let p = st2.proposals.first(where: { $0.capability == .dossierExtract }) {
+        st2.acceptProposal(p.id)
+        check("全成功标已采纳", st2.proposals.first { $0.id == p.id }?.status == .accepted
+              && st2.lastAcceptIssues == nil)
+    } else {
+        check("档案卡提案登记", false)
+    }
+}
+
+try await acceptOutcomeTests()
+
+
 
 
 // MARK: - 24. 长程记忆深化：人物轨迹 / 轨迹持久化

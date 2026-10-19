@@ -452,12 +452,26 @@ final class ProjectStore: ObservableObject {
         saveSoon()
     }
 
+    /// 上一次采纳的未入库清单（收件箱据此提示；清空于下次成功采纳）
+    @Published var lastAcceptIssues: String?
+
     func acceptProposal(_ id: UUID) {
         guard let idx = proposals.firstIndex(where: { $0.id == id }) else { return }
         guard proposals[idx].status == .pending else { return }  // 防重复采纳覆盖手改
         let p = proposals[idx]
-        // 入库失败（快照写不进/章节丢失）时保持 pending——否则提案会从待审列表消失且永不可再采纳
-        guard applyPayload(p.payload, chapter: p.chapterNumber) else { return }
+        let outcome = applyPayloadDetailed(p.payload, chapter: p.chapterNumber)
+        guard outcome.applied > 0 else {
+            // 完全没入库：保持 pending（否则提案从待审列表消失且永不可再采纳）
+            lastAcceptIssues = "未采纳：\(outcome.summary)"
+            return
+        }
+        guard outcome.isFullSuccess else {
+            // 全无或部分入库：部分成功时也保持 pending——已入库的部分有幂等保护
+            // （事件/故事线按 id 去重、设定同题保护、伏笔同 id 合并），重试不会重复
+            lastAcceptIssues = "部分采纳：\(outcome.summary)。提案保持待审——修好未入库项后可再点采纳（已入库项不会重复）。"
+            return
+        }
+        lastAcceptIssues = nil
         proposals[idx].status = .accepted
         proposals[idx].decidedAt = Date()
         saveSoon()
@@ -478,52 +492,99 @@ final class ProjectStore: ObservableObject {
         saveSoon()
     }
 
+    /// 落库结果：applied=实际入库条数；skipped=未入库清单（人话原因）。
+    /// 采纳决策据此判定：全部成功才标「已采纳」；部分失败保持待审并展示清单。
+    struct ApplyOutcome {
+        var applied = 0
+        var skipped: [String] = []
+        var total = 0
+        var isFullSuccess: Bool { skipped.isEmpty }
+        var summary: String {
+            if skipped.isEmpty { return "已全部入库（\(applied) 项）" }
+            return "入库 \(applied)/\(total) 项；未入库 \(skipped.count) 项：\(skipped.prefix(3).joined(separator: "；"))\(skipped.count > 3 ? "…" : "")"
+        }
+    }
+
     /// 采纳提案 = 把 payload 写入权威状态（宿主裁决的唯一入口）
-    /// 返回 false = 未入库（调用方应保持提案 pending 而不是标记已采纳）
+    /// 返回 false = 完全未入库（调用方应保持提案 pending 而不是标记已采纳）
     @discardableResult
     func applyPayload(_ payload: ProposalPayload, chapter: Int?) -> Bool {
+        applyPayloadDetailed(payload, chapter: chapter).isFullSuccess
+    }
+
+    /// 明细版：部分失败时不标已采纳的判定依据（全链路可解释）
+    @discardableResult
+    func applyPayloadDetailed(_ payload: ProposalPayload, chapter: Int?) -> ApplyOutcome {
+        var outcome = ApplyOutcome()
         switch payload {
         case .outlineEvents(let events):
             for e in events {
-                if !timelineEvents.contains(where: { $0.id == e.id && $0.chapter == e.chapter }) {
+                outcome.total += 1
+                if timelineEvents.contains(where: { $0.id == e.id && $0.chapter == e.chapter }) {
+                    outcome.skipped.append("事件 [\(e.id)]@第\(e.chapter)章 已存在")
+                } else {
                     timelineEvents.append(e)
+                    outcome.applied += 1
                 }
             }
             timelineEvents.sort { ($0.chapter, $0.id) < ($1.chapter, $1.id) }
         case .storylines(let lines):
-            for l in lines where !storylines.contains(where: { $0.id == l.id }) {
-                storylines.append(l)
+            for l in lines {
+                outcome.total += 1
+                if storylines.contains(where: { $0.id == l.id }) {
+                    outcome.skipped.append("故事线 [\(l.id)] 已存在（编号撞号）")
+                } else {
+                    storylines.append(l)
+                    outcome.applied += 1
+                }
             }
         case .clues(let newClues):
             for c in newClues {
+                outcome.total += 1
                 if let idx = clues.firstIndex(where: { $0.id == c.id }) {
                     clues[idx] = c
                 } else {
                     clues.append(c)
                 }
+                outcome.applied += 1
             }
             clues.sort { $0.id < $1.id }
         case .skeleton(let sk):
-            guard let n = chapter else { return false }
+            guard let n = chapter else {
+                outcome.skipped.append("提案缺少章节号")
+                return outcome
+            }
             updateChapter(n) { $0.skeleton = sk; if $0.status == .empty { $0.status = .skeletoned } }
             // 骨架里的伏笔触点合同落到台账（AI 骨架声明 F03 本章揭示 → 台账记一笔）
             applyClueActions(chapter: n, touches: sk.clueTouches)
+            outcome.total += 1
+            outcome.applied += 1
         case .draft(let draft):
             // 作者采纳草稿才走到这里；覆盖前自动快照，快照失败则中止采纳（旧稿保住，提案保持待审）
-            guard let n = chapter else { return false }
+            guard let n = chapter else {
+                outcome.skipped.append("提案缺少章节号")
+                return outcome
+            }
             if let existing = self.chapter(n), !existing.prose.isEmpty {
                 guard snapshotProse(chapter: n, tag: "采纳草稿前") != nil else {
                     lastSaveError = "采纳中止：快照写入失败（检查磁盘/权限），草稿仍在收件箱"
-                    return false
+                    outcome.skipped.append("快照写入失败，草稿未覆盖")
+                    return outcome
                 }
             }
+            outcome.total += 1
             updateChapter(n) {
                 $0.prose = draft.text
                 if $0.status == .empty || $0.status == .skeletoned || $0.status == .writing { $0.status = .written }
             }
+            outcome.applied += 1
         case .memoryPack(let newFacts, let summary, let newClues):
             // 章节 guard 前置：避免半途 append 后失败导致重复追加
-            guard let n = chapter else { return false }
+            guard let n = chapter else {
+                outcome.skipped.append("提案缺少章节号")
+                return outcome
+            }
+            outcome.total += 1
             for f in newFacts where !facts.contains(where: { $0.subject == f.subject && $0.predicate == f.predicate && $0.object == f.object }) {
                 facts.append(f)
             }
@@ -546,10 +607,16 @@ final class ProjectStore: ObservableObject {
                 }
             }
             updateChapter(n) { $0.summary = summary }
+            outcome.applied += 1
         case .canonClassify(let items):
             // 归类：按标题精确匹配写类别；改名撞名则只改类别（保护既有文档）
             for item in items {
-                guard let idx = canonSections.firstIndex(where: { $0.title == item.title }) else { continue }
+                outcome.total += 1
+                guard let idx = canonSections.firstIndex(where: { $0.title == item.title }) else {
+                    outcome.skipped.append("设定「\(item.title)」未找到（标题可能已改）")
+                    continue
+                }
+                outcome.applied += 1
                 canonSections[idx].category = CanonCategory.match(item.category).rawValue
                 if let rename = item.rename, !rename.isEmpty, rename != item.title,
                    !canonSections.contains(where: { $0.title == rename }) {
@@ -560,23 +627,48 @@ final class ProjectStore: ObservableObject {
             // 设定是作者主权：同题不覆盖（作者可能手改过），只追加新题
             // 确定度用中文 rawValue 存储；AI 侧传英文键，这里映射
             let certaintyMap: [String: Certainty] = ["canon": .canon, "tentative": .tentative, "blank": .open, "open": .open]
-            for d in docs where !canonSections.contains(where: { $0.title == d.title }) {
-                canonSections.append(CanonSection(title: d.title, content: d.content,
-                                                  certainty: certaintyMap[d.certainty] ?? .tentative))
+            for d in docs {
+                outcome.total += 1
+                if canonSections.contains(where: { $0.title == d.title }) {
+                    outcome.skipped.append("设定「\(d.title)」已存在（同题保护，未覆盖）")
+                } else {
+                    canonSections.append(CanonSection(title: d.title, content: d.content,
+                                                      certainty: certaintyMap[d.certainty] ?? .tentative))
+                    outcome.applied += 1
+                }
             }
         case .clueFixes(let fixes):
-            for f in fixes { applyClueFix(f) }
+            for f in fixes {
+                outcome.total += 1
+                if applyClueFix(f) {
+                    outcome.applied += 1
+                } else {
+                    outcome.skipped.append("埋点修复 [\(f.clueID)]（\(f.kind)）未能应用（伏笔不存在或目标冲突）")
+                }
+            }
         case .outlineUpdates(let updates):
-            for u in updates { applyOutlineUpdate(u) }
+            for u in updates {
+                outcome.total += 1
+                if applyOutlineUpdate(u) {
+                    outcome.applied += 1
+                } else {
+                    outcome.skipped.append("大纲更新 \(u.kind) 未能应用（目标事件/线不存在）")
+                }
+            }
         case .dossier(let d):
             var card = d
             if card.chapter == 0 { card.chapter = chapter ?? 0 }
-            guard card.chapter > 0 else { return false }
+            guard card.chapter > 0 else {
+                outcome.skipped.append("档案卡缺少章节号")
+                return outcome
+            }
             upsertDossier(card)
+            outcome.total += 1
+            outcome.applied += 1
         case .report, .deslop, .memo:
             break // 报告类提案已展示在收件箱，无需入库
         }
-        return true
+        return outcome
     }
 
     // MARK: - 埋点修复（台账修正；铁律：改账本，不改正文）

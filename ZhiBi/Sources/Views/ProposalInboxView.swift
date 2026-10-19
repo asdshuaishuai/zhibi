@@ -32,6 +32,21 @@ struct ProposalInboxView: View {
             }
             .padding(12)
 
+            // 采纳未入库清单：部分失败时明示（提案保持待审可重试）
+            if let issues = store.lastAcceptIssues {
+                HStack(alignment: .top, spacing: 6) {
+                    Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+                    Text(issues).font(.caption)
+                    Spacer()
+                    Button {
+                        store.lastAcceptIssues = nil
+                    } label: { Image(systemName: "xmark").font(.caption2) }
+                        .buttonStyle(.plain)
+                }
+                .padding(.horizontal, 12).padding(.vertical, 8)
+                .background(Color.orange.opacity(0.08))
+            }
+
             if visible.isEmpty {
                 VStack(spacing: 8) {
                     Image(systemName: "tray").font(.system(size: 36)).foregroundStyle(.tertiary)
