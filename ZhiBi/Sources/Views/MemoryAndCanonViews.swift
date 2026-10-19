@@ -112,6 +112,8 @@ struct MemoryView: View {
     // MARK: 长程档案（跨全书检索记忆）
 
     @State private var dossierQuery = ""
+    @State private var dossierQueryDebounced = ""
+    @State private var dossierDebounce: _Concurrency.Task<Void, Never>?
 
     private var dossiersTab: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -119,13 +121,25 @@ struct MemoryView: View {
                 Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
                 TextField("检索：人物 / 物件 / 地名 / 任意词（跨全书档案卡）", text: $dossierQuery)
                     .textFieldStyle(.roundedBorder)
+                    .onChange(of: dossierQuery) { q in
+                        dossierDebounce?.cancel()
+                        dossierDebounce = _Concurrency.Task {
+                            try? await _Concurrency.Task.sleep(nanoseconds: 200_000_000)
+                            guard !_Concurrency.Task.isCancelled else { return }
+                            await MainActor.run { dossierQueryDebounced = q }
+                        }
+                    }
                 if let vm {
-                    Button("提取本章档案卡") {
-                        Task { await vm.ai.runDossierExtract(store: store, config: vm.config, chapter: store.currentChapter) }
+                    // currentChapter 是"下一章"（还没写）；这里要的是最后一个有正文的章
+                    let lastWritten = store.chapters.last { !$0.prose.isEmpty }?.number
+                    Button("提取最新章档案卡") {
+                        if let n = lastWritten {
+                            Task { await vm.ai.runDossierExtract(store: store, config: vm.config, chapter: n) }
+                        }
                     }
                     .controlSize(.small)
-                    .disabled(vm.ai.running || store.chapter(store.currentChapter)?.prose.isEmpty ?? true)
-                    .help("对当前章跑一次档案提取（提案，采纳后入检索库）")
+                    .disabled(vm.ai.running || lastWritten == nil)
+                    .help("对最近写完的章跑一次档案提取（提案，采纳后入检索库）")
                 }
             }
             .padding(10)
@@ -143,11 +157,11 @@ struct MemoryView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 ScrollView {
-                    let results: [ChapterDossier] = dossierQuery.isEmpty
+                    let results: [ChapterDossier] = dossierQueryDebounced.isEmpty
                         ? store.dossiers.sorted { $0.chapter > $1.chapter }
-                        : DossierIndex.build(from: store.dossiers).search(dossierQuery, limit: 30)
+                        : DossierIndex.cached(for: store.dossiers).search(dossierQueryDebounced, limit: 30)
                     LazyVStack(alignment: .leading, spacing: ZBSpace.xs) {
-                        if !dossierQuery.isEmpty {
+                        if !dossierQueryDebounced.isEmpty {
                             Text("命中 \(results.count) 章").font(.caption).foregroundStyle(.secondary)
                         }
                         ForEach(results) { d in
@@ -393,13 +407,22 @@ struct MemoryView: View {
         }
     }
 
-    /// 字典预查：Table 每行多列调用它，逐行 first(where:) 是 O(n²)
-    private var factIndex: [UUID: MemoryFact] {
-        Dictionary(store.facts.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+    /// 字典预查：Table 每行多列调用它。用规模签名缓存（原实现是计算属性，
+    /// 每次查表重建整个字典 —— 500 行 × 3 列 = 1500 次/body）
+    @State private var factIndexCache: [UUID: MemoryFact] = [:]
+    @State private var factIndexStamp = Int.min
+
+    private func ensureFactIndex() -> [UUID: MemoryFact] {
+        let stamp = store.facts.count &* 131 &+ store.facts.reduce(0) { $0 &+ $1.fromChapter }
+        if stamp != factIndexStamp {
+            factIndexStamp = stamp
+            factIndexCache = Dictionary(store.facts.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        }
+        return factIndexCache
     }
 
     private func factByID(_ id: UUID) -> MemoryFact? {
-        factIndex[id]
+        ensureFactIndex()[id]
     }
 
     private func mutate(_ id: UUID, _ change: (inout MemoryFact) -> Void) {

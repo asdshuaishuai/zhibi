@@ -280,7 +280,8 @@ struct AIToolboxSheet: View {
                         .disabled(savedAsProposal)
                     }
                 }
-            } else if !ai.running, tool == .organize || tool == .shortStory || tool == .canonClassify {
+            } else if !ai.running, ai.lastRunNewProposals != nil,
+                      tool == .organize || tool == .shortStory || tool == .canonClassify {
                 Text("完成——产出已进「提案收件箱」，去逐条审阅采纳。").font(.caption).foregroundStyle(.green)
             }
         }
@@ -293,6 +294,10 @@ struct AIToolboxSheet: View {
         coverSVGCode = ""
         adopted = false
         savedAsProposal = false
+        // 清上轮残留：否则未运行就显示"完成"或上轮错误
+        ai.lastToolLog = []
+        ai.lastError = nil
+        ai.lastRunNewProposals = nil
         Task {
             switch tool {
             case .analyze:

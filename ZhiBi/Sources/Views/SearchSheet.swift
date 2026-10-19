@@ -92,6 +92,8 @@ struct SearchSheet: View {
 
     var body: some View {
         // 输入防抖 150ms：大书（100 万字）每次击键全本扫描 ~118ms，不防抖直接掉字
+        SearchDebouncer(query: $query, debouncedQuery: $debouncedQuery, debounceTask: $debounceTask)
+            .frame(width: 0, height: 0)
 
         VStack(spacing: 0) {
             HStack(spacing: 10) {

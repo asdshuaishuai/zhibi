@@ -1108,6 +1108,72 @@ func ltmAsyncTests() async throws {
 
 try await ltmAsyncTests()
 
+// MARK: - 25. 四轮审查回归：编号护栏 / relics 校验 / 文本通道运行态 / 搜索防抖
+
+@MainActor
+func roundFourTests() async throws {
+    // 事件编号全局唯一：已有 E01@第5章，AI 提交 E01@第9章 → 重分配
+    let st = ProjectStore(rootURL: URL(fileURLWithPath: "/tmp/zhibi-r4-\(UUID().uuidString).zhibi"))
+    st.ensureChapter(1)
+    st.timelineEvents = [TimelineEvent(id: "E01", chapter: 5, objectiveFact: "旧事件")]
+    st.storylines = [Storyline(id: "L01", name: "主线", kind: .main, isThroughLine: true, status: .active)]
+    let tool = NovelTools.bindChapter(tools: NovelTools.all(store: st), store: st, chapter: 9)
+        .first { $0.name == "propose_outline_events" }
+    _ = try? await tool?.handler("""
+    {"events":[{"id":"E01","chapter":9,"objective_fact":"新事件","reader_knowledge":"x","storyline_ids":["L01","L99"]}]}
+    """)
+    if let p = st.proposals.first, case .outlineEvents(let evs) = p.payload {
+        check("事件编号全局唯一", evs.first?.id != "E01", "得到 \(evs.map { $0.id })")
+        check("悬空故事线被过滤", evs.first?.storylineIDs == ["L01"], "得到 \(evs.first?.storylineIDs ?? [])")
+    } else {
+        check("事件提案登记", false)
+    }
+
+    // relics 为空 → 拒绝（错误回灌给模型）
+    let dTool = NovelTools.bindChapter(tools: NovelTools.all(store: st), store: st, chapter: 1)
+        .first { $0.name == "propose_dossier" }
+    do {
+        _ = try await dTool?.handler("""
+        {"headline":"空 relics 测试"}
+        """)
+        check("空 relics 被拒绝", false)
+    } catch {
+        check("空 relics 被拒绝", "\(error)".contains("relics"), "得到 \(error)")
+    }
+}
+
+try await roundFourTests()
+
+
+// MARK: - 24. 长程记忆深化：人物轨迹 / 轨迹持久化
+
+MainActor.assumeIsolated {
+    // 轨迹文件 round-trip
+    let entries = [TrajectoryStore.Entry(at: Date(), capability: "搭建框架", event: "完成",
+                                         detail: "新增 3 条提案", isError: false),
+                   TrajectoryStore.Entry(at: Date(), capability: "一键写作", event: "失败",
+                                         detail: "API Key 无效", isError: true)]
+    TrajectoryStore.save(entries)
+    let loaded = TrajectoryStore.load()
+    check("轨迹持久化 round-trip", loaded.count == 2 && loaded.contains { $0.isError },
+          "得到 \(loaded.count) 条")
+
+    // 人物轨迹（含别名归一）走档案索引
+    let st = ProjectStore(rootURL: URL(fileURLWithPath: "/tmp/zhibi-trace-\(UUID().uuidString).zhibi"))
+    st.characterAliases = [CharacterAlias(canonicalName: "紫渊", aliases: ["少年"])]
+    st.dossiers = [
+        ChapterDossier(chapter: 3, headline: "少年夺刀", cast: ["少年"], relics: ["紫檀短刀"]),
+        ChapterDossier(chapter: 9, headline: "紫渊遇白零", cast: ["紫渊"], relics: []),
+        ChapterDossier(chapter: 20, headline: "无关章节", cast: ["路人"], relics: []),
+    ]
+    let index = DossierIndex.build(from: st.dossiers)
+    let names = ["紫渊", "少年"]
+    var hits: [Int: ChapterDossier] = [:]
+    for n in names { for d in index.entityTrace(n) { hits[d.chapter] = d } }
+    check("人物轨迹含别名章", hits.keys.sorted() == [3, 9], "得到 \(hits.keys.sorted())")
+}
+
+
 
 // MARK: - 22. 端点预检判定矩阵（局域网模型无 Key 必须可用）
 

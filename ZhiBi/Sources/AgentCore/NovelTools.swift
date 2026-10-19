@@ -54,9 +54,10 @@ enum NovelTools {
                 let events: [E]
             }
             let p = try decode(Payload.self, args)
-            // E 编号基于已有最大值递增并查重，避免顶掉已有事件
+            // E 编号全局唯一（原按 id|chapter 查重，允许同号跨章 → 台账出现重复 E 号）
             let events: [TimelineEvent] = await MainActor.run {
-                var used = Set(store.timelineEvents.map { "\($0.id)|\($0.chapter)" })
+                var used = Set(store.timelineEvents.map(\.id))
+                let validLineIDs = Set(store.storylines.map(\.id))
                 var nextNumber = (store.timelineEvents.compactMap { e -> Int? in
                     guard e.id.hasPrefix("E"), let n = Int(e.id.dropFirst()) else { return nil }
                     return n
@@ -64,20 +65,21 @@ enum NovelTools {
                 var out: [TimelineEvent] = []
                 for e in p.events {
                     var id = e.id ?? ""
-                    if id.isEmpty || used.contains("\(id)|\(e.chapter)") {
+                    if id.isEmpty || used.contains(id) {
                         repeat {
                             id = String(format: "E%02d", nextNumber)
                             nextNumber += 1
-                        } while used.contains("\(id)|\(e.chapter)")
+                        } while used.contains(id)
                     }
-                    used.insert("\(id)|\(e.chapter)")
+                    used.insert(id)
                     out.append(TimelineEvent(
                         id: id,
                         chapter: e.chapter,
                         objectiveFact: e.objective_fact,
                         readerKnowledge: e.reader_knowledge,
                         revealed: e.revealed ?? false,
-                        storylineIDs: e.storyline_ids ?? []
+                        // 悬空引用防护：只保留真实存在的故事线 id
+                        storylineIDs: (e.storyline_ids ?? []).filter { validLineIDs.contains($0) }
                     ))
                 }
                 return out
@@ -314,10 +316,9 @@ enum NovelTools {
             }
             let p = try decode(Payload.self, args)
             let sevMap = ["blocker": Severity.blocker, "warning": .warning, "note": .note]
-            let (asOf, deterministic) = await MainActor.run {
-                let n = store.currentChapter
-                return (n, ContinuityAuditor.audit(store: store, throughChapter: n))
-            }
+            // MainActor.run 不接受 async 闭包——先取标量，再直接 await
+            let asOf = await MainActor.run { store.currentChapter }
+            let deterministic = await ContinuityAuditor.auditAsync(store: store, throughChapter: asOf)
             let aiIssues = p.issues.map { i in
                 ValidationIssue(severity: sevMap[i.severity] ?? .warning, category: i.category,
                                 message: (i.chapter.map { "第\($0)章：" } ?? "") + i.message,
@@ -383,7 +384,7 @@ enum NovelTools {
                                      evidence: u.evidence ?? "", confidence: u.confidence ?? 0)
             }
             // 宿主确定性对账结果一并登记：模型可能漏判，作者能对照两边看
-            let det = await MainActor.run { OutlineSync.sync(store: store) }
+            let det = await OutlineSync.syncAsync(store: store)
             let combined = det.suggestedUpdates + aiUpdates
             let note = [p.note ?? "", det.summary].filter { !$0.isEmpty }.joined(separator: "\n")
             await store.addProposal(AIProposal(
@@ -548,6 +549,10 @@ enum NovelTools {
                 let relics: [String]?
             }
             let p = try decode(P.self, args)
+            // 检索价值护栏：relics 是长程召回的金矿，空 relics = 这张卡召不回任何细节
+            guard let relics = p.relics, !relics.isEmpty else {
+                throw AgentError.badResponse("档案卡必须带 relics（关键细节）：至少 3 条带专名的物件/地名/原句台词。请重新提取。")
+            }
             var card = ChapterDossier(chapter: chapter, headline: p.headline)
             card.scenes = p.scenes ?? []
             card.cast = p.cast ?? []

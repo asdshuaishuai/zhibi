@@ -74,6 +74,41 @@ enum ContinuityAuditor {
     /// 低于此值认为正文里根本没有这段埋设（不是改了字，是整段没了）
     fileprivate static let quoteHopeless = 0.3
 
+    /// 异步版本：分步执行并在步间让出主线程，避免 150 章全书扫描时界面完全冻结。
+    /// （4 个子审计器深度耦合 store，整体纯函数化收益/风险比不佳——分步让出是
+    /// 低风险折中：扫描总量不变，但事件循环在步间有机会处理重绘与取消。）
+    @MainActor
+    static func auditAsync(store: ProjectStore, throughChapter n: Int? = nil) async -> ContinuityReport {
+        let lastChapter = store.chapters.map(\.number).max() ?? 0
+        let asOf = n ?? lastChapter
+        var report = ContinuityReport(asOfChapter: asOf)
+        let corpus = ChapterCorpus(chapters: store.chapters, through: asOf)
+        report.scannedChapters = corpus.numbers.count
+        guard asOf > 0, !corpus.numbers.isEmpty else { return report }
+
+        auditCharacters(store: store, corpus: corpus, asOf: asOf, report: &report)
+        await _Concurrency.Task.yield()
+        auditTimeline(store: store, corpus: corpus, asOf: asOf, report: &report)
+        await _Concurrency.Task.yield()
+        auditClueLedger(store: store, corpus: corpus, asOf: asOf, report: &report)
+        await _Concurrency.Task.yield()
+        auditStructure(store: store, corpus: corpus, asOf: asOf, report: &report)
+        return finalize(&report)
+    }
+
+    /// 结果排序（与同步版共享）
+    @MainActor
+    private static func finalize(_ report: inout ContinuityReport) -> ContinuityReport {
+        report.issues.sort { $0.severity < $1.severity }
+        report.clueFixes.sort { lhs, rhs in
+            let lk = lhs.clueID.isEmpty ? "\u{FFFF}" : lhs.clueID
+            let rk = rhs.clueID.isEmpty ? "\u{FFFF}" : rhs.clueID
+            if lk != rk { return lk < rk }
+            return lhs.chapter < rhs.chapter
+        }
+        return report
+    }
+
     /// 全书连贯性审查（确定性，零 LLM 成本）。n 为 nil 时审到最后一章。
     @MainActor
     static func audit(store: ProjectStore, throughChapter n: Int? = nil) -> ContinuityReport {
@@ -89,16 +124,7 @@ enum ContinuityAuditor {
         auditClueLedger(store: store, corpus: corpus, asOf: asOf, report: &report)
         auditStructure(store: store, corpus: corpus, asOf: asOf, report: &report)
 
-        // 阻塞在前，同级保持发现顺序（Swift 的 sort 是稳定排序）
-        report.issues.sort { $0.severity < $1.severity }
-        // 修复按「先哪条线、再哪一章」排，方便作者顺着账本一条条采纳
-        report.clueFixes.sort { lhs, rhs in
-            let lk = lhs.clueID.isEmpty ? "\u{FFFF}" : lhs.clueID
-            let rk = rhs.clueID.isEmpty ? "\u{FFFF}" : rhs.clueID
-            if lk != rk { return lk < rk }
-            return lhs.chapter < rhs.chapter
-        }
-        return report
+        return finalize(&report)
     }
 
     // MARK: A. 角色连续性

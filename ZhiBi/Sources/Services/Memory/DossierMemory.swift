@@ -107,6 +107,21 @@ struct DossierIndex {
     var coverage: (chapters: Int, tokens: Int) {
         (dossiers.count, index.count)
     }
+
+    // MARK: 共享缓存（stamp = 档案规模签名；同规模不重建）
+
+    private static var cachedIndex: DossierIndex?
+    private static var cacheStamp = Int.min
+
+    static func cached(for dossiers: [ChapterDossier]) -> DossierIndex {
+        // 签名含章号与内容长度：改内容也会失效，比纯 count 安全
+        let stamp = dossiers.reduce(0) { $0 &+ $1.chapter &* 31 &+ $1.searchText.count }
+        if let cachedIndex, cacheStamp == stamp { return cachedIndex }
+        let built = build(from: dossiers)
+        cachedIndex = built
+        cacheStamp = stamp
+        return built
+    }
 }
 
 // MARK: - 召回结果（注入上下文包的形式）
@@ -136,7 +151,7 @@ enum DossierRecall {
     /// 也能按人物与剧情把历史细节召回来」。
     @MainActor
     static func recall(store: ProjectStore, forChapter n: Int, limit: Int = 6) -> DossierRecallResult {
-        let index = DossierIndex.build(from: store.dossiers)
+        let index = DossierIndex.cached(for: store.dossiers)
         guard !index.dossiers.isEmpty else { return DossierRecallResult(dossiers: [], query: "") }
 
         var queries: [String] = []
@@ -186,6 +201,6 @@ enum DossierRecall {
     /// 实体轨迹查询（记忆中枢「这个人物经历了什么」入口）
     @MainActor
     static func trace(store: ProjectStore, entity: String) -> [ChapterDossier] {
-        DossierIndex.build(from: store.dossiers).entityTrace(entity)
+        DossierIndex.cached(for: store.dossiers).entityTrace(entity)
     }
 }

@@ -370,14 +370,13 @@ enum OutlineSync {
 
     /// 专名池：既有人物别名 + 事实主语。故事线名（如「白零与苏叶的感情线」）几乎不会逐字
     /// 出现在正文里，真正能定位一条线动静的是它涉及的人名/势力名。
-    @MainActor
-    private static func properNames(_ store: ProjectStore) -> [String] {
+    nonisolated private static func properNames(aliases: [CharacterAlias], facts: [MemoryFact]) -> [String] {
         var names: [String] = []
-        for a in store.characterAliases {
+        for a in aliases {
             if (2...8).contains(a.canonicalName.count) { names.append(a.canonicalName) }
             names.append(contentsOf: a.aliases.filter { (2...8).contains($0.count) })
         }
-        names.append(contentsOf: store.facts.map(\.subject).filter { (2...8).contains($0.count) })
+        names.append(contentsOf: facts.map(\.subject).filter { (2...8).contains($0.count) })
         var seen = Set<String>()
         return Array(names.filter { seen.insert($0).inserted }.prefix(200))
     }
@@ -412,18 +411,48 @@ enum OutlineSync {
     // MARK: - 全书对账
 
     /// 计划 vs 实际对账（确定性，零 LLM，只读不写盘）。
+    /// syncAsync：后台执行包装——对账是 O(章数 × 针数) 的全文扫描（150 章约 2s），
+    /// 不能在主线程跑；主线程只做一次值类型快照（数组拷贝廉价），计算全在后台。
     @MainActor
-    static func sync(store: ProjectStore, asOfChapter n: Int? = nil) -> OutlineSyncReport {
-        var report = OutlineSyncReport()
-        let asOf = max(0, n ?? defaultAsOf(store))
-        report.asOfChapter = asOf
-
+    static func syncAsync(store: ProjectStore, asOfChapter n: Int? = nil) async -> OutlineSyncReport {
         let chapters = store.chapters
         let events = store.timelineEvents
         let lines = store.storylines
         let clues = store.clues
         let stages = store.stages
+        let aliases = store.characterAliases
+        let facts = store.facts
         let wordTarget = max(1, store.project.chapterWordTarget)
+        let asOf = n
+        return await _Concurrency.Task.detached(priority: .userInitiated) {
+            sync(chapters: chapters, events: events, lines: lines, clues: clues,
+                 stages: stages, aliases: aliases, facts: facts,
+                 wordTarget: wordTarget, asOfChapter: asOf)
+        }.value
+    }
+
+    @MainActor
+    static func sync(store: ProjectStore, asOfChapter n: Int? = nil) -> OutlineSyncReport {
+        sync(chapters: store.chapters, events: store.timelineEvents, lines: store.storylines,
+             clues: store.clues, stages: store.stages,
+             aliases: store.characterAliases, facts: store.facts,
+             wordTarget: max(1, store.project.chapterWordTarget), asOfChapter: n)
+    }
+
+    /// 纯函数入口（值类型入参，可跨线程）
+    nonisolated static func sync(chapters inputChapters: [Chapter], events inputEvents: [TimelineEvent],
+                                 lines inputLines: [Storyline], clues inputClues: [Clue],
+                                 stages inputStages: [Stage], aliases: [CharacterAlias],
+                                 facts: [MemoryFact], wordTarget: Int,
+                                 asOfChapter n: Int?) -> OutlineSyncReport {
+        var report = OutlineSyncReport()
+        let chapters = inputChapters
+        let events = inputEvents
+        let lines = inputLines
+        let clues = inputClues
+        let stages = inputStages
+        let asOf = max(0, n ?? (chapters.filter { !$0.prose.isEmpty }.map(\.number).max() ?? 0))
+        report.asOfChapter = asOf
 
         var updates: [OutlineUpdate] = []
         var divergences: [ValidationIssue] = []
@@ -442,7 +471,7 @@ enum OutlineSync {
         }
 
         // ---- 1. 故事线关键词（信号 b 用）----
-        let namePool = properNames(store)
+        let namePool = properNames(aliases: aliases, facts: facts)
         var keywordsByLine: [String: [String]] = [:]
         var lineIDsByNeedle: [String: [String]] = [:]
         for line in lines {

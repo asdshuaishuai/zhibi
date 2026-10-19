@@ -58,6 +58,7 @@ final class AppViewModel: ObservableObject {
         dailyGoal = UserDefaults.standard.object(forKey: "dailyGoal") as? Int ?? 2000
         projects = ProjectRegistry.load()
         appearanceMode = AppearanceMode(rawValue: UserDefaults.standard.string(forKey: "appearanceMode") ?? "") ?? .system
+        ai.loadPersistedTrajectory()
     }
 
     /// 书架卡牌：换封面风格（盘 IO 在后台线程，返回新风格序号）

@@ -24,13 +24,39 @@ final class AIService: ObservableObject {
     }
     @Published var trajectory: [AITraceEntry] = []
     @Published var currentStep = ""   // 运行中的当前步骤（状态栏实时显示）
+    private var trajectoryDirty = false
+    private var trajectorySaveTask: _Concurrency.Task<Void, Never>?
 
-    /// 记录一条轨迹（会话内历史；不落盘）
+    /// 从磁盘加载历史轨迹（跨会话回看）
+    func loadPersistedTrajectory() {
+        guard trajectory.isEmpty else { return }
+        trajectory = TrajectoryStore.load().map {
+            AITraceEntry(at: $0.at, capability: $0.capability, event: $0.event, detail: $0.detail, isError: $0.isError)
+        }
+    }
+
+    /// 记录一条轨迹（实时 + 节流持久化，跨会话保留最近 200 条）
     private func trace(_ capability: AICapability, _ event: String, detail: String = "", isError: Bool = false) {
         trajectory.insert(AITraceEntry(at: Date(), capability: capability.rawValue,
                                        event: event, detail: detail, isError: isError), at: 0)
         if trajectory.count > 200 { trajectory.removeLast(trajectory.count - 200) }
         currentStep = isError ? "" : "\(capability.rawValue) · \(event)"
+        scheduleTrajectorySave()
+    }
+
+    private func scheduleTrajectorySave() {
+        trajectoryDirty = true
+        trajectorySaveTask?.cancel()
+        trajectorySaveTask = _Concurrency.Task { [weak self] in
+            try? await _Concurrency.Task.sleep(nanoseconds: 1_500_000_000)
+            guard let self, !_Concurrency.Task.isCancelled, self.trajectoryDirty else { return }
+            self.trajectoryDirty = false
+            let entries = self.trajectory.map {
+                TrajectoryStore.Entry(at: $0.at, capability: $0.capability, event: $0.event,
+                                      detail: String($0.detail.prefix(300)), isError: $0.isError)
+            }
+            TrajectoryStore.save(entries)
+        }
     }
 
     /// 私有/本机地址判定：局域网模型（LM Studio / Ollama / llama.cpp）不需要 API Key，
@@ -531,7 +557,7 @@ final class AIService: ObservableObject {
         }
         let asOf = store.currentChapter
         // 先跑确定性审查并把结果落一份提案：即使 LLM 失败，作者也拿得到机械性错误的清单
-        let deterministic = ContinuityAuditor.audit(store: store, throughChapter: asOf)
+        let deterministic = await ContinuityAuditor.auditAsync(store: store, throughChapter: asOf)
         await store.addProposal(AIProposal(
             capability: .continuityAudit, chapterNumber: asOf,
             title: "全书连贯性·确定性体检（截至第\(asOf)章，\(deterministic.issues.count) 条，零 AI 成本）",
@@ -560,7 +586,7 @@ final class AIService: ObservableObject {
             lastError = problem
             return
         }
-        let report = OutlineSync.sync(store: store)
+        let report = await OutlineSync.syncAsync(store: store)
         // 确定性对账结果先落一份（作者可以只看这份，不花 token）
         await store.addProposal(AIProposal(
             capability: .outlineSync, chapterNumber: report.asOfChapter,
@@ -795,7 +821,24 @@ final class AIService: ObservableObject {
                              capability: AICapability, userMessage: String) async -> String? {
         if let problem = validateConfig(config) {
             lastError = problem
+            trace(capability, "中止", detail: problem, isError: true)
             return nil
+        }
+        // 纯文本通道同样要占用运行态：否则工具箱的进度/禁用全部失效，且能并发起多条 AI 流
+        guard !running else {
+            lastError = "已有 AI 任务在运行，请等它结束。"
+            return nil
+        }
+        running = true
+        runningCapability = capability
+        streamPreview = ""
+        lastError = nil
+        lastToolLog = []
+        trace(capability, "开始（纯文本通道）")
+        defer {
+            running = false
+            runningCapability = nil
+            currentStep = ""
         }
         do {
             let agent = createAgent(options: AgentOptions(

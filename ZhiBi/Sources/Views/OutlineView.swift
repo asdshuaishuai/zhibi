@@ -49,11 +49,18 @@ struct OutlineView: View {
                     store.saveSoon()
                 }
                 .controlSize(.small)
+                TextField("给 AI 的补充说明（可选，如：这次重建时间线，保留已写的第 1-5 章）", text: $outlineNotes)
+                    .textFieldStyle(.roundedBorder)
+                    .font(.caption)
+                    .frame(width: 300)
+                    .disabled(vm.ai.running)
                 Button {
                     Task { await vm.ai.runOutlineTimeline(store: store, config: vm.config, notes: outlineNotes) }
                 } label: { Label("AI 建大纲（提案）", systemImage: "wand.and.stars") }
                 .controlSize(.small)
+                .disabled(vm.ai.running)
             }
+            .disabled(vm.ai.running)
             .padding(.horizontal, 12)
             .padding(.top, 10)
 
@@ -95,9 +102,11 @@ struct OutlineView: View {
                     Task { await vm.ai.runOutlineTimeline(store: store, config: vm.config, notes: outlineNotes) }
                 } label: { Label("AI 建时间线（提案）", systemImage: "sparkles") }
                 .controlSize(.small)
+                .disabled(vm.ai.running)
                 Button("加事件") { showAddEvent = true }
                     .controlSize(.small)
             }
+            .disabled(vm.ai.running)
             .padding(.horizontal, 12)
             .padding(.top, 6)
 
@@ -150,7 +159,7 @@ struct OutlineView: View {
                 }
                 Spacer()
                 Button {
-                    syncReport = OutlineSync.sync(store: store)
+                    Task { syncReport = await OutlineSync.syncAsync(store: store) }
                 } label: { Label("重新对账", systemImage: "arrow.clockwise") }
                     .controlSize(.small)
                     .help("正文改动不会自动重算（避免每敲一个字就全量对账），写完一段点这里刷新")
@@ -189,7 +198,7 @@ struct OutlineView: View {
         .padding(.top, 6)
         // 结构变了才重算；task 可取消，翻页/关窗不会留下孤儿计算
         .task(id: syncStamp) {
-            syncReport = OutlineSync.sync(store: store)
+            syncReport = await OutlineSync.syncAsync(store: store)
         }
     }
 

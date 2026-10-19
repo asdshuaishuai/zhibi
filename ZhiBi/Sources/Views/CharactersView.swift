@@ -66,9 +66,36 @@ struct CharactersView: View {
         }
     }
 
+    @State private var traceExpanded: Set<String> = []
+
+    /// 档案卡实体轨迹：该人物在全书哪些章出现过（含别名）
+    /// 全部人物的轨迹一次算完（body 内共享同一索引；原先每张卡各建一次全书索引）
+    private var allTraces: [String: [ChapterDossier]] {
+        guard !store.dossiers.isEmpty else { return [:] }
+        let index = DossierIndex.cached(for: store.dossiers)
+        var out: [String: [ChapterDossier]] = [:]
+        for card in cards {
+            var names = [card.name]
+            if let a = store.characterAliases.first(where: { $0.canonicalName == card.name }) {
+                names.append(contentsOf: a.aliases)
+            }
+            var result: [Int: ChapterDossier] = [:]
+            for n in names {
+                for d in index.entityTrace(n) { result[d.chapter] = d }
+            }
+            out[card.name] = result.values.sorted { $0.chapter < $1.chapter }
+        }
+        return out
+    }
+
+    private func entityTrace(_ name: String) -> [ChapterDossier] {
+        allTraces[name] ?? []
+    }
+
     private func characterCard(_ card: CharacterCard) -> some View {
         let aliases = store.characterAliases.first { $0.canonicalName == card.name }?.aliases ?? []
         let secrets = card.facts.filter { !$0.publicToReader }
+        let trace = entityTrace(card.name)
         return VStack(alignment: .leading, spacing: 6) {
             HStack {
                 Text(card.name).font(.callout.bold())
@@ -84,6 +111,38 @@ struct CharactersView: View {
                     Text(f.object).font(.caption)
                     Spacer()
                     Text("第\(f.fromChapter)章起").font(.caption2).foregroundStyle(.tertiary)
+                }
+            }
+            if !trace.isEmpty {
+                Divider()
+                Button {
+                    if traceExpanded.contains(card.name) { traceExpanded.remove(card.name) }
+                    else { traceExpanded.insert(card.name) }
+                } label: {
+                    HStack(spacing: 5) {
+                        Image(systemName: traceExpanded.contains(card.name) ? "chevron.down" : "chevron.right")
+                            .font(.caption2)
+                        Label("档案轨迹：\(trace.count) 章", systemImage: "point.topleft.down.curvedto.point.bottomright.up")
+                            .font(.caption2.bold())
+                        Spacer()
+                    }
+                    .foregroundStyle(Color.accentColor)
+                }
+                .buttonStyle(.plain)
+                if traceExpanded.contains(card.name) {
+                    ForEach(trace) { d in
+                        HStack(alignment: .top, spacing: 6) {
+                            Text("第\(d.chapter)章").font(.caption2.monospacedDigit())
+                                .foregroundStyle(.tertiary).frame(width: 52, alignment: .leading)
+                            VStack(alignment: .leading, spacing: 1) {
+                                Text(d.headline).font(.caption2)
+                                if !d.relics.isEmpty {
+                                    Text(d.relics.prefix(2).joined(separator: "；"))
+                                        .font(.caption2).foregroundStyle(.tertiary).lineLimit(1)
+                                }
+                            }
+                        }
+                    }
                 }
             }
             if !secrets.isEmpty {

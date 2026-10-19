@@ -100,6 +100,30 @@ struct AgentConfig: Codable {
     }
 }
 
+/// AI 轨迹持久化（跨会话回看；独立小文件，不混进项目数据）
+enum TrajectoryStore {
+    struct Entry: Codable {
+        var at: Date
+        var capability: String
+        var event: String
+        var detail: String
+        var isError: Bool
+    }
+
+    static func url() -> URL {
+        let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("ZhiBi", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir.appendingPathComponent("ai-trajectory.json")
+    }
+
+    static func load() -> [Entry] { (try? Disk.readJSON([Entry].self, from: url())) ?? [] }
+
+    static func save(_ entries: [Entry]) {
+        try? Disk.writeJSON(Array(entries.prefix(200)), to: url())
+    }
+}
+
 /// 项目注册表（多书管理）
 enum ProjectRegistry {
     static func registryURL() -> URL {

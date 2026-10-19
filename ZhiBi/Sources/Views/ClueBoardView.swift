@@ -44,6 +44,7 @@ struct ClueBoardView: View {
                     Task { await vm.ai.runClueInventory(store: store, config: vm.config, scope: "") }
                 } label: { Label("AI 盘点（提案）", systemImage: "sparkles") }
                     .controlSize(.small)
+                    .disabled(vm.ai.running)
             }
             .padding(.horizontal, 12)
 

@@ -16,6 +16,7 @@ struct ChapterEditorView: View {
     @State private var showPipeline = false
     @State private var showInbox = false
     @State private var showToolbox = false
+    @State private var dossierHintShown: Set<Int> = []
     @State private var bannerDismissed = false
 
     @AppStorage("focusMode") private var focusMode = false
@@ -82,7 +83,16 @@ struct ChapterEditorView: View {
             proseEditor
         }
         .animation(ZBMotion.standard(reduceMotion: reduceMotion), value: showSkeletonEditor)
-        .onAppear { store.autoSaveEnabled = vm.config.autoSave }
+        .onAppear {
+            store.autoSaveEnabled = vm.config.autoSave
+            // 首次进入时若本章刚写完但还没档案卡，轻提示（每章一次）
+            if let ch = store.chapter(chapterNumber), !ch.prose.isEmpty,
+               !store.dossiers.contains(where: { $0.chapter == chapterNumber }),
+               !dossierHintShown.contains(chapterNumber) {
+                dossierHintShown.insert(chapterNumber)
+                vm.showToast("本章还没档案卡——「AI 协作 → 提取档案卡」可入长程记忆库", success: false)
+            }
+        }
         .sheet(isPresented: $showSnapshots) {
             SnapshotBrowser(vm: vm, store: store, chapterNumber: chapterNumber)
         }
@@ -176,17 +186,20 @@ struct ChapterEditorView: View {
                     Label("让 AI 记一笔（记忆/伏笔候选）", systemImage: "square.and.pencil")
                 }
                 .keyboardShortcut("m", modifiers: [.command, .shift])
+                .disabled(vm.ai.running)
                 Button {
                     Task { await vm.ai.runDossierExtract(store: store, config: vm.config, chapter: chapterNumber) }
                 } label: {
                     Label("提取档案卡（长程记忆）", systemImage: "books.vertical")
                 }
                 .help("本章的场景/人物/推进/悬念/关键细节 → 跨全书可检索的档案卡")
+                .disabled(vm.ai.running)
                 Button {
                     Task { await vm.ai.runClueInventory(store: store, config: vm.config, scope: "") }
                 } label: {
                     Label("AI 盘点伏笔（全书）", systemImage: "link")
                 }
+                .disabled(vm.ai.running)
                 Divider()
                 Button {
                     _ = store.snapshotProse(chapter: chapterNumber, tag: "手动")
