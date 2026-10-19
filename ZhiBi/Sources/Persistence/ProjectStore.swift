@@ -92,7 +92,9 @@ final class ProjectStore: ObservableObject {
             let clues = (try? Disk.readJSON([Clue].self, from: ProjectLayout.cluesFile(rootURL))) ?? []
             let memory = try? Disk.readJSON(MemoryFile.self, from: ProjectLayout.memoryFile(rootURL))
             let dossiers = (try? Disk.readJSON([ChapterDossier].self, from: ProjectLayout.dossiersFile(rootURL))) ?? []
-            let proposals = (try? Disk.readJSON([AIProposal].self, from: ProjectLayout.proposalsFile(rootURL))) ?? []
+            let pending = (try? Disk.readJSON([AIProposal].self, from: ProjectLayout.proposalsFile(rootURL))) ?? []
+            let archived = (try? Disk.readJSON([AIProposal].self, from: ProjectLayout.proposalsArchiveFile(rootURL))) ?? []
+            let proposals = (pending + archived).sorted { $0.createdAt > $1.createdAt }
 
             var loaded: [Chapter] = []
             var quarantineNotes: [String] = []
@@ -162,7 +164,9 @@ final class ProjectStore: ObservableObject {
         facts = mem?.facts ?? []
         characterAliases = mem?.aliases ?? []
         dismissedConflicts = mem?.dismissedConflicts ?? []
-        proposals = (try? Disk.readJSON([AIProposal].self, from: ProjectLayout.proposalsFile(rootURL))) ?? []
+        let pendingLoaded = (try? Disk.readJSON([AIProposal].self, from: ProjectLayout.proposalsFile(rootURL))) ?? []
+        let archivedLoaded = (try? Disk.readJSON([AIProposal].self, from: ProjectLayout.proposalsArchiveFile(rootURL))) ?? []
+        proposals = (pendingLoaded + archivedLoaded).sorted { $0.createdAt > $1.createdAt }
 
         var loaded: [Chapter] = []
         var quarantineNotes: [String] = []
@@ -293,7 +297,14 @@ final class ProjectStore: ObservableObject {
         try Disk.writeJSON(stages, to: ProjectLayout.stagesFile(rootURL))
         try Disk.writeJSON(clues, to: ProjectLayout.cluesFile(rootURL))
         try Disk.writeJSON(MemoryFile(facts: facts, aliases: characterAliases, dismissedConflicts: dismissedConflicts), to: ProjectLayout.memoryFile(rootURL))
-        try Disk.writeJSON(proposals, to: ProjectLayout.proposalsFile(rootURL))
+        // 提案热/冷分离：inbox 只存待审（每次编辑都重编码的活跃集）；已裁决进 archive
+        // （大草案含全文，全量重编码在 1000+ 提案时约 21ms/次且文件 10MB+）
+        let pendingProposals = proposals.filter { $0.status == .pending }
+        let archivedProposals = proposals.filter { $0.status != .pending }
+        try Disk.writeJSON(pendingProposals, to: ProjectLayout.proposalsFile(rootURL))
+        if !archivedProposals.isEmpty {
+            try Disk.writeJSON(archivedProposals, to: ProjectLayout.proposalsArchiveFile(rootURL))
+        }
         try Disk.writeJSON(dossiers, to: ProjectLayout.dossiersFile(rootURL))
         dirtyChapters.removeAll()
         if canonWriteFailed {

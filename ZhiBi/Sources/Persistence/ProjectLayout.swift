@@ -42,6 +42,8 @@ enum ProjectLayout {
     }
     static func canonDir(_ root: URL) -> URL { root.appendingPathComponent("canon", isDirectory: true) }
     static func proposalsFile(_ root: URL) -> URL { root.appendingPathComponent("proposals/inbox.json") }
+    /// 已裁决提案归档（热/冷分离：inbox 只存待审，归档不再参与每次保存的重编码）
+    static func proposalsArchiveFile(_ root: URL) -> URL { root.appendingPathComponent("proposals/archive.json") }
     static func outlineFile(_ root: URL) -> URL { root.appendingPathComponent("outline.json") }
     /// 大纲三件套落根目录（读与写必须是同一路径——曾因读写不一致导致重启丢故事线）
     static func storylinesFile(_ root: URL) -> URL { root.appendingPathComponent("storylines.json") }

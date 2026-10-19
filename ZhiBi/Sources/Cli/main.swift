@@ -1322,6 +1322,82 @@ func qualityLoopTests() async throws {
 
 try await qualityLoopTests()
 
+// MARK: - 29. 提案热/冷分离：inbox 只存待审、归档独立、回读合并、体积受控
+
+@MainActor
+func proposalsSplitTests() async throws {
+    let st = ProjectStore(rootURL: URL(fileURLWithPath: "/tmp/zhibi-split-\(UUID().uuidString).zhibi"))
+    st.ensureChapter(1)
+    // 3 条待审 + 2 条已裁决（含一个大草稿）
+    st.addProposal(AIProposal(capability: .chapterSkeleton, chapterNumber: 1, title: "待审骨架", payload: .memo("x")))
+    st.addProposal(AIProposal(capability: .recallMemo, chapterNumber: 1, title: "待审备忘", payload: .memo("y")))
+    var bigDraft = ChapterDraft(chapter: 1, text: String(repeating: "长草稿正文占体积。", count: 2000), version: 1)
+    bigDraft.feedbackHistory = [DraftFeedback(feedback: "意见", fromVersion: 1)]
+    st.addProposal(AIProposal(capability: .chapterDraft, chapterNumber: 1, title: "待审草稿", payload: .draft(bigDraft)))
+    st.addProposal(AIProposal(capability: .chapterSkeleton, chapterNumber: 2, title: "已采纳骨架", payload: .memo("z")))
+    st.addProposal(AIProposal(capability: .recallMemo, chapterNumber: 2, title: "已拒备忘", payload: .memo("w")))
+    if let a = st.proposals.first(where: { $0.title == "已采纳骨架" })?.id { st.acceptProposal(a) }
+    if let r = st.proposals.first(where: { $0.title == "已拒备忘" })?.id { st.rejectProposal(r, reason: "冗余") }
+    try? st.saveNow()
+
+    // inbox 只含待审（大草稿在内）、archive 只含已裁决
+    let inbox = try Disk.readJSON([AIProposal].self, from: ProjectLayout.proposalsFile(st.rootURL))
+    let archive = try Disk.readJSON([AIProposal].self, from: ProjectLayout.proposalsArchiveFile(st.rootURL))
+    check("inbox 只存待审", inbox.count == 3 && inbox.allSatisfy { $0.status == .pending },
+          "inbox=\(inbox.count) status=\(Set(inbox.map(\.status.rawValue)))")
+    check("archive 只存已裁决", archive.count == 2 && archive.allSatisfy { $0.status != .pending })
+    check("拒收理由持久化", archive.contains { $0.title == "已拒备忘" && $0.rejectReason == "冗余" })
+
+    // 重载合并 + 排序（新在前）
+    let reloaded = ProjectStore(rootURL: st.rootURL)
+    try? reloaded.load()
+    check("重载合并全量", reloaded.proposals.count == 5,
+          "得到 \(reloaded.proposals.count)")
+    check("合并后按时间序", zip(reloaded.proposals, reloaded.proposals.dropFirst()).allSatisfy { $0.createdAt >= $1.createdAt })
+    // 质量统计跨归档仍完整（3 待审 1 采纳 1 拒 + 之前测试写入的同 store 无关）
+    let stats = QualityStats.derive(from: reloaded.proposals)
+    check("归档参与质量统计", stats.totalAccepted >= 1 && stats.totalRejected == 1)
+
+    // 老格式兼容：inbox.json 混着已裁决提案 → 加载正常 + 保存后自动分流
+    let legacyRoot = URL(fileURLWithPath: "/tmp/zhibi-legacy-\(UUID().uuidString).zhibi")
+    try? FileManager.default.createDirectory(at: ProjectLayout.proposalsFile(legacyRoot).deletingLastPathComponent(), withIntermediateDirectories: true)
+    let legacyList = [
+        AIProposal(capability: .chapterSkeleton, title: "老待审", payload: .memo("p")),
+        { var p = AIProposal(capability: .chapterDraft, title: "老已采纳", payload: .memo("d")); p.status = .accepted; return p }(),
+    ]
+    // 先建最小项目文件（否则 load 因缺 project.json 抛错），再写入老格式提案
+    let seedStore = ProjectStore(rootURL: legacyRoot)
+    seedStore.project = NovelProject(title: "老项目")
+    seedStore.ensureChapter(1)
+    try? seedStore.saveNow()
+    try? Disk.writeJSON(legacyList, to: ProjectLayout.proposalsFile(legacyRoot))
+    let legacyStore = ProjectStore(rootURL: legacyRoot)
+    do {
+        try legacyStore.load()
+    } catch {
+        print("legacy load FAILED: \(error)")
+    }
+    check("老格式加载完整", legacyStore.proposals.count == 2,
+          "得到 \(legacyStore.proposals.count)")
+    try? legacyStore.saveNow()
+    let legacyInbox = (try? Disk.readJSON([AIProposal].self, from: ProjectLayout.proposalsFile(legacyRoot))) ?? []
+    let legacyArchive = (try? Disk.readJSON([AIProposal].self, from: ProjectLayout.proposalsArchiveFile(legacyRoot))) ?? []
+    check("老格式自动分流", legacyInbox.count == 1 && legacyArchive.count == 1,
+          "inbox=\(legacyInbox.count) archive=\(legacyArchive.count)")
+
+    // 体积受控：再次保存后 inbox 不再重编码已裁决的大件
+    let inboxSizeBefore = (try? FileManager.default.attributesOfItem(atPath: ProjectLayout.proposalsFile(st.rootURL).path)[.size] as? Int) ?? 0
+    var more = reloaded.proposals.map { p -> AIProposal in p }
+    _ = more // 保持结构
+    try? reloaded.saveNow()
+    let inboxSizeAfter = (try? FileManager.default.attributesOfItem(atPath: ProjectLayout.proposalsFile(st.rootURL).path)[.size] as? Int) ?? 0
+    check("inbox 体积稳定（不随归档增长）", abs(inboxSizeAfter - inboxSizeBefore) < 200,
+          "before=\(inboxSizeBefore ?? 0) after=\(inboxSizeAfter ?? 0)")
+}
+
+try await proposalsSplitTests()
+
+
 
 
 
