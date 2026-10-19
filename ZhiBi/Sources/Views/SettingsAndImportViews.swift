@@ -127,9 +127,10 @@ struct SettingsView: View {
                 // 上下文包预算按 models.dev 元信息自动对齐：取模型上下文的一半
                 // （留足输出与回复空间），夹在 2K–32K 的既有步进范围内
                 if let limit = entry.contextLimit {
-                    let budget = max(2000, min(32000, limit / 2))
+                    // 预算 = 上下文 40%：其余留给创作法典/骨架/输出与回复
+                    let budget = max(2000, min(32000, limit * 2 / 5))
                     vm.config.contextTokenBudget = budget
-                    budgetNote = "已按「\(entry.modelName)」的上下文自动调整包预算 ≈\(budget) tokens"
+                    budgetNote = "已按「\(entry.modelName)」（\(limit / 1000)K 上下文）自动调整包预算 ≈\(budget) tokens"
                 } else {
                     budgetNote = ""
                 }
@@ -214,6 +215,8 @@ struct SettingsView: View {
         Form {
             Section("生成与上下文") {
                 Stepper("上下文包预算：≈\(vm.config.contextTokenBudget) tokens", value: $vm.config.contextTokenBudget, in: 2000...32000, step: 1000)
+                Text("造包按此预算真实裁剪（保护层优先、低优先级先压）。本地 8K 模型建议 ≤4000——太大时模型会截断反而丢关键上下文。")
+                    .font(.caption2).foregroundStyle(.tertiary)
                 Toggle("正文自动保存（永远先落盘）", isOn: $vm.config.autoSave)
             }
             HStack { Spacer(); saveButton }

@@ -1144,6 +1144,48 @@ func roundFourTests() async throws {
 
 try await roundFourTests()
 
+// MARK: - 26. 上下文预算真实生效（budget 死 UI 修复）
+
+@MainActor
+func budgetTests() async throws {
+    let st = ProjectStore(rootURL: URL(fileURLWithPath: "/tmp/zhibi-bud-\(UUID().uuidString).zhibi"))
+    st.ensureChapter(30)
+    st.project.authorIntent = String(repeating: "意图", count: 200)
+    st.project.premise = "核心"
+    st.storylines = [Storyline(id: "L01", name: "主线", kind: .main, isThroughLine: true, status: .active, notes: String(repeating: "线", count: 300))]
+    for i in 1...20 {
+        st.ensureChapter(i)
+        st.updateChapter(i, countWords: false) { ch in
+            ch.prose = String(repeating: "正文", count: 300)
+            ch.summary = ChapterSummary(chapter: i, summary: String(repeating: "摘要", count: 120), keyEvents: ["事件"], emotionalTone: "紧")
+        }
+    }
+    st.facts = (0..<40).map { MemoryFact(subject: "角色\($0 % 8)", predicate: "状态", object: "在\($0)", fromChapter: $0 % 20 + 1, source: "authored") }
+    st.clues = (0..<10).map { Clue(id: "F0\($0)", title: "钩\($0)", detail: String(repeating: "细", count: 80), plantedChapter: 1, status: .planted) }
+
+    // 小预算 vs 大预算：包必须有显著差异（原实现 budget 零引用 → 完全一致）
+    let small = ContextPackBuilder.build(store: st, forChapter: 30, budget: 2000)
+    let large = ContextPackBuilder.build(store: st, forChapter: 30, budget: 32000)
+    check("预算真实生效", small.approxTokens < large.approxTokens,
+          "small=\(small.approxTokens) large=\(large.approxTokens)")
+    check("小预算不超上限（含截断注记余量）", small.approxTokens <= 2600,
+          "得到 \(small.approxTokens)")
+    check("大预算保留更多块", small.blocks.count <= large.blocks.count,
+          "small=\(small.blocks.count) large=\(large.blocks.count)")
+    check("裁剪有记录", small.trimmedNotes.isEmpty == false || small.approxTokens <= 2000,
+          "notes=\(small.trimmedNotes.count)")
+
+    // 作者控制面（priority 10）在小预算下必须幸存
+    check("作者意图保底", small.blocks.contains { $0.title == "作者意图" })
+    // 正文注入上限随预算缩放
+    check("正文注入上限随预算", ContextPackBuilder.proseInjectionCap(budget: 2000, hardCap: 12000)
+          < ContextPackBuilder.proseInjectionCap(budget: 32000, hardCap: 12000))
+    check("正文注入下限保底", ContextPackBuilder.proseInjectionCap(budget: 100, hardCap: 12000) >= 4000)
+}
+
+try await budgetTests()
+
+
 
 // MARK: - 24. 长程记忆深化：人物轨迹 / 轨迹持久化
 

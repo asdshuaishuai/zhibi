@@ -429,7 +429,8 @@ final class AIService: ObservableObject {
             .joined(separator: "\n")
         await run(capability: .dossierExtract, store: store, config: config, chapter: n,
                   userMessage: PromptLibrary.dossierExtractTask(
-                    chapter: n, chapterTitle: ch.title, prose: ch.prose, existing: existing))
+                    chapter: n, chapterTitle: ch.title, prose: ch.prose, existing: existing,
+                    proseCap: ContextPackBuilder.proseInjectionCap(budget: config.contextTokenBudget, hardCap: 14000)))
     }
 
     /// 设定归类：读全部设定文档 → 每篇给分类与可选改名（提案，作者采纳后生效）
@@ -684,7 +685,8 @@ final class AIService: ObservableObject {
             // 草稿模式：直接审稿本文本（确定性体检跳过——草稿未入库）
             let pack = ContextPackBuilder.build(store: store, forChapter: n, budget: config.contextTokenBudget)
             await run(capability: .validation, store: store, config: config, chapter: n,
-                      userMessage: PromptLibrary.validationTask(chapter: n, prose: overrideText, skeleton: "", pack: pack, draftMode: true))
+                      userMessage: PromptLibrary.validationTask(chapter: n, prose: overrideText, skeleton: "", pack: pack, draftMode: true,
+                                               proseCap: ContextPackBuilder.proseInjectionCap(budget: config.contextTokenBudget, hardCap: 12000)))
             return
         }
         guard let ch = store.chapter(n), !ch.prose.isEmpty else {
@@ -708,7 +710,8 @@ final class AIService: ObservableObject {
             for t in sk.clueTouches { skeletonText += "\n伏笔触点：[\(t.clueID)] \(t.action.rawValue) —— \(t.requirement)" }
         }
         await run(capability: .validation, store: store, config: config, chapter: n,
-                  userMessage: PromptLibrary.validationTask(chapter: n, prose: ch.prose, skeleton: skeletonText, pack: pack))
+                  userMessage: PromptLibrary.validationTask(chapter: n, prose: ch.prose, skeleton: skeletonText, pack: pack,
+                                               proseCap: ContextPackBuilder.proseInjectionCap(budget: config.contextTokenBudget, hardCap: 12000)))
     }
 
     func runDeslop(store: ProjectStore, config: AgentConfig, chapter n: Int, overrideText: String? = nil) async {
@@ -724,7 +727,8 @@ final class AIService: ObservableObject {
         }
         let lint = AILint.scan(text)
         await run(capability: .deslop, store: store, config: config, chapter: n,
-                  userMessage: PromptLibrary.deslopTask(chapter: n, prose: text, lintSummary: lint, model: config.model))
+                  userMessage: PromptLibrary.deslopTask(chapter: n, prose: text, lintSummary: lint, model: config.model,
+                                       proseCap: ContextPackBuilder.proseInjectionCap(budget: config.contextTokenBudget, hardCap: 14000)))
     }
 
     // MARK: - 流水线：一键写作 / 按意见修复

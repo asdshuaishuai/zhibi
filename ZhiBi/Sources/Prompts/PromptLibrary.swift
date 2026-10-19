@@ -94,12 +94,14 @@ enum PromptLibrary {
 
     // MARK: - 长程记忆档案卡（跨全书可检索的记忆锚点）
 
-    static func dossierExtractTask(chapter n: Int, chapterTitle: String, prose: String, existing: String) -> String {
-        """
+    static func dossierExtractTask(chapter n: Int, chapterTitle: String, prose: String, existing: String,
+                                   proseCap: Int = 14000) -> String {
+        let proseText = prose.count > proseCap ? String(prose.prefix(proseCap)) + "\n…（正文过长，已按上下文预算截断——请优先为已读到的部分建卡）" : prose
+        return """
         为第\(n)章《\(chapterTitle)》建立长程记忆档案卡。这是**跨全书检索**的记忆锚点：写到第 80 章时，作者和 AI 要靠这张卡找回本章的细节。
 
         ## 本章正文
-        \(String(prose.prefix(14000)))
+        \(proseText)
 
         ## 已有档案卡（避免重复）
         \(existing.isEmpty ? "（无）" : existing)
@@ -456,13 +458,15 @@ enum PromptLibrary {
 
     // MARK: - 验证（NarraCat 五类客观错误）
 
-    static func validationTask(chapter n: Int, prose: String, skeleton: String, pack: ContextPack, draftMode: Bool = false) -> String {
+    static func validationTask(chapter n: Int, prose: String, skeleton: String, pack: ContextPack,
+                              draftMode: Bool = false, proseCap: Int = 12000) -> String {
         let header = draftMode ? "本章文本（流水线草稿，尚未入库）" : "本章正文（作者亲笔）"
+        let proseText = prose.count > proseCap ? String(prose.prefix(proseCap)) + "\n…（正文过长，已按上下文预算截断）" : prose
         return """
         请对第\(n)章做一致性审校，用 propose_validation 提案。
 
         ## \(header)
-        \(String(prose.prefix(12000)))
+        \(proseText)
 
         ## 本章骨架
         \(skeleton.isEmpty ? "（无）" : skeleton)
@@ -511,12 +515,14 @@ enum PromptLibrary {
         return "未知模型：不套指纹，只按通用三 pass 检查。"
     }
 
-    static func deslopTask(chapter n: Int, prose: String, lintSummary: LintSummary, model: String) -> String {
-        """
+    static func deslopTask(chapter n: Int, prose: String, lintSummary: LintSummary, model: String,
+                           proseCap: Int = 14000) -> String {
+        let proseText = prose.count > proseCap ? String(prose.prefix(proseCap)) + "\n…（正文过长，已按上下文预算截断）" : prose
+        return """
         作者写完了第\(n)章，请做去AI味诊断并给逐处修改建议，用 propose_deslop 提案。
 
         ## 正文
-        \(String(prose.prefix(14000)))
+        \(proseText)
 
         ## 本地扫描已发现（可信，优先处理）
         \(lintSummary.topIssues.map { "【\($0.kind)】\($0.detail)（\($0.count)处）" }.joined(separator: "\n"))
