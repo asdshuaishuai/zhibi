@@ -10,8 +10,8 @@ struct SearchSheet: View {
     @Environment(\.dismiss) private var dismiss
 
     @State private var query = ""
-    /// 防抖后的查询词：全本扫描跑在后台，主线程只渲染结果
-    @State private var debouncedQuery = ""
+    /// 防抖 150ms 后的全本扫描结果：停顿才扫一次并缓存，不随击键重扫
+    @State private var results: [Hit] = []
     @State private var debounceTask: Task<Void, Never>?
 
     struct Hit: Identifiable {
@@ -24,8 +24,104 @@ struct SearchSheet: View {
         var section: WorkspaceSection?
     }
 
-    private var hits: [Hit] {
-        let q = debouncedQuery.trimmingCharacters(in: .whitespaces)
+    private var trimmed: String { query.trimmingCharacters(in: .whitespaces) }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 10) {
+                Image(systemName: "magnifyingglass").foregroundStyle(Color.accentColor)
+                TextField("搜索全书：章节 / 伏笔 / 设定 / 时间线 / 记忆…", text: $query)
+                    .textFieldStyle(.plain)
+                    .font(.title3)
+                    .onSubmit { flushNow(); openFirst() }
+                if !query.isEmpty {
+                    Text("\(results.count) 条").font(.caption).foregroundStyle(.tertiary)
+                }
+                Button("完成") { dismiss() }.controlSize(.small)
+            }
+            .padding(14)
+            Divider()
+
+            if results.isEmpty {
+                VStack(spacing: 8) {
+                    Image(systemName: trimmed.count < 2 ? "magnifyingglass" : "questionmark.folder")
+                        .font(.system(size: 30)).foregroundStyle(.tertiary)
+                    Text(trimmed.count < 2 ? "输入至少 2 个字符" : "没有命中")
+                        .font(.callout).foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                List {
+                    ForEach(results) { hit in
+                        Button {
+                            if let n = hit.chapterNumber {
+                                onSelectChapter(n)
+                            } else if let sec = hit.section {
+                                onSelectSection(sec)
+                            } else {
+                                return   // 无跳转目标：不误导（宁可不响应也不空跳）
+                            }
+                            dismiss()
+                        } label: {
+                            HStack(alignment: .top, spacing: 10) {
+                                Image(systemName: hit.icon)
+                                    .foregroundStyle(hit.chapterNumber != nil ? Color.accentColor : Color.secondary)
+                                    .frame(width: 18)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(hit.title).font(.callout.bold()).foregroundStyle(.primary)
+                                    Text(hit.snippet).font(.caption).foregroundStyle(.secondary)
+                                        .lineLimit(2)
+                                }
+                                Spacer()
+                                if hit.chapterNumber != nil {
+                                    Text("前往").font(.caption2).foregroundStyle(.tertiary)
+                                }
+                            }
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .listStyle(.inset)
+            }
+        }
+        .frame(width: ZBSpace.Sheet.wide, height: 560)
+        .onChange(of: query) { q in scheduleScan(q) }
+    }
+
+    // MARK: 防抖与扫描
+
+    /// 输入停顿 150ms 后扫一次：大书（100 万字）全本扫描 ~118ms，随击键扫会掉字
+    private func scheduleScan(_ q: String) {
+        debounceTask?.cancel()
+        guard q.trimmingCharacters(in: .whitespaces).count >= 2 else {
+            results = []
+            return
+        }
+        debounceTask = Task {
+            try? await Task.sleep(nanoseconds: 150_000_000)
+            guard !Task.isCancelled else { return }
+            results = Self.scan(query: q, store: store)
+        }
+    }
+
+    /// 回车立即出结果，不等防抖
+    private func flushNow() {
+        debounceTask?.cancel()
+        guard trimmed.count >= 2 else { return }
+        results = Self.scan(query: query, store: store)
+    }
+
+    private func openFirst() {
+        if let first = results.first, let n = first.chapterNumber {
+            onSelectChapter(n)
+            dismiss()
+        }
+    }
+
+    /// 全本扫描：章节（正文+标题）/ 伏笔 / 设定 / 时间线 / 记忆事实，至多 60 条
+    static func scan(query raw: String, store: ProjectStore) -> [Hit] {
+        let q = raw.trimmingCharacters(in: .whitespaces)
         guard q.count >= 2 else { return [] }
         var out: [Hit] = []
         var seen = Set<String>()
@@ -88,99 +184,5 @@ struct SearchSheet: View {
         }
 
         return Array(out.prefix(60))
-    }
-
-    var body: some View {
-        // 输入防抖 150ms：大书（100 万字）每次击键全本扫描 ~118ms，不防抖直接掉字
-        SearchDebouncer(query: $query, debouncedQuery: $debouncedQuery, debounceTask: $debounceTask)
-            .frame(width: 0, height: 0)
-
-        VStack(spacing: 0) {
-            HStack(spacing: 10) {
-                Image(systemName: "magnifyingglass").foregroundStyle(Color.accentColor)
-                TextField("搜索全书：章节 / 伏笔 / 设定 / 时间线 / 记忆…", text: $query)
-                    .textFieldStyle(.plain)
-                    .font(.title3)
-                    .onSubmit { openFirst() }
-                if !query.isEmpty {
-                    Text("\(hits.count) 条").font(.caption).foregroundStyle(.tertiary)
-                }
-                Button("完成") { dismiss() }.controlSize(.small)
-            }
-            .padding(14)
-            Divider()
-
-            if hits.isEmpty {
-                VStack(spacing: 8) {
-                    Image(systemName: query.count < 2 ? "magnifyingglass" : "questionmark.folder")
-                        .font(.system(size: 30)).foregroundStyle(.tertiary)
-                    Text(query.count < 2 ? "输入至少 2 个字符" : "没有命中")
-                        .font(.callout).foregroundStyle(.secondary)
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else {
-                List {
-                    ForEach(hits) { hit in
-                        Button {
-                            if let n = hit.chapterNumber {
-                                onSelectChapter(n)
-                            } else if let sec = hit.section {
-                                onSelectSection(sec)
-                            } else {
-                                return   // 无跳转目标：不误导（宁可不响应也不空跳）
-                            }
-                            dismiss()
-                        } label: {
-                            HStack(alignment: .top, spacing: 10) {
-                                Image(systemName: hit.icon)
-                                    .foregroundStyle(hit.chapterNumber != nil ? Color.accentColor : Color.secondary)
-                                    .frame(width: 18)
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(hit.title).font(.callout.bold()).foregroundStyle(.primary)
-                                    Text(hit.snippet).font(.caption).foregroundStyle(.secondary)
-                                        .lineLimit(2)
-                                }
-                                Spacer()
-                                if hit.chapterNumber != nil {
-                                    Text("前往").font(.caption2).foregroundStyle(.tertiary)
-                                }
-                            }
-                            .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.plain)
-                    }
-                }
-                .listStyle(.inset)
-            }
-        }
-        .frame(width: ZBSpace.Sheet.wide, height: 560)
-    }
-
-    private func openFirst() {
-        if let first = hits.first, let n = first.chapterNumber {
-            onSelectChapter(n)
-            dismiss()
-        }
-    }
-}
-
-// MARK: - 输入防抖
-
-private struct SearchDebouncer: View {
-    @Binding var query: String
-    @Binding var debouncedQuery: String
-    @Binding var debounceTask: Task<Void, Never>?
-
-    var body: some View {
-        Color.clear
-            .frame(width: 0, height: 0)
-            .onChange(of: query) { _ in
-                debounceTask?.cancel()
-                debounceTask = Task {
-                    try? await Task.sleep(nanoseconds: 150_000_000)
-                    guard !Task.isCancelled else { return }
-                    await MainActor.run { debouncedQuery = query }
-                }
-            }
     }
 }
