@@ -5,6 +5,7 @@ import SwiftUI
 //
 // 运行语义分两类：
 // - 拆书 / 封面提案：纯文本产出（runTextOnly 通道），结果就地展示 + 一键存为备忘提案
+// - 设定归类：归类结果就地展示 + 一键采纳（提案仍在收件箱留痕，铁律不变）
 // - 整理旧稿 / 短篇成稿：走提案通道（canon/clues/draft），结果在收件箱审
 
 struct AIToolboxSheet: View {
@@ -280,13 +281,82 @@ struct AIToolboxSheet: View {
                         .disabled(savedAsProposal)
                     }
                 }
+            } else if !ai.running, let newCount = ai.lastRunNewProposals, tool == .canonClassify {
+                if newCount == 0 {
+                    Text("完成——本次没有产出归类提案，可重试一次。").font(.caption).foregroundStyle(.secondary)
+                } else {
+                    classifyReview
+                }
             } else if !ai.running, ai.lastRunNewProposals != nil,
-                      tool == .organize || tool == .shortStory || tool == .canonClassify {
+                      tool == .organize || tool == .shortStory {
                 Text("完成——产出已进「提案收件箱」，去逐条审阅采纳。").font(.caption).foregroundStyle(.green)
             }
         }
         .padding(.top, ZBSpace.xs)
         .animation(ZBMotion.standard(reduceMotion: reduceMotion), value: resultText)
+    }
+
+    // MARK: 设定归类就地审阅：结果直接在本弹窗过目 + 一键采纳，不必绕道收件箱
+    //（提案仍登记在收件箱留痕，采纳走同一条 acceptProposal 路径，铁律不变）
+
+    /// 最新一条归类提案（收件箱 newest-first，可能已被作者在收件箱先行处理）
+    private var latestClassifyProposal: AIProposal? {
+        store.proposals.first { $0.capability == .canonClassify }
+    }
+
+    @ViewBuilder
+    private var classifyReview: some View {
+        if let p = latestClassifyProposal, case .canonClassify(let items) = p.payload {
+            VStack(alignment: .leading, spacing: ZBSpace.xs) {
+                HStack {
+                    Label("归类结果（\(items.count) 篇）", systemImage: "square.grid.3x3.square")
+                        .font(.caption.bold())
+                    Spacer()
+                    switch p.status {
+                    case .pending:
+                        Button("全部采纳") { store.acceptProposal(p.id) }
+                            .buttonStyle(.borderedProminent)
+                            .controlSize(.small)
+                    case .accepted:
+                        Label("已采纳 ✓——设定页已按类别分组", systemImage: "checkmark.circle.fill")
+                            .font(.caption).foregroundStyle(.green)
+                    case .rejected:
+                        Label("已在收件箱拒收", systemImage: "xmark.circle")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 4) {
+                        ForEach(items) { item in
+                            HStack(alignment: .top, spacing: 8) {
+                                Text(item.title).font(.caption).frame(maxWidth: 180, alignment: .leading)
+                                Image(systemName: "arrow.right").font(.caption2).foregroundStyle(.tertiary)
+                                Text(item.category)
+                                    .font(.caption.bold())
+                                    .padding(.horizontal, 6).padding(.vertical, 2)
+                                    .background(Color.accentColor.opacity(0.12))
+                                    .foregroundStyle(Color.accentColor)
+                                    .cornerRadius(4)
+                                if let rename = item.rename, !rename.isEmpty, rename != item.title {
+                                    Text("改名：\(rename)").font(.caption2).foregroundStyle(.secondary)
+                                }
+                                Spacer()
+                                if let note = item.note, !note.isEmpty {
+                                    Text(note).font(.caption2).foregroundStyle(.tertiary)
+                                        .frame(maxWidth: 220, alignment: .trailing).lineLimit(2)
+                                }
+                            }
+                        }
+                    }
+                }
+                .frame(maxHeight: 140)
+                if let issues = store.lastAcceptIssues, p.status == .pending {
+                    Text(issues).font(.caption2).foregroundStyle(.orange)
+                }
+                Text("采纳 = 写回分类与改名（按现有标题匹配；改名撞名自动跳过，不丢文档）。逐条微调可去「提案收件箱」。")
+                    .font(.caption2).foregroundStyle(.tertiary)
+            }
+        }
     }
 
     private func run() {
@@ -308,7 +378,7 @@ struct AIToolboxSheet: View {
                 vm.showToast("旧稿整理完成——\(vm.ai.lastRunNewProposals ?? 0) 条提案待审")
             case .canonClassify:
                 await ai.runCanonClassify(store: store, config: vm.config)
-                vm.showToast("设定归类完成——\(vm.ai.lastRunNewProposals ?? 0) 条提案待审")
+                vm.showToast("设定归类完成——结果在下方，过目后一键采纳")
             case .coverSVG:
                 let r = await ai.runCoverSVG(store: store, authorName: coverAuthor,
                                                 mood: coverMood, direction: coverDirection)
