@@ -109,6 +109,9 @@ struct SettingsView: View {
     @State private var savedFlash = false
     /// 选目录模型后按上下文元信息自动调整包预算的提示
     @State private var budgetNote = ""
+    /// 端点连通性测试
+    @State private var testing = false
+    @State private var testResult: AIService.EndpointTestResult?
 
     var body: some View {
         TabView {
@@ -203,6 +206,51 @@ struct SettingsView: View {
                 SecureField("API Key", text: $vm.config.apiKey)
                 Text("保存到 macOS 钥匙串，不落明文文件；泄露后到供应商控制台重置即可。")
                     .font(.caption2).foregroundStyle(.tertiary)
+            }
+            Section("连接测试") {
+                HStack {
+                    Button {
+                        testing = true
+                        testResult = nil
+                        Task { testResult = await vm.ai.testEndpoint(vm.config) ; testing = false }
+                    } label: {
+                        HStack(spacing: 6) {
+                            if testing { ProgressView().controlSize(.small) }
+                            else { Image(systemName: "antenna.radiowaves.left.and.right") }
+                            Text(testing ? "测试中…" : "测试连接")
+                        }
+                    }
+                    .controlSize(.small)
+                    .disabled(testing || vm.config.baseURL.isEmpty)
+                    Spacer()
+                }
+                if let r = testResult {
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack(spacing: 6) {
+                            Image(systemName: r.ok ? "checkmark.circle.fill" : "xmark.circle.fill")
+                                .foregroundStyle(r.ok ? Color.green : Color.red)
+                            Text(r.ok ? "✅ 连通（\(r.latencyMs) ms）" : "❌ \(r.message)")
+                                .font(.caption.bold())
+                        }
+                        if r.ok {
+                            Text("服务端模型 \(r.models.count) 个"
+                                 + (r.modelFound == true ? "｜当前模型在清单 ✓"
+                                    : r.modelFound == false ? "｜⚠ 当前模型 ID 不在清单"
+                                    : "")).font(.caption2).foregroundStyle(.secondary)
+                            if let working = r.workingURL, working != vm.config.baseURL {
+                                Text("实际可用端点：\(working)").font(.caption2).foregroundStyle(.teal)
+                                    .textSelection(.enabled)
+                                Button("采用此端点") {
+                                    vm.config.baseURL = working
+                                    hub.syncSelection(baseURL: working, model: vm.config.model)
+                                }
+                                .controlSize(.mini)
+                            }
+                        } else if r.authIssue {
+                            Text("在上方填入正确的 API Key 后重新测试。").font(.caption2).foregroundStyle(.tertiary)
+                        }
+                    }
+                }
             }
             HStack { Spacer(); saveButton }
         }

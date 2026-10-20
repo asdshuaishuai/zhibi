@@ -1144,6 +1144,28 @@ func roundFourTests() async throws {
 
 try await roundFourTests()
 
+// MARK: - 30. 端点连通性测试：解析/分类逻辑（离线用例）
+
+MainActor.assumeIsolated {
+    let ai = AIService()
+    // OpenAI 标准格式
+    let openai = Data(#"{"object":"list","data":[{"id":"qwen3-4b"},{"id":"deepseek-flash"}]}"#.utf8)
+    check("模型清单解析（OpenAI 格式）", AIService.parseModelsResponse(openai) == ["qwen3-4b", "deepseek-flash"])
+    // LM Studio / 别名变体
+    let lm = Data(#"{"models":[{"id":"qwen"},{"name":"llama-3"}]}"#.utf8)
+    check("模型清单解析（models 变体）", Set(AIService.parseModelsResponse(lm)) == Set(["qwen", "llama-3"]))
+    check("模型清单解析（裸数组）", AIService.parseModelsResponse(Data(#"{"models":["a","b"]}"#.utf8)) == ["a", "b"])
+    check("模型清单解析（垃圾输入）", AIService.parseModelsResponse(Data("not json".utf8)).isEmpty)
+
+    // 判定逻辑：公网 http / 缺 Key 已在预检矩阵覆盖；这里钉住解析函数签名稳定
+    check("连通性测试结果结构", { () -> Bool in
+        let r = AIService.EndpointTestResult(ok: true, latencyMs: 12, message: "m", models: ["x"],
+                                             workingURL: "http://x/v1", authIssue: false, modelFound: true)
+        return r.ok && r.modelFound == true && r.workingURL == "http://x/v1"
+    }())
+}
+
+
 // MARK: - 26. 上下文预算真实生效（budget 死 UI 修复）
 
 @MainActor

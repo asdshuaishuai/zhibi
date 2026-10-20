@@ -101,6 +101,95 @@ final class AIService: ObservableObject {
         config.apiKey.isEmpty ? nil : config.apiKey
     }
 
+    // MARK: 端点连通性测试
+
+    struct EndpointTestResult: Equatable {
+        var ok: Bool
+        var latencyMs: Int
+        var message: String
+        var models: [String]
+        var workingURL: String?     // 实际可用的端点（可能自动补了 /v1）
+        var authIssue: Bool         // Key 缺失/无效
+        var modelFound: Bool?       // 配置的模型 ID 是否在服务端清单里
+    }
+
+    /// 一键测试端点连通性：GET {base}/models（OpenAI 标准）。
+    /// 自动尝试 base 与 base+/v1 两种形态；区分 连不通/鉴权失败/路径错误 三类问题。
+    func testEndpoint(_ config: AgentConfig) async -> EndpointTestResult {
+        let base = config.baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        if base.isEmpty {
+            return EndpointTestResult(ok: false, latencyMs: 0, message: "Base URL 为空", models: [], workingURL: nil, authIssue: false, modelFound: nil)
+        }
+        var candidates = [base]
+        if !base.hasSuffix("/v1") { candidates.append(base + "/v1") }
+
+        var lastMessage = "无法连接"
+        var authIssue = false
+        for candidate in candidates {
+            let clean = candidate.hasSuffix("/") ? String(candidate.dropLast()) : candidate
+            guard let url = URL(string: clean + "/models") else { continue }
+            var req = URLRequest(url: url)
+            req.timeoutInterval = 8
+            let key = Self.effectiveKey(config)
+            if let key { req.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization") }
+            let start = Date()
+            do {
+                let (data, resp) = try await URLSession.shared.data(for: req)
+                let latency = Int(Date().timeIntervalSince(start) * 1000)
+                guard let http = resp as? HTTPURLResponse else { lastMessage = "非 HTTP 响应"; continue }
+                switch http.statusCode {
+                case 200:
+                    let models = Self.parseModelsResponse(data)
+                    guard !models.isEmpty else {
+                        return EndpointTestResult(ok: true, latencyMs: latency,
+                                                  message: "已连上，但服务端没返回模型清单（格式非 OpenAI 标准）",
+                                                  models: [], workingURL: clean, authIssue: false, modelFound: nil)
+                    }
+                    let found = models.contains { $0 == config.model }
+                    return EndpointTestResult(ok: true, latencyMs: latency,
+                                              message: found ? "连通正常，模型在清单里" : "连通正常，但清单里没有「\(config.model)」",
+                                              models: models, workingURL: clean, authIssue: false,
+                                              modelFound: found)
+                case 401, 403:
+                    authIssue = true
+                    lastMessage = "鉴权失败（HTTP \(http.statusCode)）——Key 缺失或无效"
+                case 404:
+                    lastMessage = "路径不存在（404）——Base URL 可能需要带 /v1"
+                default:
+                    lastMessage = "HTTP \(http.statusCode)"
+                }
+            } catch let e as URLError {
+                switch e.code {
+                case .timedOut: lastMessage = "连接超时——服务器没响应"
+                case .cannotConnectToHost, .cannotConnectToHost: lastMessage = "无法连接——服务没启动或端口不对"
+                case .cannotFindHost: lastMessage = "域名无法解析——检查地址拼写"
+                case .notConnectedToInternet: lastMessage = "没有网络连接"
+                default: lastMessage = e.localizedDescription
+                }
+                // 超时/拒绝对 /models 探测已定性，不必再试下一个形态
+                if e.code == .timedOut || e.code == .cannotConnectToHost {
+                    return EndpointTestResult(ok: false, latencyMs: 0, message: lastMessage, models: [], workingURL: nil, authIssue: false, modelFound: nil)
+                }
+            } catch {
+                lastMessage = error.localizedDescription
+            }
+        }
+        return EndpointTestResult(ok: false, latencyMs: 0, message: lastMessage, models: [], workingURL: nil, authIssue: authIssue, modelFound: nil)
+    }
+
+    /// 解析 OpenAI 风格的模型清单响应（data[].id；兼容 models[]/models[] 变体）
+    nonisolated static func parseModelsResponse(_ data: Data) -> [String] {
+        guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return [] }
+        if let arr = obj["data"] as? [[String: Any]] {
+            return arr.compactMap { $0["id"] as? String }
+        }
+        if let arr = obj["models"] as? [[String: Any]] {
+            return arr.compactMap { ($0["id"] as? String) ?? ($0["name"] as? String) }
+        }
+        if let arr = obj["models"] as? [String] { return arr }
+        return []
+    }
+
     /// 任务 → 该能力可用的工具名子集。
     /// 抽成静态单一真相源：生产路径与自检共用同一份映射，否则自检抄一份就等于没测。
     static func toolNames(for capability: AICapability) -> Set<String> {
