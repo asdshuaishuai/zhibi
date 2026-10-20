@@ -439,6 +439,7 @@ struct CanonView: View {
     @ObservedObject var store: ProjectStore
     @State private var selectedSection: UUID?
     @State private var newTitle = ""
+    @State private var pendingDeleteSection: CanonSection?
 
     var body: some View {
         HSplitView {
@@ -460,6 +461,7 @@ struct CanonView: View {
                                     .foregroundStyle(s.certainty == .canon ? Color.green : (s.certainty == .tentative ? Color.orange : Color.secondary))
                             }
                             .tag(SectionID(s.id))
+                            .contextMenu { sectionContextMenu(s) }
                         }
                     }
                 }
@@ -542,7 +544,76 @@ struct CanonView: View {
             }
             }
             .frame(minWidth: 480, maxWidth: .infinity, maxHeight: .infinity)
+            .alert("删除设定「\(pendingDeleteSection?.title ?? "")」？", isPresented: Binding(
+                get: { pendingDeleteSection != nil },
+                set: { if !$0 { pendingDeleteSection = nil } })) {
+                Button("取消", role: .cancel) { pendingDeleteSection = nil }
+                Button("删除", role: .destructive) {
+                    if let s = pendingDeleteSection { deleteSection(s) }
+                    pendingDeleteSection = nil
+                }
+            } message: {
+                Text("对应的 md 文件会一并清理。删除后不可在本应用内恢复。")
+            }
         }
+    }
+
+    // MARK: 右键操作（设定侧栏）
+
+    private func setCategory(_ s: CanonSection, _ cat: CanonCategory) {
+        guard let idx = store.canonSections.firstIndex(where: { $0.id == s.id }) else { return }
+        store.canonSections[idx].category = cat.rawValue
+        store.saveSoon()
+        vm.showToast("「\(s.title)」→ \(cat.rawValue)")
+    }
+
+    /// 复制一份（含内容；标题撞名自动加后缀）
+    private func duplicateSection(_ s: CanonSection) {
+        var copy = s
+        copy.id = UUID()
+        var title = s.title + " 副本"
+        var n = 2
+        while store.canonSections.contains(where: { $0.title == title }) {
+            title = "\(s.title) 副本\(n)"
+            n += 1
+        }
+        copy.title = title
+        store.canonSections.append(copy)
+        selectedSection = copy.id
+        store.saveSoon()
+        vm.showToast("已复制为「\(title)」")
+    }
+
+    private func revealSection(_ s: CanonSection) {
+        let url = ProjectLayout.canonDir(store.rootURL)
+            .appendingPathComponent(ProjectLayout.safeFileName(s.title) + ".md")
+        NSWorkspace.shared.activateFileViewerSelecting([url])
+    }
+
+    /// 删除：内存移除 + 磁盘 md 同步清理（与编辑器垃圾桶按钮同一路径）
+    private func deleteSection(_ s: CanonSection) {
+        guard let idx = store.canonSections.firstIndex(where: { $0.id == s.id }) else { return }
+        let removed = store.canonSections.remove(at: idx)
+        if selectedSection == removed.id { selectedSection = nil }
+        store.deleteCanonMarkdown(title: removed.title)
+        store.saveSoon()
+        vm.showToast("已删除「\(removed.title)」（md 已同步清理）")
+    }
+
+    /// 右键菜单（拆出独立函数：整段内联会让类型检查超时）
+    @ViewBuilder
+    private func sectionContextMenu(_ s: CanonSection) -> some View {
+        Menu("改类别") {
+            ForEach(CanonCategory.allCases, id: \.self) { cat in
+                Button(cat.rawValue) { setCategory(s, cat) }
+            }
+        }
+        Divider()
+        Button("复制一份") { duplicateSection(s) }
+        Divider()
+        Button("在访达中显示") { revealSection(s) }
+        Divider()
+        Button("删除…", role: .destructive) { pendingDeleteSection = s }
     }
 
     struct SectionID: Hashable {
