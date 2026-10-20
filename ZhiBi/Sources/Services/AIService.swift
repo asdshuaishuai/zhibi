@@ -13,6 +13,8 @@ final class AIService: ObservableObject {
     @Published var lastToolLog: [String] = []
     /// 上一次运行新登记的提案数（nil = 本次运行未统计/无新增）
     @Published var lastRunNewProposals: Int?
+    /// 本次运行新登记的提案 id：触发面（工具箱等）据此就地过目本次产出
+    @Published var lastRunProposalIDs: [UUID] = []
     // MARK: AI 轨迹（实时 + 会话历史；新的在前，上限 200 条）
     struct AITraceEntry: Identifiable, Equatable {
         var id = UUID()
@@ -250,6 +252,7 @@ final class AIService: ObservableObject {
         lastError = nil
         lastToolLog = []
         lastRunNewProposals = nil
+        lastRunProposalIDs = []
         trace(capability, "开始处理")
         defer {
             running = false
@@ -291,6 +294,7 @@ final class AIService: ObservableObject {
                 permissionMode: .bypassPermissions,
                 tools: ProposalToolBridge.sdkTools(toolset)))
             let proposalsBefore = store.proposals.count
+            let existingProposalIDs = Set(store.proposals.map(\.id))
             // MiniMax 等模型会把思考内容以 <think>…</think> 内嵌在正文增量里，展示层滤掉
             var previewFilter = ThinkTagFilter()
             var runProblems: [String] = []
@@ -341,6 +345,7 @@ final class AIService: ObservableObject {
                 lastError = runProblems.joined(separator: "；")
             }
             lastRunNewProposals = max(0, store.proposals.count - proposalsBefore)
+            lastRunProposalIDs = store.proposals.filter { !existingProposalIDs.contains($0.id) }.map(\.id)
         } catch {
             lastError = error.localizedDescription
         }
@@ -989,6 +994,7 @@ final class AIService: ObservableObject {
         lastError = nil
         lastToolLog = []
         lastRunNewProposals = nil
+        lastRunProposalIDs = []
         defer { running = false; runningCapability = nil }
 
         guard let sk = store.chapter(n)?.skeleton, !sk.beats.isEmpty else {
@@ -1045,12 +1051,14 @@ final class AIService: ObservableObject {
         let text = written.trimmingCharacters(in: .whitespacesAndNewlines)
         let version = store.nextDraftVersion(for: n)
         let before = store.proposals.count
-        await store.addProposal(AIProposal(
+        let draftProposal = AIProposal(
             capability: .chapterDraft, chapterNumber: n,
             title: "第\(n)章 草稿 v\(version)（分段写作 \(chunks.count) 段·\(WordStats.chineseCount(text)) 字）",
             note: "按骨架节拍分 \(chunks.count) 段续写后拼装：\(pipelineDone.joined(separator: "、"))。采纳前不进正文。",
-            payload: .draft(ChapterDraft(chapter: n, text: text, version: version, mainline: mainline))))
+            payload: .draft(ChapterDraft(chapter: n, text: text, version: version, mainline: mainline)))
+        await store.addProposal(draftProposal)
         lastRunNewProposals = max(0, store.proposals.count - before)
+        lastRunProposalIDs = [draftProposal.id]
         pipelineNote = "分段草稿 v\(version) 已进收件箱（\(WordStats.chineseCount(text)) 字，\(chunks.count) 段）。接着可以跑一致性审查与去AI味。"
     }
 

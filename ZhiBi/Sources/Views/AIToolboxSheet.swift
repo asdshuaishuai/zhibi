@@ -5,8 +5,7 @@ import SwiftUI
 //
 // 运行语义分两类：
 // - 拆书 / 封面提案：纯文本产出（runTextOnly 通道），结果就地展示 + 一键存为备忘提案
-// - 设定归类：归类结果就地展示 + 一键采纳（提案仍在收件箱留痕，铁律不变）
-// - 整理旧稿 / 短篇成稿：走提案通道（canon/clues/draft），结果在收件箱审
+// - 设定归类 / 整理旧稿 / 短篇成稿：产出就地过目 + 一键采纳（提案仍在收件箱留痕，铁律不变）
 
 struct AIToolboxSheet: View {
     @ObservedObject var vm: AppViewModel
@@ -287,9 +286,13 @@ struct AIToolboxSheet: View {
                 } else {
                     classifyReview
                 }
-            } else if !ai.running, ai.lastRunNewProposals != nil,
+            } else if !ai.running, let newCount = ai.lastRunNewProposals,
                       tool == .organize || tool == .shortStory {
-                Text("完成——产出已进「提案收件箱」，去逐条审阅采纳。").font(.caption).foregroundStyle(.green)
+                if newCount == 0 {
+                    Text("完成——本次没有产出提案，可重试一次。").font(.caption).foregroundStyle(.secondary)
+                } else {
+                    runProposalsReview
+                }
             }
         }
         .padding(.top, ZBSpace.xs)
@@ -356,6 +359,76 @@ struct AIToolboxSheet: View {
                 Text("采纳 = 写回分类与改名（按现有标题匹配；改名撞名自动跳过，不丢文档）。逐条微调可去「提案收件箱」。")
                     .font(.caption2).foregroundStyle(.tertiary)
             }
+        }
+    }
+
+    // MARK: 整理旧稿 / 短篇成稿就地审阅：本次产出直接在本弹窗过目 + 一键采纳
+    //（与设定归类同思路：结果不逼用户绕道收件箱，提案仍在收件箱留痕，采纳走同一 acceptProposal 路径）
+
+    private var runProposalsReview: some View {
+        let runProposals = store.proposals.filter { ai.lastRunProposalIDs.contains($0.id) }
+        let pending = runProposals.filter { $0.status == .pending }
+        return VStack(alignment: .leading, spacing: ZBSpace.xs) {
+            HStack {
+                Label("本次产出（\(runProposals.count) 条）", systemImage: "tray.full")
+                    .font(.caption.bold())
+                Spacer()
+                if pending.isEmpty {
+                    Label("已处理 ✓", systemImage: "checkmark.circle.fill")
+                        .font(.caption).foregroundStyle(.green)
+                } else {
+                    Button("全部采纳") {
+                        for p in pending { store.acceptProposal(p.id) }
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.small)
+                }
+            }
+            ScrollView {
+                VStack(alignment: .leading, spacing: 4) {
+                    ForEach(runProposals) { p in
+                        HStack(spacing: 6) {
+                            Text(Self.payloadTag(p.payload))
+                                .font(.caption2.bold())
+                                .padding(.horizontal, 5).padding(.vertical, 1)
+                                .background(Color.accentColor.opacity(0.12))
+                                .foregroundStyle(Color.accentColor)
+                                .cornerRadius(4)
+                            Text(p.title).font(.caption).lineLimit(1)
+                            Spacer()
+                            Text(p.status.rawValue)
+                                .font(.caption2)
+                                .foregroundStyle(p.status == .accepted ? Color.green :
+                                                    p.status == .rejected ? Color.secondary : Color.orange)
+                        }
+                    }
+                }
+            }
+            .frame(maxHeight: 120)
+            if let issues = store.lastAcceptIssues, !pending.isEmpty {
+                Text(issues).font(.caption2).foregroundStyle(.orange)
+            }
+            Text("采纳 = 按各提案语义写回（设定同题保护、伏笔同 id 合并、草稿先存快照——重试不重复）。逐条裁决去「提案收件箱」。")
+                .font(.caption2).foregroundStyle(.tertiary)
+        }
+    }
+
+    private static func payloadTag(_ p: ProposalPayload) -> String {
+        switch p {
+        case .outlineEvents: return "时间线"
+        case .storylines: return "故事线"
+        case .canon: return "设定"
+        case .clues: return "伏笔"
+        case .skeleton: return "骨架"
+        case .draft: return "草稿"
+        case .memoryPack: return "记忆"
+        case .report: return "审校"
+        case .deslop: return "去AI味"
+        case .memo: return "备忘"
+        case .canonClassify: return "归类"
+        case .dossier: return "档案卡"
+        case .clueFixes: return "埋点修复"
+        case .outlineUpdates: return "大纲同步"
         }
     }
 

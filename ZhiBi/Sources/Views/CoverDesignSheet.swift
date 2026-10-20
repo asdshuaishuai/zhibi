@@ -30,7 +30,7 @@ struct CoverDesignSheet: View {
         VStack(alignment: .leading, spacing: ZBSpace.sm) {
             HStack {
                 Text("封面设计").font(.headline)
-                Text("《\\(ref.title)》· LLM 直接绘制 SVG").font(.caption).foregroundStyle(.secondary)
+                Text("《\(ref.title)》· LLM 直接绘制 SVG").font(.caption).foregroundStyle(.secondary)
                 Spacer()
                 if ai.running { ProgressView().controlSize(.small) }
             }
@@ -170,7 +170,7 @@ struct CoverDesignSheet: View {
             adopted = true
             onAdopted()
         } catch {
-            ai.lastError = "封面写入失败：\\(error.localizedDescription)"
+            ai.lastError = "封面写入失败：\(error.localizedDescription)"
         }
     }
 }

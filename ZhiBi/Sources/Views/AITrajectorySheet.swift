@@ -25,7 +25,7 @@ struct AITrajectorySheet: View {
                         Text(ai.runningCapability?.rawValue ?? "").font(.caption.bold())
                     }
                 } else {
-                    Text("空闲 · 本次会话 \\(ai.trajectory.count) 条轨迹")
+                    Text("空闲 · 本次会话 \(ai.trajectory.count) 条轨迹")
                         .font(.caption).foregroundStyle(.tertiary)
                 }
                 Button("清空") { ai.trajectory = []; ai.currentStep = "" }
