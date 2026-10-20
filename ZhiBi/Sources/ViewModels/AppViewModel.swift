@@ -171,6 +171,9 @@ final class AppViewModel: ObservableObject {
     // MARK: - 导入
 
     @Published var importScanning = false
+    /// 确认导入后：导入窗不关，留在本窗内跑「AI 归类设定」并就地反馈结果（不逼用户去收件箱找）
+    @Published var importPostConfirm = false
+    @Published var importClassifying = false
 
     /// 大目录扫描放后台（主线程同步读会卡界面），预览窗先开并显示扫描状态
     func beginImport(urls: [URL]) {
@@ -178,6 +181,8 @@ final class AppViewModel: ObservableObject {
         let isDir = url.isDirectoryURL
         importScanning = true
         importPreview = nil
+        importPostConfirm = false
+        importClassifying = false
         showImportPreview = true
         Task {
             let summary = isDir
@@ -215,10 +220,18 @@ final class AppViewModel: ObservableObject {
         }
         importPreview = nil
         showToast("导入完成：\(preview.chapters) 章 · 设定/大纲 \(preview.canon + preview.outlines) 篇")
-        // 有 AI 配置时，导入完成自动做设定归类（提案制：结果进收件箱，作者审阅采纳）
-        if let store = importedInto, !config.apiKey.isEmpty, !store.canonSections.isEmpty {
-            showToast("导入完成——AI 正在归类设定，稍后去收件箱审阅")
-            Task { await ai.runCanonClassify(store: store, config: config) }
+        // 有可用端点时，导入完成就在本窗内跑设定归类：进度与结果就地反馈（铁律不变：归类提案仍
+        // 登记收件箱留痕，窗内「全部采纳」走同一条 acceptProposal）。没得跑就直接收窗。
+        if let store = importedInto, !config.baseURL.isEmpty, !store.canonSections.isEmpty {
+            importPostConfirm = true
+            importClassifying = true
+            Task {
+                await ai.runCanonClassify(store: store, config: config)
+                importClassifying = false
+            }
+        } else {
+            importPostConfirm = false
+            showImportPreview = false
         }
     }
 

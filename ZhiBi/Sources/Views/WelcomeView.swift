@@ -17,7 +17,7 @@ struct RootView: View {
             }
         }
         .sheet(isPresented: $vm.showImportPreview) {
-            ImportPreviewSheet(vm: vm)
+            ImportPreviewSheet(vm: vm, ai: vm.ai)
         }
         .fileImporter(isPresented: $vm.requestImportViaPanel,
                       allowedContentTypes: [.text, .utf8PlainText, .data, .folder],

@@ -4,6 +4,7 @@ import SwiftUI
 
 struct ImportPreviewSheet: View {
     @ObservedObject var vm: AppViewModel
+    @ObservedObject var ai: AIService
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
@@ -20,74 +21,179 @@ struct ImportPreviewSheet: View {
                 Spacer()
             }
 
-            Toggle("导入为新书", isOn: $vm.importTargetNewProject)
-                .font(.callout)
-            if vm.importTargetNewProject {
-                TextField("新书名", text: $vm.importNewProjectTitle)
-                    .textFieldStyle(.roundedBorder)
-            } else if let store = vm.store {
-                Text("并入当前作品：\(store.project.title)").font(.caption).foregroundStyle(.secondary)
+            if vm.importPostConfirm {
+                postConfirmView
             } else {
-                Text("当前没有打开的作品，请选择「导入为新书」。").font(.caption).foregroundStyle(.orange)
-            }
-
-            if vm.importScanning {
-                VStack(spacing: ZBSpace.sm) {
-                    ProgressView().controlSize(.regular)
-                    Text("正在扫描目录与正文（大书可能需要几秒）…")
-                        .font(.callout).foregroundStyle(.secondary)
+                Toggle("导入为新书", isOn: $vm.importTargetNewProject)
+                    .font(.callout)
+                if vm.importTargetNewProject {
+                    TextField("新书名", text: $vm.importNewProjectTitle)
+                        .textFieldStyle(.roundedBorder)
+                } else if let store = vm.store {
+                    Text("并入当前作品：\(store.project.title)").font(.caption).foregroundStyle(.secondary)
+                } else {
+                    Text("当前没有打开的作品，请选择「导入为新书」。").font(.caption).foregroundStyle(.orange)
                 }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else if let s = vm.importPreview {
-                Text("识别到 \(s.chapters) 章 · \(s.canon) 份设定 · \(s.outlines) 份大纲")
-                    .font(.callout.bold())
-                Table(of: ImportItem.self, selection: .constant(Set<ImportItem.ID>())) {
-                    TableColumn("类型") { item in
-                        Picker("", selection: Binding(
-                            get: { item.kind },
-                            set: { vm.setItemKind(item, $0) })) {
-                            ForEach([ImportItem.Kind.chapter, .canon, .outline, .skip], id: \.self) { Text($0.rawValue).tag($0) }
+
+                if vm.importScanning {
+                    VStack(spacing: ZBSpace.sm) {
+                        ProgressView().controlSize(.regular)
+                        Text("正在扫描目录与正文（大书可能需要几秒）…")
+                            .font(.callout).foregroundStyle(.secondary)
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else if let s = vm.importPreview {
+                    Text("识别到 \(s.chapters) 章 · \(s.canon) 份设定 · \(s.outlines) 份大纲")
+                        .font(.callout.bold())
+                    Table(of: ImportItem.self, selection: .constant(Set<ImportItem.ID>())) {
+                        TableColumn("类型") { item in
+                            Picker("", selection: Binding(
+                                get: { item.kind },
+                                set: { vm.setItemKind(item, $0) })) {
+                                ForEach([ImportItem.Kind.chapter, .canon, .outline, .skip], id: \.self) { Text($0.rawValue).tag($0) }
+                            }
+                            .labelsHidden()
+                            .controlSize(.mini)
+                        }.width(90)
+                        TableColumn("来源") { item in Text(item.sourceName).font(.caption) }
+                        TableColumn("标题") { item in Text(item.title).font(.caption) }
+                        TableColumn("字数") { item in Text("\(WordStats.chineseCount(item.content))").font(.caption.monospacedDigit()) }.width(70)
+                    } rows: {
+                        ForEach(vm.importPreview?.items ?? []) { item in
+                            TableRow(item)
                         }
-                        .labelsHidden()
-                        .controlSize(.mini)
-                    }.width(90)
-                    TableColumn("来源") { item in Text(item.sourceName).font(.caption) }
-                    TableColumn("标题") { item in Text(item.title).font(.caption) }
-                    TableColumn("字数") { item in Text("\(WordStats.chineseCount(item.content))").font(.caption.monospacedDigit()) }.width(70)
-                } rows: {
-                    ForEach(vm.importPreview?.items ?? []) { item in
-                        TableRow(item)
                     }
+                } else {
+                    VStack {
+                        ProgressView().controlSize(.small)
+                        Text("准备导入预览…").font(.caption).foregroundStyle(.secondary)
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
-            } else {
-                VStack {
-                    ProgressView().controlSize(.small)
-                    Text("准备导入预览…").font(.caption).foregroundStyle(.secondary)
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-            }
 
-            HStack {
-                Text("导入不会改动你的原目录；结构化伏笔/时间线建议导入后用「AI 盘点伏笔」「AI 建时间线」提案重建。")
-                    .font(.caption2).foregroundStyle(.tertiary)
-                Spacer()
-                Button("取消") { dismiss() }
-                Button("确认导入") {
-                    let chapters = vm.importPreview?.chapters ?? 0
-                    let canon = vm.importPreview?.canon ?? 0
-                    if vm.importTargetNewProject {
-                        vm.confirmImport()
-                    } else if let store = vm.store {
-                        vm.confirmImport(intoExisting: store)
+                HStack {
+                    Text("导入不会改动你的原目录；结构化伏笔/时间线建议导入后用「AI 盘点伏笔」「AI 建时间线」提案重建。")
+                        .font(.caption2).foregroundStyle(.tertiary)
+                    Spacer()
+                    Button("取消") { dismiss() }
+                    Button("确认导入") {
+                        if vm.importTargetNewProject {
+                            vm.confirmImport()
+                        } else if let store = vm.store {
+                            vm.confirmImport(intoExisting: store)
+                        }
                     }
-                    vm.showToast("导入完成：\(chapters) 章 · 设定/大纲 \(canon) 篇" + (vm.config.apiKey.isEmpty ? "" : "；AI 正在归类设定"))
+                    .buttonStyle(.borderedProminent)
+                    .disabled(vm.importScanning)
                 }
-                .buttonStyle(.borderedProminent)
-                .disabled(vm.importScanning)
             }
         }
         .padding(ZBSpace.lg)
         .frame(width: ZBSpace.Sheet.wide, height: 560)
+    }
+
+    // MARK: 确认导入后：AI 归类在本窗内跑，进度与结果就地反馈（不去收件箱）
+
+    @ViewBuilder
+    private var postConfirmView: some View {
+        VStack(alignment: .leading, spacing: ZBSpace.sm) {
+            Label(vm.importClassifying ? "导入完成 ✓ · AI 正在归类设定…" : "导入完成 ✓ · 设定归类结果",
+                  systemImage: vm.importClassifying ? "cpu" : "checkmark.seal.fill")
+                .font(.headline)
+                .foregroundStyle(vm.importClassifying ? Color.accentColor : Color.green)
+
+            if vm.importClassifying {
+                VStack(alignment: .leading, spacing: ZBSpace.xs) {
+                    ProgressView().controlSize(.small)
+                    ForEach(ai.lastToolLog.suffix(3), id: \.self) { line in
+                        Text(line).font(.caption2).foregroundStyle(.secondary)
+                    }
+                    Text("读全部设定文档，逐篇给出分类与改名建议——完成后在本窗内过目采纳。")
+                        .font(.caption2).foregroundStyle(.tertiary)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            } else if let err = ai.lastError {
+                Label(err, systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption).foregroundStyle(.orange)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                Text("资料已导入成功，只是归类没跑成——可在「AI 工具箱 → 设定归类」重跑。")
+                    .font(.caption2).foregroundStyle(.tertiary)
+                Spacer()
+            } else {
+                classifyResult
+            }
+
+            HStack {
+                Spacer()
+                // 归类没跑完也可以走：AI 继续在后台跑，结果照常进收件箱（状态条兜底）
+                Button(vm.importClassifying ? "转入后台" : "完成") { dismiss() }
+                    .buttonStyle(.borderedProminent)
+            }
+        }
+    }
+
+    /// 本次归类提案的就地审阅（与 AI 工具箱的设定归类同款：列表 + 全部采纳）
+    @ViewBuilder
+    private var classifyResult: some View {
+        if let store = vm.store,
+           let p = store.proposals.first(where: { ai.lastRunProposalIDs.contains($0.id) && $0.capability == .canonClassify }),
+           case .canonClassify(let items) = p.payload {
+            VStack(alignment: .leading, spacing: ZBSpace.xs) {
+                HStack {
+                    Label("归类结果（\(items.count) 篇）", systemImage: "square.grid.3x3.square")
+                        .font(.caption.bold())
+                    Spacer()
+                    switch p.status {
+                    case .pending:
+                        Button("全部采纳") { store.acceptProposal(p.id) }
+                            .buttonStyle(.borderedProminent)
+                            .controlSize(.small)
+                    case .accepted:
+                        Label("已采纳 ✓——设定页已按类别分组", systemImage: "checkmark.circle.fill")
+                            .font(.caption).foregroundStyle(.green)
+                    case .rejected:
+                        Label("已拒收", systemImage: "xmark.circle")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 4) {
+                        ForEach(items) { item in
+                            HStack(alignment: .top, spacing: 8) {
+                                Text(item.title).font(.caption).frame(maxWidth: 200, alignment: .leading)
+                                Image(systemName: "arrow.right").font(.caption2).foregroundStyle(.tertiary)
+                                Text(item.category)
+                                    .font(.caption.bold())
+                                    .padding(.horizontal, 6).padding(.vertical, 2)
+                                    .background(Color.accentColor.opacity(0.12))
+                                    .foregroundStyle(Color.accentColor)
+                                    .cornerRadius(4)
+                                if let rename = item.rename, !rename.isEmpty, rename != item.title {
+                                    Text("改名：\(rename)").font(.caption2).foregroundStyle(.secondary)
+                                }
+                                Spacer()
+                                if let note = item.note, !note.isEmpty {
+                                    Text(note).font(.caption2).foregroundStyle(.tertiary)
+                                        .frame(maxWidth: 200, alignment: .trailing).lineLimit(2)
+                                }
+                            }
+                        }
+                    }
+                }
+                .frame(maxHeight: 220)
+                if let issues = store.lastAcceptIssues, p.status == .pending {
+                    Text(issues).font(.caption2).foregroundStyle(.orange)
+                }
+                Text("采纳 = 写回分类与改名（按标题匹配；改名撞名自动跳过，不丢文档）。逐条微调可去「提案收件箱」。")
+                    .font(.caption2).foregroundStyle(.tertiary)
+            }
+        } else {
+            VStack(spacing: ZBSpace.xs) {
+                Text("本次没有产出归类提案。").font(.caption).foregroundStyle(.secondary)
+                Text("可在「AI 工具箱 → 设定归类」重跑。").font(.caption2).foregroundStyle(.tertiary)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
     }
 }
 
