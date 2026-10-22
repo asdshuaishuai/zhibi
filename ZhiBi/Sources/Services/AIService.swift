@@ -7,6 +7,8 @@ import OpenAgentSDK
 @MainActor
 final class AIService: ObservableObject {
     @Published var running = false
+    /// 作者点了「停止」：流循环在下一个事件处退出（不保证立刻中断挂起的网络请求）
+    @Published var cancelRequested = false
     @Published var runningCapability: AICapability?
     @Published var streamPreview = ""
     @Published var lastError: String?
@@ -28,6 +30,28 @@ final class AIService: ObservableObject {
     @Published var currentStep = ""   // 运行中的当前步骤（状态栏实时显示）
     private var trajectoryDirty = false
     private var trajectorySaveTask: _Concurrency.Task<Void, Never>?
+    /// 当前正在跑的 SDK agent：停止/超时要能真正中断网络请求，而不只是等下一个事件
+    private var activeAgent: Agent?
+    private var timeoutTask: _Concurrency.Task<Void, Never>?
+
+    private func beginAgent(_ agent: Agent, timeoutSeconds: Int) {
+        activeAgent?.interrupt()
+        activeAgent = agent
+        timeoutTask?.cancel()
+        timeoutTask = _Concurrency.Task { [weak self] in
+            try? await _Concurrency.Task.sleep(nanoseconds: UInt64(max(30, timeoutSeconds)) * 1_000_000_000)
+            guard !_Concurrency.Task.isCancelled, let self, self.running else { return }
+            self.lastError = "请求超时（\(timeoutSeconds) 秒）——已中断本次请求，已产出的提案保留。"
+            self.cancelRequested = true
+            self.activeAgent?.interrupt()
+        }
+    }
+
+    private func endAgent() {
+        timeoutTask?.cancel()
+        timeoutTask = nil
+        activeAgent = nil
+    }
 
     /// 从磁盘加载历史轨迹（跨会话回看）
     func loadPersistedTrajectory() {
@@ -35,6 +59,22 @@ final class AIService: ObservableObject {
         trajectory = TrajectoryStore.load().map {
             AITraceEntry(at: $0.at, capability: $0.capability, event: $0.event, detail: $0.detail, isError: $0.isError)
         }
+    }
+
+    func cancelCurrentRun() {
+        guard running else { return }
+        cancelRequested = true
+        // 直接中断 SDK 的流：挂起的网络请求不必等下一个事件
+        activeAgent?.interrupt()
+    }
+
+    /// 清空轨迹（同时落盘，否则重启后历史又回来）
+    func clearTrajectory() {
+        trajectory.removeAll()
+        currentStep = ""
+        trajectoryDirty = false
+        trajectorySaveTask?.cancel()
+        TrajectoryStore.save([])
     }
 
     /// 记录一条轨迹（实时 + 节流持久化，跨会话保留最近 200 条）
@@ -192,6 +232,12 @@ final class AIService: ObservableObject {
         return []
     }
 
+    /// 卷级设计只交 memo：不能给章节骨架工具（chapter 为 nil 会被绑到第 0 章）。
+    /// 抽成静态函数，自检据此验证「卷级不会拿到 propose_skeleton」。
+    static func volumeSkeletonToolNames() -> Set<String> {
+        ["propose_memo", "get_outline", "get_clues", "get_facts", "get_canon"]
+    }
+
     /// 任务 → 该能力可用的工具名子集。
     /// 抽成静态单一真相源：生产路径与自检共用同一份映射，否则自检抄一份就等于没测。
     static func toolNames(for capability: AICapability) -> Set<String> {
@@ -235,18 +281,28 @@ final class AIService: ObservableObject {
         }
     }
 
-    /// 任务 → 该能力可用的工具子集
-    private func tools(for capability: AICapability, store: ProjectStore, chapter: Int?) -> [AgentTool] {
+    /// 任务 → 该能力可用的工具子集。
+    /// override 用于特殊入口（如卷级设计：同一能力但只允许 memo，不允许章节骨架）。
+    private func tools(for capability: AICapability, store: ProjectStore, chapter: Int?,
+                       override: Set<String>? = nil) -> [AgentTool] {
         let all = NovelTools.all(store: store)
-        let needed = Self.toolNames(for: capability)
-        let selected = all.filter { needed.contains($0.name) }
+        let needed = override ?? Self.toolNames(for: capability)
+        let selected = all.filter { needed.contains($0.name) }.map { tool in
+            // memo 的归属能力随任务走，否则卷级设计/拆书会统一记成「写作备忘」
+            tool.name == "propose_memo" ? NovelTools.proposeMemo(store: store, capability: capability) : tool
+        }
         return NovelTools.bindChapter(tools: selected, store: store, chapter: chapter)
     }
 
     /// 通用执行入口
-    func run(capability: AICapability, store: ProjectStore, config: AgentConfig, chapter: Int?, userMessage: String) async {
-        guard !running else { return }
+    func run(capability: AICapability, store: ProjectStore, config: AgentConfig, chapter: Int?,
+             userMessage: String, toolNamesOverride: Set<String>? = nil) async {
+        guard !running else {
+            lastError = "已有 AI 任务在运行，请等它结束。"
+            return
+        }
         running = true
+        cancelRequested = false
         runningCapability = capability
         streamPreview = ""
         lastError = nil
@@ -255,8 +311,11 @@ final class AIService: ObservableObject {
         lastRunProposalIDs = []
         trace(capability, "开始处理")
         defer {
+            // 不在这里清 cancelRequested：取消标记要活到流水线的下一步检查，
+            // 由下一次 run 的起手式统一复位。
             running = false
             runningCapability = nil
+            endAgent()
         }
 
         do {
@@ -265,8 +324,9 @@ final class AIService: ObservableObject {
                 trace(capability, "中止", detail: problem, isError: true)
                 return
             }
-            trace(capability, "准备上下文与工具（\(tools(for: capability, store: store, chapter: chapter).count) 个工具）")
-            let toolset = tools(for: capability, store: store, chapter: chapter)
+            let toolNames = toolNamesOverride ?? Self.toolNames(for: capability)
+            trace(capability, "准备上下文与工具（\(tools(for: capability, store: store, chapter: chapter, override: toolNamesOverride).count) 个工具）")
+            let toolset = tools(for: capability, store: store, chapter: chapter, override: toolNamesOverride)
             // 创作法典集中注入：流派契约 + 网文创作法 + 传统文学创作法，按能力裁剪。
             // 骨架任务书里已经内嵌（位置更靠前、还带着近章钩子形态），这里跳过避免重复。
             var taskMessage: String
@@ -293,6 +353,7 @@ final class AIService: ObservableObject {
                 maxTurns: 12,
                 permissionMode: .bypassPermissions,
                 tools: ProposalToolBridge.sdkTools(toolset)))
+            beginAgent(agent, timeoutSeconds: config.effectiveTimeout)
             let proposalsBefore = store.proposals.count
             let existingProposalIDs = Set(store.proposals.map(\.id))
             // MiniMax 等模型会把思考内容以 <think>…</think> 内嵌在正文增量里，展示层滤掉
@@ -300,6 +361,11 @@ final class AIService: ObservableObject {
             var runProblems: [String] = []
 
             for await message in agent.stream(taskMessage) {
+                if cancelRequested {
+                    lastError = "已取消本次任务（已产出的提案仍保留在收件箱）。"
+                    trace(capability, "已取消", isError: true)
+                    break
+                }
                 switch message {
                 case .partialMessage(let data):
                     streamPreview += previewFilter.push(data.text)
@@ -324,10 +390,12 @@ final class AIService: ObservableObject {
                 }
             }
 
-            // 兜底：若模型没用工具，解析围栏 JSON 并代为登记提案
-            if store.proposals.count == proposalsBefore {
+            // 兜底：若模型没用工具，解析围栏 JSON 并代为登记提案。
+            // 取消时不把半截输出登记成提案。
+            if !cancelRequested, store.proposals.count == proposalsBefore {
                 if let fallback = FallbackProposer.parse(streamPreview) {
-                    try await FallbackProposer.apply(fallback, store: store, chapter: chapter)
+                    try await FallbackProposer.apply(fallback, store: store, chapter: chapter,
+                                                     allowed: toolNames, capability: capability)
                     lastToolLog.append("📥 已从文本产出中解析并登记提案（无工具调用回退）")
                 } else if lastToolLog.isEmpty {
                     // 模型只回了纯文本：登记为备忘提案，不让产出丢失
@@ -344,10 +412,20 @@ final class AIService: ObservableObject {
             if !runProblems.isEmpty, store.proposals.count == proposalsBefore {
                 lastError = runProblems.joined(separator: "；")
             }
-            lastRunNewProposals = max(0, store.proposals.count - proposalsBefore)
+            let newCount = max(0, store.proposals.count - proposalsBefore)
+            lastRunNewProposals = newCount
             lastRunProposalIDs = store.proposals.filter { !existingProposalIDs.contains($0.id) }.map(\.id)
+            // 收尾轨迹：轨迹对话窗里每次运行要有明确的结束标记
+            if let err = lastError, !err.isEmpty {
+                trace(capability, "失败", detail: err, isError: true)
+            } else {
+                trace(capability, "完成", detail: newCount > 0 ? "新登记 \(newCount) 条提案，待作者审阅" : "结束（无新提案）")
+            }
         } catch {
-            lastError = error.localizedDescription
+            if lastError == nil {
+                lastError = cancelRequested ? "已取消本次任务（已产出的提案保留在收件箱）。" : error.localizedDescription
+            }
+            trace(capability, "失败", detail: lastError ?? "", isError: true)
         }
     }
 
@@ -364,10 +442,11 @@ final class AIService: ObservableObject {
             return nil
         }
         running = true
+        cancelRequested = false
         runningCapability = .topicScan
         streamPreview = ""
         lastError = nil
-        defer { running = false; runningCapability = nil }
+        defer { running = false; runningCapability = nil; endAgent() }
         let result = await runTextOnlyFree(config: config, capability: .topicScan,
                                            userMessage: PromptLibrary.topicScanTask(material: material, ownAssets: ownAssets))
         streamPreview = result ?? streamPreview
@@ -383,10 +462,11 @@ final class AIService: ObservableObject {
             return nil
         }
         running = true
+        cancelRequested = false
         runningCapability = .coverBrief
         streamPreview = ""
         lastError = nil
-        defer { running = false; runningCapability = nil }
+        defer { running = false; runningCapability = nil; endAgent() }
         let title = bookTitle
         let g = genre.isEmpty ? "（未定）" : genre
         let premiseText = premise.isEmpty ? "（未定）" : premise
@@ -397,6 +477,7 @@ final class AIService: ObservableObject {
                 provider: .openai,
                 systemPrompt: PromptLibrary.systemInstruction(for: .coverBrief),
                 maxTurns: 2, permissionMode: .bypassPermissions, tools: []))
+            beginAgent(agent, timeoutSeconds: config.effectiveTimeout)
             var filter = ThinkTagFilter()
             var out = ""
             for await message in agent.stream(PromptLibrary.coverSVGTask(bookInfo: bookInfo, authorName: authorName,
@@ -414,7 +495,9 @@ final class AIService: ObservableObject {
             }
             return out.trimmingCharacters(in: .whitespacesAndNewlines)
         } catch {
-            lastError = error.localizedDescription
+            if lastError == nil {
+                lastError = cancelRequested ? "已取消本次任务。" : error.localizedDescription
+            }
             return nil
         }
     }
@@ -427,6 +510,8 @@ final class AIService: ObservableObject {
                 provider: .openai,
                 systemPrompt: PromptLibrary.systemInstruction(for: capability),
                 maxTurns: 2, permissionMode: .bypassPermissions, tools: []))
+            beginAgent(agent, timeoutSeconds: config.effectiveTimeout)
+            defer { endAgent() }
             var filter = ThinkTagFilter()
             var out = ""
             for await message in agent.stream(userMessage) {
@@ -440,7 +525,9 @@ final class AIService: ObservableObject {
             }
             return out.trimmingCharacters(in: .whitespacesAndNewlines)
         } catch {
-            lastError = error.localizedDescription
+            if lastError == nil {
+                lastError = cancelRequested ? "已取消本次任务。" : error.localizedDescription
+            }
             return nil
         }
     }
@@ -467,7 +554,10 @@ final class AIService: ObservableObject {
             guard !ch.prose.isEmpty else { return nil }
             return "第\(ch.number)章《\(ch.title)》：\(String(ch.prose.prefix(1200)))"
         }.joined(separator: "\n\n")
-        let knownFacts = store.facts.map { "\($0.subject) \($0.predicate) \($0.object)（第\($0.fromChapter)章起）" }.joined(separator: "\n")
+        let knownFacts = store.facts
+            .filter { !$0.subject.isEmpty && !$0.object.isEmpty }
+            .map { "\($0.subject) \($0.predicate) \($0.object)（第\($0.fromChapter)章起）" }
+            .joined(separator: "\n")
         let knownClues = store.clues.map { "[\($0.id)] \($0.title)：\($0.detail)（\($0.status.rawValue)）" }.joined(separator: "\n")
         await run(capability: .organize, store: store, config: config, chapter: nil,
                   userMessage: PromptLibrary.organizeLegacyTask(
@@ -477,13 +567,13 @@ final class AIService: ObservableObject {
     }
 
     /// 拆书（文本变体：结果就地展示，作者决定是否存为备忘提案）
-    func runAnalyzeText(store: ProjectStore, referenceText: String, focus: String) async -> String? {
+    func runAnalyzeText(store: ProjectStore, config: AgentConfig, referenceText: String, focus: String) async -> String? {
         let canon = store.canonSections.map { "《\($0.title)》\($0.content)" }.joined(separator: "\n\n")
         let message = PromptLibrary.analyzeTask(referenceText: referenceText, focus: focus)
             + "\n\n## 本书语境（拆完的迁移建议要贴着它给）\n"
             + "题材：\(store.project.genre)｜核心：\(store.project.premise)"
             + (canon.isEmpty ? "" : "\n" + String(canon.prefix(2000)))
-        return await runTextOnly(store: store, config: AgentConfig.load(), capability: .analyze, userMessage: message)
+        return await runTextOnly(store: store, config: config, capability: .analyze, userMessage: message)
     }
 
     /// 封面提案（文本变体：结果就地展示）
@@ -497,12 +587,12 @@ final class AIService: ObservableObject {
     }
 
     /// 封面绘制（SVG 代码，免提案通道：结果就地预览，作者点采用才落盘）
-    func runCoverSVG(store: ProjectStore, authorName: String, mood: String, direction: String) async -> String? {
+    func runCoverSVG(store: ProjectStore, config: AgentConfig, authorName: String, mood: String, direction: String) async -> String? {
         let title = store.project.title
         let genre = store.project.genre.isEmpty ? "（未定）" : store.project.genre
         let premise = store.project.premise.isEmpty ? "（未定）" : store.project.premise
         let bookInfo = "书名：《\(title)》\n题材：\(genre)\n一句话核心：\(premise)"
-        return await runTextOnly(store: store, config: AgentConfig.load(), capability: .coverBrief,
+        return await runTextOnly(store: store, config: config, capability: .coverBrief,
                                  userMessage: PromptLibrary.coverSVGTask(bookInfo: bookInfo, authorName: authorName,
                                                                          mood: mood, direction: direction))
     }
@@ -642,12 +732,15 @@ final class AIService: ObservableObject {
             existing += "\n\n到第\(end)章为止已逾期的伏笔（这一段必须处理掉一部分）：\n" + dues.joined(separator: "\n")
         }
         let written = store.chapters.filter { !$0.prose.isEmpty }.count
+        // 卷级设计只交一份 memo：不能给章节骨架工具（chapter 为 nil 时会被绑到第 0 章），
+        // 也不能走普通章节骨架的 propose_skeleton 通道。
         await run(capability: .chapterSkeleton, store: store, config: config, chapter: nil,
                   userMessage: PromptLibrary.volumeSkeletonTask(
                     fromChapter: start, toChapter: end, pack: pack, authorDirective: directive,
                     craft: PromptLibrary.craft(for: .chapterSkeleton, genre: store.project.genre,
                                                written: written, target: store.project.targetChapters),
-                    existingOutline: existing))
+                    existingOutline: existing),
+                  toolNamesOverride: Self.volumeSkeletonToolNames())
     }
 
     /// 全书连贯性审查：宿主确定性扫描（零成本）+ LLM 补六类需要理解的错误 + 埋点修复方案
@@ -766,7 +859,15 @@ final class AIService: ObservableObject {
             return
         }
         let knownClues = store.clues.map { "[\($0.id)] \($0.title)：\($0.detail)" }.joined(separator: "\n")
-        let knownFacts = store.facts.filter { $0.fromChapter >= n }.map { "\($0.subject) \($0.predicate) \($0.object)" }.joined(separator: "\n")
+        // 只带本章之前仍然有效的事实：>= n 会拿到未来章节的事实，既无法判重也泄底
+        let knownFacts = store.facts
+            .filter {
+                $0.fromChapter <= n && $0.isValid(atChapter: n)
+                    && !$0.subject.trimmingCharacters(in: .whitespaces).isEmpty
+                    && !$0.object.trimmingCharacters(in: .whitespaces).isEmpty
+            }
+            .map { "\($0.subject) \($0.predicate) \($0.object)" }
+            .joined(separator: "\n")
         let notes = ch.noteList
         var message = PromptLibrary.memoryExtractTask(chapter: n, prose: ch.prose, knownClues: knownClues, knownFacts: knownFacts)
         if !notes.isEmpty {
@@ -787,6 +888,16 @@ final class AIService: ObservableObject {
             await run(capability: .validation, store: store, config: config, chapter: n,
                       userMessage: PromptLibrary.validationTask(chapter: n, prose: overrideText, skeleton: "", pack: pack, draftMode: true,
                                                proseCap: ContextPackBuilder.proseInjectionCap(budget: config.contextTokenBudget, hardCap: 12000)))
+            // 工具侧 `draftValidationReport` 读的是**已入库正文**：草稿模式下必须清掉，
+            // 否则报告里的「确定性 N 条」描述的是旧正文，作者会据此误判草稿质量。
+            let draftLint = AILint.scan(overrideText)
+            for id in lastRunProposalIDs {
+                store.mutateValidationReport(proposalID: id) { report in
+                    report.deterministicIssues = []
+                    report.lintSummary = draftLint
+                    report.checkedAt = Date()
+                }
+            }
             return
         }
         guard let ch = store.chapter(n), !ch.prose.isEmpty else {
@@ -812,9 +923,16 @@ final class AIService: ObservableObject {
         await run(capability: .validation, store: store, config: config, chapter: n,
                   userMessage: PromptLibrary.validationTask(chapter: n, prose: ch.prose, skeleton: skeletonText, pack: pack,
                                                proseCap: ContextPackBuilder.proseInjectionCap(budget: config.contextTokenBudget, hardCap: 12000)))
+        // 验证成功 → 状态推进到「已验证」（不覆盖已润色/定稿）
+        if lastError == nil {
+            store.updateChapter(n) {
+                if $0.status == .written || $0.status == .writing { $0.status = .checked }
+            }
+        }
     }
 
-    func runDeslop(store: ProjectStore, config: AgentConfig, chapter n: Int, overrideText: String? = nil) async {
+    func runDeslop(store: ProjectStore, config: AgentConfig, chapter n: Int,
+                   overrideText: String? = nil, draftProposalID: UUID? = nil) async {
         let text: String
         if let overrideText, !overrideText.isEmpty {
             text = overrideText
@@ -829,6 +947,14 @@ final class AIService: ObservableObject {
         await run(capability: .deslop, store: store, config: config, chapter: n,
                   userMessage: PromptLibrary.deslopTask(chapter: n, prose: text, lintSummary: lint, model: config.model,
                                        proseCap: ContextPackBuilder.proseInjectionCap(budget: config.contextTokenBudget, hardCap: 14000)))
+        // 工具侧按入库正文重算 lint，且不知道送审的是草稿。这里按真实送审文本修正，
+        // 并记下草稿目标——采纳建议时才能改对文本。
+        for id in lastRunProposalIDs {
+            store.mutateDeslopReport(proposalID: id) { report in
+                report.lint = lint
+                report.targetDraftID = draftProposalID
+            }
+        }
     }
 
     // MARK: - 流水线：一键写作 / 按意见修复
@@ -846,7 +972,10 @@ final class AIService: ObservableObject {
     /// 所以中间步骤可以自动串——它们的产出全是提案；但**骨架不代批**，因为骨架是写前契约，
     /// 属于正典决定。没有已批准的骨架时，这一步只出骨架提案然后停下等作者。
     func runAutoPipeline(store: ProjectStore, config: AgentConfig, chapter n: Int, mainline: String) async {
-        guard !running else { return }
+        guard !running else {
+            lastError = "已有 AI 任务在运行，请等它结束。"
+            return
+        }
         pipelineDone = []
         pipelineNote = ""
 
@@ -860,22 +989,27 @@ final class AIService: ObservableObject {
             return
         }
 
+        if cancelRequested { pipelineStage = ""; pipelineNote = "已取消（未开始写草稿）。"; return }
         pipelineStage = "写草稿"
         await runDraft(store: store, config: config, chapter: n, mainline: mainline)
         guard lastError == nil,
-              let draft = store.latestDraftProposal(for: n).flatMap({ store.draftPayload(of: $0) }) else {
+              let draftProposal = store.latestDraftProposal(for: n),
+              let draft = store.draftPayload(of: draftProposal) else {
             pipelineStage = ""
             return
         }
         pipelineDone.append("草稿 v\(draft.version)（\(WordStats.chineseCount(draft.text)) 字）")
 
+        if cancelRequested { pipelineStage = ""; pipelineNote = "已取消（草稿已进收件箱）。"; return }
         // 审查与去AI味都针对**草稿文本**（overrideText），不是已入库的正文——草稿还没进正文
         pipelineStage = "一致性审查"
         await runValidation(store: store, config: config, chapter: n, overrideText: draft.text)
         pipelineDone.append(lastError == nil ? "一致性审查" : "一致性审查（失败，见错误）")
 
+        if cancelRequested { pipelineStage = ""; pipelineNote = "已取消（草稿与审查结果已进收件箱）。"; return }
         pipelineStage = "去AI味"
-        await runDeslop(store: store, config: config, chapter: n, overrideText: draft.text)
+        await runDeslop(store: store, config: config, chapter: n, overrideText: draft.text,
+                        draftProposalID: draftProposal.id)
         pipelineDone.append(lastError == nil ? "去AI味" : "去AI味（失败，见错误）")
 
         pipelineStage = ""
@@ -934,16 +1068,24 @@ final class AIService: ObservableObject {
             return nil
         }
         running = true
+        cancelRequested = false
         runningCapability = capability
         streamPreview = ""
         lastError = nil
         lastToolLog = []
-        trace(capability, "开始（纯文本通道）")
+        trace(capability, "开始处理")
         defer {
             running = false
             runningCapability = nil
-            currentStep = ""
         }
+        return await streamTextOnly(store: store, config: config, capability: capability, userMessage: userMessage)
+    }
+
+    /// 纯文本流本体：**不碰 running**。
+    /// 分段写作外层已经持有运行态，再调带互斥守卫的 runTextOnly 会必然自锁
+    /// （"已有 AI 任务在运行"），所以把流本体与状态接管拆开。
+    private func streamTextOnly(store: ProjectStore, config: AgentConfig,
+                                capability: AICapability, userMessage: String) async -> String? {
         do {
             let agent = createAgent(options: AgentOptions(
                 apiKey: Self.effectiveKey(config),
@@ -954,6 +1096,8 @@ final class AIService: ObservableObject {
                 maxTurns: 2,
                 permissionMode: .bypassPermissions,
                 tools: []))
+            beginAgent(agent, timeoutSeconds: config.effectiveTimeout)
+            defer { endAgent() }
             var filter = ThinkTagFilter()
             var out = ""
             // 这条通道不经过 run()，创作法典要在这里自己注入——否则分段写作整个丢掉流派档案与创作法，
@@ -963,18 +1107,29 @@ final class AIService: ObservableObject {
                 + PromptLibrary.craft(for: capability, genre: store.project.genre,
                                       written: written, target: store.project.targetChapters)
             for await message in agent.stream(taskMessage) {
+                if cancelRequested {
+                    lastError = "已取消本次任务。"
+                    return nil
+                }
                 switch message {
                 case .partialMessage(let d):
-                    out += filter.push(d.text)
+                    let piece = filter.push(d.text)
+                    out += piece
+                    streamPreview += piece
+                    if streamPreview.count > 4000 { streamPreview = String(streamPreview.suffix(4000)) }
                 case .result(let d):
-                    out += filter.flush()
+                    let tail = filter.flush()
+                    out += tail
+                    streamPreview += tail
                     if d.subtype != .success { lastError = d.text }
                 default: break
                 }
             }
             return out.trimmingCharacters(in: .whitespacesAndNewlines)
         } catch {
-            lastError = error.localizedDescription
+            if lastError == nil {
+                lastError = cancelRequested ? "已取消本次任务。" : error.localizedDescription
+            }
             return nil
         }
     }
@@ -989,6 +1144,7 @@ final class AIService: ObservableObject {
                           mainline: String, wordsPerChunk: Int = 1200) async {
         guard !running else { return }
         running = true
+        cancelRequested = false
         runningCapability = .chapterDraft
         streamPreview = ""
         lastError = nil
@@ -999,6 +1155,10 @@ final class AIService: ObservableObject {
 
         guard let sk = store.chapter(n)?.skeleton, !sk.beats.isEmpty else {
             lastError = "分段写作需要先有骨架（按节拍分块）。先搭骨架并批准，或用普通的「写草稿」。"
+            return
+        }
+        guard sk.humanApproved else {
+            lastError = "分段写作需要作者先批准骨架（写前契约）。批准后再试，或用普通的「写草稿」。"
             return
         }
         let pack = ContextPackBuilder.build(store: store, forChapter: n, budget: config.contextTokenBudget)
@@ -1021,6 +1181,11 @@ final class AIService: ObservableObject {
 
         var written = ""
         for (i, chunk) in chunks.enumerated() {
+            if cancelRequested {
+                pipelineStage = ""
+                lastError = "已取消分段写作（前 \(i) 段未保存）。"
+                return
+            }
             pipelineStage = "写第 \(i + 1)/\(chunks.count) 段"
             let message = PromptLibrary.sceneDraftTask(
                 chapter: n, title: store.chapter(n)?.title ?? "",
@@ -1031,8 +1196,9 @@ final class AIService: ObservableObject {
                 clueTouches: sk.clueTouches, mainline: mainline,
                 targetWords: max(400, chunk.reduce(0) { $0 + $1.suggestedWords }),
                 pack: pack, previousText: written, model: config.model)
-            guard let piece = await runTextOnly(store: store, config: config,
-                                                capability: .chapterDraft, userMessage: message) else {
+            streamPreview = ""
+            guard let piece = await streamTextOnly(store: store, config: config,
+                                                   capability: .chapterDraft, userMessage: message) else {
                 pipelineStage = ""
                 if lastError == nil { lastError = "第 \(i + 1) 段没有产出，已中止（前 \(i) 段未保存）。" }
                 return
@@ -1092,12 +1258,21 @@ final class AIService: ObservableObject {
             return
         }
         draft.feedbackHistory.append(DraftFeedback(feedback: feedback, fromVersion: draft.version))
+        // 先把意见记到源草案上：即使这次修订失败，作者的意见也不会丢
+        store.updateDraftMetadata(proposalID: proposal.id, mainline: draft.mainline,
+                                  feedbackHistory: draft.feedbackHistory)
         let historyText = draft.feedbackHistory.map { "v\($0.fromVersion) 意见：\($0.feedback)" }.joined(separator: "\n")
         let message = PromptLibrary.revisionTask(
             chapter: n, draftText: draft.text, feedback: feedback,
             historyText: historyText, targetWords: store.project.chapterWordTarget,
             styleNotes: store.project.styleNotes)
         await run(capability: .chapterRevise, store: store, config: config, chapter: n, userMessage: message)
+        // 工具 schema 只带正文；意见历史与主线由宿主补写进新提案，
+        // 否则下一轮修订拿到的 historyText 永远是空的。
+        for id in lastRunProposalIDs {
+            store.updateDraftMetadata(proposalID: id, mainline: draft.mainline,
+                                      feedbackHistory: draft.feedbackHistory)
+        }
     }
 
     func runRecall(store: ProjectStore, config: AgentConfig, chapter n: Int, directive: String) async {
@@ -1129,11 +1304,15 @@ enum FallbackProposer {
         return fb
     }
 
-    static func apply(_ fb: Fallback, store: ProjectStore, chapter: Int?) async throws {
+    static func apply(_ fb: Fallback, store: ProjectStore, chapter: Int?,
+                      allowed: Set<String>, capability: AICapability) async throws {
         let jsonString = fb.args.jsonString
-        let bound = NovelTools.bindChapter(tools: NovelTools.all(store: store), store: store, chapter: chapter)
+        let available = NovelTools.all(store: store).filter { allowed.contains($0.name) }.map { tool in
+            tool.name == "propose_memo" ? NovelTools.proposeMemo(store: store, capability: capability) : tool
+        }
+        let bound = NovelTools.bindChapter(tools: available, store: store, chapter: chapter)
         guard let tool = bound.first(where: { $0.name == fb.tool }) else {
-            throw AgentError.badResponse("回退解析得到未知工具 \(fb.tool)")
+            throw AgentError.badResponse("回退解析得到不属于本任务的工具 \(fb.tool)")
         }
         _ = try await tool.handler(jsonString)
     }

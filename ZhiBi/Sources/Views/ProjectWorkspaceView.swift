@@ -25,8 +25,10 @@ struct ProjectWorkspaceView: View {
     @State private var selectedChapter: Int?
     @State private var chapterPendingDelete: Int?
     @State private var exportMessage: String?
+    @State private var alertTitle = "提示"
     @State private var showSearch = false
     @State private var showTrajectory = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         NavigationSplitView(columnVisibility: $navVisibility) {
@@ -52,25 +54,47 @@ struct ProjectWorkspaceView: View {
             .listStyle(.sidebar)
             .navigationSplitViewColumnWidth(min: ZBSpace.Column.min, ideal: ZBSpace.Column.ideal, max: ZBSpace.Column.max)
         } detail: {
-            VStack(spacing: 0) {
-                detailView
-                AgentStatusStrip(vm: vm, store: store) {
-                    selection = .inbox
+            HSplitView {
+                VStack(spacing: 0) {
+                    detailView
+                    AgentStatusStrip(vm: vm, store: store) {
+                        selection = .inbox
+                    }
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                if showTrajectory {
+                    AgentTrajectoryPanel(ai: vm.ai, onClose: {
+                        withAnimation(ZBMotion.standard(reduceMotion: reduceMotion)) { showTrajectory = false }
+                    })
+                    .frame(minWidth: 300, idealWidth: 360, maxWidth: 480, maxHeight: .infinity)
                 }
             }
         }
         .navigationTitle(store.project.title)
-        .zbToast(vm)
         .navigationSubtitle(subtitle)
+        .safeAreaInset(edge: .top, spacing: 0) {
+            if let warning = store.loadWarnings {
+                HStack(alignment: .top, spacing: 8) {
+                    Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+                    Text(warning).font(.caption).lineLimit(3)
+                    Spacer()
+                    Button("知道了") { store.loadWarnings = nil }
+                        .controlSize(.small)
+                }
+                .padding(.horizontal, 12).padding(.vertical, 8)
+                .background(Color.orange.opacity(0.12))
+            }
+        }
         .toolbar {
             ToolbarItem(placement: .primaryAction) { searchButton }
             ToolbarItem(placement: .primaryAction) {
                 Button {
-                    showTrajectory = true
+                    withAnimation(ZBMotion.standard(reduceMotion: reduceMotion)) { showTrajectory.toggle() }
                 } label: {
-                    Label("AI 轨迹", systemImage: "point.topleft.down.curvedto.point.bottomright.up")
+                    Label("Agent 轨迹", systemImage: "point.topleft.down.curvedto.point.bottomright.up")
                 }
-                .help("实时查看 AI 轨迹状态与历史")
+                .keyboardShortcut("j", modifiers: [.command, .shift])
+                .help("右侧 Agent 轨迹对话窗：完整工具调用/结果/流式输出（⌘⇧J）")
             }
             ToolbarItem(placement: .primaryAction) { exportMenu }
             ToolbarItem(placement: .primaryAction) { importButton }
@@ -78,16 +102,12 @@ struct ProjectWorkspaceView: View {
             ToolbarItem(placement: .primaryAction) { appearanceButton }
             ToolbarItem(placement: .primaryAction) { backButton }
         }
-        .alert("导出完成", isPresented: Binding(
+        .alert(alertTitle, isPresented: Binding(
             get: { exportMessage != nil },
             set: { if !$0 { exportMessage = nil } })) {
             Button("好") {}
         } message: {
             Text(exportMessage ?? "")
-        }
-        .sheet(isPresented: $showTrajectory) {
-            AITrajectorySheet(vm: vm, ai: vm.ai)
-                .frame(minWidth: ZBSpace.Sheet.wide, minHeight: 560)
         }
         .sheet(isPresented: $showSearch) {
             SearchSheet(vm: vm, store: store, onSelectChapter: { n in
@@ -103,6 +123,8 @@ struct ProjectWorkspaceView: View {
             withAnimation(.snappy(duration: 0.3)) {
                 navVisibility = focused ? .detailOnly : .all
             }
+            // 专注模式收起轨迹面板：专注就只留稿纸
+            if focused, showTrajectory { showTrajectory = false }
         }
         .onChange(of: vm.navigateToSection) { section in
             if let section {
@@ -140,7 +162,7 @@ struct ProjectWorkspaceView: View {
         case .clues:
             ClueBoardView(vm: vm, store: store)
         case .characters:
-            CharactersView(store: store)
+            CharactersView(store: store, vm: vm)
         case .memory:
             MemoryView(store: store, vm: vm)
         case .canon:
@@ -148,11 +170,13 @@ struct ProjectWorkspaceView: View {
         case .inbox:
             ProposalInboxView(vm: vm, store: store)
         case .graph:
-            MemoryGraphView(vm: vm, store: store) { n in
+            MemoryGraphView(vm: vm, store: store, onGotoChapter: { n in
                 selectedChapter = n
                 selection = .chapters
                 if focusMode { focusMode = false }
-            }
+            }, onGotoClues: { _ in
+                selection = .clues
+            })
         case .stats:
             StatsView(store: store)
         }
@@ -162,8 +186,10 @@ struct ProjectWorkspaceView: View {
         HSplitView {
             VStack(spacing: 0) {
                 ScrollView {
-                    ForEach(store.chapters) { ch in
-                        chapterRow(ch)
+                    LazyVStack(spacing: 0) {
+                        ForEach(store.chapters) { ch in
+                            chapterRow(ch)
+                        }
                     }
                 }
                 Button {
@@ -195,6 +221,15 @@ struct ProjectWorkspaceView: View {
                 }
             }
             .frame(minWidth: 520, maxWidth: .infinity, maxHeight: .infinity)
+            .onAppear {
+                if selectedChapter == nil { selectedChapter = store.chapters.first?.number }
+            }
+            .onChange(of: store.chapters.count) { _ in
+                // 打开已有工程/导入后默认落到第一章；删掉当前章时回到第一章
+                if selectedChapter == nil || store.chapter(selectedChapter ?? -1) == nil {
+                    selectedChapter = store.chapters.first?.number
+                }
+            }
         }
     }
 
@@ -227,20 +262,26 @@ struct ProjectWorkspaceView: View {
         .cornerRadius(6)
         .padding(.horizontal, 6)
         .onTapGesture { selectedChapter = ch.number }
+        .accessibilityAddTraits(.isButton)
+        .accessibilityLabel("第\(ch.number)章 \(ch.title.isEmpty ? "" : ch.title)，\(ch.status.rawValue)")
         .contextMenu {
             Button("删除本章…", role: .destructive) { chapterPendingDelete = ch.number }
         }
         .confirmationDialog("删除第\(ch.number)章？", isPresented: Binding(
             get: { chapterPendingDelete == ch.number },
             set: { if !$0 { chapterPendingDelete = nil } })) {
-            Button("删除（含快照，不可恢复）", role: .destructive) {
+            Button("删除本章", role: .destructive) {
                 if selectedChapter == ch.number { selectedChapter = nil }
                 store.deleteChapter(ch.number)
-                vm.showToast("已删除《\(ch.title.isEmpty ? "第\(ch.number)章" : ch.title)》（可在废纸篓找回）", success: true)
+                if store.chapter(ch.number) == nil {
+                    vm.showToast("已删除《\(ch.title.isEmpty ? "第\(ch.number)章" : ch.title)》（正文目录在废纸篓，可手动找回）")
+                } else {
+                    vm.showToast(store.lastSaveError ?? "删除失败", success: false)
+                }
                 chapterPendingDelete = nil
             }
         } message: {
-            Text("将删除本章正文、骨架与全部快照。时间线中本章的事件会一并清除。")
+            Text("本章目录（正文 / 骨架 / 快照）会移到废纸篓；时间线中本章的事件会一并删除，且应用内无法恢复。")
         }
     }
 
@@ -271,17 +312,18 @@ struct ProjectWorkspaceView: View {
         } label: {
             Image(systemName: "magnifyingglass")
         }
-        .help("全书搜索（⌘⇧G）")
-        .keyboardShortcut("g", modifiers: [.command, .shift])
+        .help("全书搜索（⌥⌘F）")
+        // 不用 ⌘⇧G：那是 NSTextView 查找栏的「上一个命中」
+        .keyboardShortcut("f", modifiers: [.command, .option])
         .accessibilityLabel("全书搜索")
     }
 
     @ViewBuilder
     private var exportMenu: some View {
         Menu {
-            Button("合并稿（单文件）") { exportMessage = vm.exportManuscript() }
-            Button("oh-story 目录（大纲/设定/正文/追踪）") { exportMessage = vm.exportOhStory() }
-            Button("分卷 TXT（每 20 章一卷）") { exportMessage = vm.exportVolumeTxt() }
+            Button("合并稿（单文件）") { alertTitle = "导出完成"; exportMessage = vm.exportManuscript() }
+            Button("oh-story 目录（大纲/设定/正文/追踪）") { alertTitle = "导出完成"; exportMessage = vm.exportOhStory() }
+            Button("分卷 TXT（每 20 章一卷）") { alertTitle = "导出完成"; exportMessage = vm.exportVolumeTxt() }
         } label: {
             Image(systemName: "square.and.arrow.up.on.square")
         }
@@ -301,12 +343,16 @@ struct ProjectWorkspaceView: View {
 
     private var saveButton: some View {
         Button {
+            ProseEditorFlush.now()
             do {
                 try store.saveNow()
                 store.lastSaveError = nil
-                exportMessage = "已保存《\(store.project.title)》"
+                // 成功用轻提示，不再弹「导出完成」对话框打断写作
+                vm.showToast("已保存《\(store.project.title)》")
             } catch {
                 store.lastSaveError = "保存失败：\(error.localizedDescription)"
+                alertTitle = "保存失败"
+                exportMessage = "保存失败：\(error.localizedDescription)"
             }
         } label: {
             Image(systemName: "checkmark.circle")
@@ -327,12 +373,12 @@ struct ProjectWorkspaceView: View {
     }
 
     private var backButton: some View {
-        Button(role: .destructive) {
+        Button {
             vm.closeProject()
         } label: {
             Image(systemName: "chevron.left")
         }
-        .help("回到书架")
+        .help("回到书架（会先保存）")
         .accessibilityLabel("回到书架")
     }
 }
@@ -384,6 +430,9 @@ struct AgentStatusStrip: View {
                     .lineLimit(4)
             }
             Spacer()
+            Button("停止") { vm.ai.cancelCurrentRun() }
+                .controlSize(.mini)
+                .help("在当前步骤结束后停止；已产出的提案保留")
         }
         .padding(ZBSpace.sm)
         .background(Color.accentColor.opacity(0.06))
