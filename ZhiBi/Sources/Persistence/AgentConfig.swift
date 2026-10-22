@@ -122,7 +122,10 @@ enum TrajectoryStore {
         return dir.appendingPathComponent("ai-trajectory.json")
     }
 
-    static func load() -> [Entry] { (try? Disk.readJSON([Entry].self, from: url())) ?? [] }
+    static func load() -> [Entry] {
+        // 旧文件可能超过上限：读取时也截到 200，保证面板/内存不会无限增长
+        Array(((try? Disk.readJSON([Entry].self, from: url())) ?? []).prefix(200))
+    }
 
     static func save(_ entries: [Entry]) {
         try? Disk.writeJSON(Array(entries.prefix(200)), to: url())

@@ -27,7 +27,8 @@ struct ProjectWorkspaceView: View {
     @State private var exportMessage: String?
     @State private var alertTitle = "提示"
     @State private var showSearch = false
-    @State private var showTrajectory = false
+    /// 轨迹面板开关跨会话保留；专注模式只临时隐藏，不改偏好
+    @AppStorage("showAgentTrajectory") private var showTrajectory = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
@@ -62,7 +63,7 @@ struct ProjectWorkspaceView: View {
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                if showTrajectory {
+                if showTrajectory && !focusMode {
                     AgentTrajectoryPanel(ai: vm.ai, onClose: {
                         withAnimation(ZBMotion.standard(reduceMotion: reduceMotion)) { showTrajectory = false }
                     })
@@ -94,7 +95,10 @@ struct ProjectWorkspaceView: View {
                     Label("Agent 轨迹", systemImage: "point.topleft.down.curvedto.point.bottomright.up")
                 }
                 .keyboardShortcut("j", modifiers: [.command, .shift])
-                .help("右侧 Agent 轨迹对话窗：完整工具调用/结果/流式输出（⌘⇧J）")
+                .disabled(focusMode)
+                .help(focusMode
+                      ? "专注模式下不展开轨迹面板（退出专注后恢复）"
+                      : "右侧 Agent 轨迹对话窗：完整工具调用/结果/流式输出（⌘⇧J）")
             }
             ToolbarItem(placement: .primaryAction) { exportMenu }
             ToolbarItem(placement: .primaryAction) { importButton }
@@ -123,8 +127,6 @@ struct ProjectWorkspaceView: View {
             withAnimation(.snappy(duration: 0.3)) {
                 navVisibility = focused ? .detailOnly : .all
             }
-            // 专注模式收起轨迹面板：专注就只留稿纸
-            if focused, showTrajectory { showTrajectory = false }
         }
         .onChange(of: vm.navigateToSection) { section in
             if let section {

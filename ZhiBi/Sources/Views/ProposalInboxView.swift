@@ -412,17 +412,24 @@ struct ProposalInboxView: View {
                             }
                         }
                         Spacer()
-                        Button("采纳") {
-                            if vm.applyDeslopSuggestion(s, chapter: report.chapter,
-                                                        snapshotTag: s.applied ? nil : "deslop前",
-                                                        targetDraftID: report.targetDraftID) {
-                                _ = store.markDeslopSuggestionApplied(proposalID: p.id, suggestionID: s.id)
-                                actionError = nil
-                            } else {
-                                actionError = vm.lastDeslopIssue ?? "这条建议未能应用，未改动。"
+                        if s.applied {
+                            Label("已采纳", systemImage: "checkmark.circle.fill")
+                                .font(.caption2).foregroundStyle(.green)
+                        } else {
+                            Button("采纳") {
+                                // 同一份报告只在第一次应用前快照一次，避免逐条采纳制造一堆重复快照
+                                let alreadyApplied = report.suggestions.contains { $0.applied }
+                                if vm.applyDeslopSuggestion(s, chapter: report.chapter,
+                                                            snapshotTag: alreadyApplied ? nil : "deslop前",
+                                                            targetDraftID: report.targetDraftID) {
+                                    _ = store.markDeslopSuggestionApplied(proposalID: p.id, suggestionID: s.id)
+                                    actionError = nil
+                                } else {
+                                    actionError = vm.lastDeslopIssue ?? "这条建议未能应用，未改动。"
+                                }
                             }
+                            .controlSize(.small)
                         }
-                        .controlSize(.small)
                     }
                     .padding(5)
                     .zbGlass(cornerRadius: 6)

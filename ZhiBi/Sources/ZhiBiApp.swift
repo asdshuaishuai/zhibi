@@ -49,6 +49,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// ⌘Q/关窗落在 1 秒防抖窗口内也不丢最后一次编辑
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        // Agent 轨迹也有防抖：退出前先落盘（书架级封面/选题的轨迹同样适用）
+        AppDelegate.activeModel?.ai.flushTrajectory()
         guard let store = AppDelegate.activeModel?.store else { return .terminateNow }
         // 先把编辑器防抖里的最后几个字交回 store，再保存；顺序反了就会丢最后一次输入
         ProseEditorFlush.now()

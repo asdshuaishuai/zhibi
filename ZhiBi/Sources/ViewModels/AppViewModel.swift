@@ -285,18 +285,31 @@ final class AppViewModel: ObservableObject {
             lastDeslopIssue = "建议的原文为空，无法定位。"
             return false
         }
-        // 送审的是草稿：建议必须改回草稿提案，绝不能动已入库正文
-        // 草稿已采纳后，同样的文本已经进了正文：此时建议应落到正文，
-        // 再去改归档里的草稿提案没有意义。
-        if let draftID = targetDraftID,
-           let idx = store.proposals.firstIndex(where: { $0.id == draftID }),
-           store.proposals[idx].status == .pending,
-           case .draft(var draft) = store.proposals[idx].payload {
-            guard let range = uniqueRange(of: suggestion.original, in: draft.text) else { return false }
-            draft.text.replaceSubrange(range, with: suggestion.replacement)
-            store.proposals[idx].payload = .draft(draft)
-            store.saveSoon()
-            return true
+        // 送审的是草稿：建议必须改回草稿提案，绝不能动已入库正文。
+        // 草稿已采纳后，同样的文本已进正文，才允许落到正文；
+        // 草稿被拒绝/已不存在时不能悄悄改正文。
+        if let draftID = targetDraftID {
+            guard let idx = store.proposals.firstIndex(where: { $0.id == draftID }) else {
+                lastDeslopIssue = "目标草稿已不存在，建议不再应用。"
+                return false
+            }
+            switch store.proposals[idx].status {
+            case .rejected:
+                lastDeslopIssue = "目标草稿已被拒绝，建议不再应用。"
+                return false
+            case .pending:
+                guard case .draft(var draft) = store.proposals[idx].payload else {
+                    lastDeslopIssue = "目标提案不是草稿，无法应用。"
+                    return false
+                }
+                guard let range = uniqueRange(of: suggestion.original, in: draft.text) else { return false }
+                draft.text.replaceSubrange(range, with: suggestion.replacement)
+                store.proposals[idx].payload = .draft(draft)
+                store.saveSoon()
+                return true
+            case .accepted:
+                break   // 草稿已进正文：继续走下面的正文替换
+            }
         }
         guard var ch = store.chapter(n) else { return false }
         guard let range = uniqueRange(of: suggestion.original, in: ch.prose) else { return false }

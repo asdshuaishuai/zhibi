@@ -39,6 +39,16 @@ struct AgentTrajectoryPanel: View {
                     ProgressView().controlSize(.mini)
                     Text(ai.runningCapability?.rawValue ?? "").font(.caption2.bold())
                 }
+                Button {
+                    ai.cancelCurrentRun()
+                } label: {
+                    Image(systemName: "stop.circle.fill")
+                        .foregroundStyle(.orange)
+                }
+                .controlSize(.small)
+                .buttonStyle(.borderless)
+                .help("停止当前 AI 任务（已产出的提案保留）")
+                .accessibilityLabel("停止当前 AI 任务")
             } else {
                 Text("空闲 · \(ai.trajectory.count) 条")
                     .font(.caption2).foregroundStyle(.tertiary)
@@ -91,17 +101,18 @@ struct AgentTrajectoryPanel: View {
                         .padding(.top, 40)
                     }
                     ForEach(Array(chronological.enumerated()), id: \.element.id) { idx, e in
-                        if e.event == "开始处理" {
+                        if e.event.hasPrefix("开始处理") {
                             runHeader(e)
                         } else {
-                            bubble(e, isFirstOfRun: idx == 0 || chronological[idx - 1].event == "开始处理")
+                            bubble(e, isFirstOfRun: idx == 0 || chronological[idx - 1].event.hasPrefix("开始处理"))
                         }
                     }
                     Color.clear.frame(height: 1).id("panel-tail")
                 }
                 .padding(ZBSpace.sm)
             }
-            .onChange(of: ai.trajectory.count) { _ in
+            // 不能只看 count：轨迹满 200 条后 count 恒定，新事件不会触发滚动
+            .onChange(of: ai.trajectory.first?.id) { _ in
                 proxy.scrollTo("panel-tail", anchor: .bottom)
             }
             .onChange(of: ai.streamPreview) { _ in
@@ -122,6 +133,9 @@ struct AgentTrajectoryPanel: View {
                 .font(.caption2.bold())
                 .foregroundStyle(Color.accentColor)
                 .labelStyle(.titleAndIcon)
+            if !e.detail.isEmpty {
+                Text(e.detail).font(.caption2).foregroundStyle(.secondary)
+            }
             Text(e.at.formatted(.dateTime.hour().minute().second()))
                 .font(.caption2.monospacedDigit())
                 .foregroundStyle(.tertiary)

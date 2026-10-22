@@ -93,12 +93,24 @@ final class AIService: ObservableObject {
             try? await _Concurrency.Task.sleep(nanoseconds: 1_500_000_000)
             guard let self, !_Concurrency.Task.isCancelled, self.trajectoryDirty else { return }
             self.trajectoryDirty = false
-            let entries = self.trajectory.map {
-                TrajectoryStore.Entry(at: $0.at, capability: $0.capability, event: $0.event,
-                                      detail: String($0.detail.prefix(300)), isError: $0.isError)
-            }
-            TrajectoryStore.save(entries)
+            TrajectoryStore.save(self.persistedTrajectoryEntries())
         }
+    }
+
+    private func persistedTrajectoryEntries() -> [TrajectoryStore.Entry] {
+        trajectory.map {
+            TrajectoryStore.Entry(at: $0.at, capability: $0.capability, event: $0.event,
+                                  detail: String($0.detail.prefix(300)), isError: $0.isError)
+        }
+    }
+
+    /// 退出前强制落盘：否则最后一次运行可能还在 1.5 秒防抖窗口里
+    func flushTrajectory() {
+        trajectorySaveTask?.cancel()
+        trajectorySaveTask = nil
+        guard trajectoryDirty else { return }
+        trajectoryDirty = false
+        TrajectoryStore.save(persistedTrajectoryEntries())
     }
 
     /// 私有/本机地址判定：局域网模型（LM Studio / Ollama / llama.cpp）不需要 API Key，
@@ -363,7 +375,6 @@ final class AIService: ObservableObject {
             for await message in agent.stream(taskMessage) {
                 if cancelRequested {
                     lastError = "已取消本次任务（已产出的提案仍保留在收件箱）。"
-                    trace(capability, "已取消", isError: true)
                     break
                 }
                 switch message {
@@ -416,7 +427,9 @@ final class AIService: ObservableObject {
             lastRunNewProposals = newCount
             lastRunProposalIDs = store.proposals.filter { !existingProposalIDs.contains($0.id) }.map(\.id)
             // 收尾轨迹：轨迹对话窗里每次运行要有明确的结束标记
-            if let err = lastError, !err.isEmpty {
+            if cancelRequested {
+                trace(capability, "已取消", detail: lastError ?? "作者停止了任务", isError: true)
+            } else if let err = lastError, !err.isEmpty {
                 trace(capability, "失败", detail: err, isError: true)
             } else {
                 trace(capability, "完成", detail: newCount > 0 ? "新登记 \(newCount) 条提案，待作者审阅" : "结束（无新提案）")
@@ -437,8 +450,15 @@ final class AIService: ObservableObject {
 
     /// 开书前的方向调研：不需要项目，AI 文本就地显示；作者自己决定开什么书。
     func runTopicScanResearch(config: AgentConfig, material: String, ownAssets: String) async -> String? {
+        trace(.topicScan, "开始处理")
         if let problem = validateConfig(config) {
             lastError = problem
+            trace(.topicScan, "中止", detail: problem, isError: true)
+            return nil
+        }
+        guard !running else {
+            lastError = "已有 AI 任务在运行，请等它结束。"
+            trace(.topicScan, "中止", detail: lastError ?? "", isError: true)
             return nil
         }
         running = true
@@ -450,6 +470,11 @@ final class AIService: ObservableObject {
         let result = await runTextOnlyFree(config: config, capability: .topicScan,
                                            userMessage: PromptLibrary.topicScanTask(material: material, ownAssets: ownAssets))
         streamPreview = result ?? streamPreview
+        if let err = lastError, !err.isEmpty {
+            trace(.topicScan, "失败", detail: err, isError: true)
+        } else {
+            trace(.topicScan, "完成", detail: result == nil ? "结束（无产出）" : "调研完成")
+        }
         return result
     }
 
@@ -457,8 +482,15 @@ final class AIService: ObservableObject {
     /// 元信息从 project.json 读取；产出就地预览，作者采用才写 cover.svg。
     func runCoverSVGForBook(config: AgentConfig, bookTitle: String, genre: String, premise: String,
                             authorName: String, mood: String, direction: String) async -> String? {
+        trace(.coverBrief, "开始处理")
         if let problem = validateConfig(config) {
             lastError = problem
+            trace(.coverBrief, "中止", detail: problem, isError: true)
+            return nil
+        }
+        guard !running else {
+            lastError = "已有 AI 任务在运行，请等它结束。"
+            trace(.coverBrief, "中止", detail: lastError ?? "", isError: true)
             return nil
         }
         running = true
@@ -493,11 +525,18 @@ final class AIService: ObservableObject {
                 default: break
                 }
             }
-            return out.trimmingCharacters(in: .whitespacesAndNewlines)
+            let text = out.trimmingCharacters(in: .whitespacesAndNewlines)
+            if let err = lastError, !err.isEmpty {
+                trace(.coverBrief, "失败", detail: err, isError: true)
+            } else {
+                trace(.coverBrief, "完成", detail: text.isEmpty ? "结束（无产出）" : "SVG 已生成（\(text.count) 字符）")
+            }
+            return text
         } catch {
             if lastError == nil {
                 lastError = cancelRequested ? "已取消本次任务。" : error.localizedDescription
             }
+            trace(.coverBrief, "失败", detail: lastError ?? "", isError: true)
             return nil
         }
     }
@@ -516,9 +555,16 @@ final class AIService: ObservableObject {
             var out = ""
             for await message in agent.stream(userMessage) {
                 switch message {
-                case .partialMessage(let d): out += filter.push(d.text)
+                case .partialMessage(let d):
+                    let piece = filter.push(d.text)
+                    out += piece
+                    // 选题窗会实时展示 ai.streamPreview；这条旁路不能只攒最终结果
+                    streamPreview += piece
+                    if streamPreview.count > 4000 { streamPreview = String(streamPreview.suffix(4000)) }
                 case .result(let d):
-                    out += filter.flush()
+                    let tail = filter.flush()
+                    out += tail
+                    streamPreview += tail
                     if d.subtype != .success { lastError = d.text }
                 default: break
                 }
@@ -990,6 +1036,7 @@ final class AIService: ObservableObject {
         }
 
         if cancelRequested { pipelineStage = ""; pipelineNote = "已取消（未开始写草稿）。"; return }
+        var stepErrors: [String] = []
         pipelineStage = "写草稿"
         await runDraft(store: store, config: config, chapter: n, mainline: mainline)
         guard lastError == nil,
@@ -1004,16 +1051,31 @@ final class AIService: ObservableObject {
         // 审查与去AI味都针对**草稿文本**（overrideText），不是已入库的正文——草稿还没进正文
         pipelineStage = "一致性审查"
         await runValidation(store: store, config: config, chapter: n, overrideText: draft.text)
+        if let err = lastError, !err.isEmpty { stepErrors.append("一致性审查：\(err)") }
         pipelineDone.append(lastError == nil ? "一致性审查" : "一致性审查（失败，见错误）")
 
         if cancelRequested { pipelineStage = ""; pipelineNote = "已取消（草稿与审查结果已进收件箱）。"; return }
         pipelineStage = "去AI味"
         await runDeslop(store: store, config: config, chapter: n, overrideText: draft.text,
                         draftProposalID: draftProposal.id)
+        if let err = lastError, !err.isEmpty { stepErrors.append("去AI味：\(err)") }
         pipelineDone.append(lastError == nil ? "去AI味" : "去AI味（失败，见错误）")
 
+        if cancelRequested {
+            pipelineStage = ""
+            pipelineNote = "已取消（去AI味未完成；草稿与审查结果仍在收件箱）。"
+            return
+        }
         pipelineStage = ""
-        pipelineNote = "四步都跑完了，产出全在收件箱。读过草稿、按需给意见修复，满意了再采纳入库（采纳前会自动留快照）。"
+        if stepErrors.isEmpty {
+            pipelineNote = "四步都跑完了，产出全在收件箱。读过草稿、按需给意见修复，满意了再采纳入库（采纳前会自动留快照）。"
+        } else {
+            // 下一步 run 会清空 lastError：这里必须把中间步骤的失败保留下来，
+            // 否则界面只看到“四步跑完”，审查失败被静默吞掉。
+            let summary = stepErrors.joined(separator: "；")
+            pipelineNote = "流程结束，但有步骤失败：\(summary)。已产出的结果仍在收件箱。"
+            lastError = summary
+        }
     }
 
     func runDraft(store: ProjectStore, config: AgentConfig, chapter n: Int, mainline: String) async {
@@ -1057,6 +1119,7 @@ final class AIService: ObservableObject {
     /// 一块就会登记一个草稿版本，作者会在收件箱里看到七八个半截草稿。
     private func runTextOnly(store: ProjectStore, config: AgentConfig,
                              capability: AICapability, userMessage: String) async -> String? {
+        trace(capability, "开始处理")
         if let problem = validateConfig(config) {
             lastError = problem
             trace(capability, "中止", detail: problem, isError: true)
@@ -1065,6 +1128,7 @@ final class AIService: ObservableObject {
         // 纯文本通道同样要占用运行态：否则工具箱的进度/禁用全部失效，且能并发起多条 AI 流
         guard !running else {
             lastError = "已有 AI 任务在运行，请等它结束。"
+            trace(capability, "中止", detail: lastError ?? "", isError: true)
             return nil
         }
         running = true
@@ -1073,12 +1137,20 @@ final class AIService: ObservableObject {
         streamPreview = ""
         lastError = nil
         lastToolLog = []
-        trace(capability, "开始处理")
         defer {
             running = false
             runningCapability = nil
         }
-        return await streamTextOnly(store: store, config: config, capability: capability, userMessage: userMessage)
+        let result = await streamTextOnly(store: store, config: config, capability: capability, userMessage: userMessage)
+        if cancelRequested {
+            trace(capability, "已取消", detail: lastError ?? "作者停止了任务", isError: true)
+        } else if let err = lastError, !err.isEmpty {
+            trace(capability, "失败", detail: err, isError: true)
+        } else {
+            let words = result.map { WordStats.chineseCount($0) } ?? 0
+            trace(capability, "完成", detail: words > 0 ? "结束（\(words) 字文本）" : "结束（无文本产出）")
+        }
+        return result
     }
 
     /// 纯文本流本体：**不碰 running**。
@@ -1142,7 +1214,11 @@ final class AIService: ObservableObject {
     /// 产出仍然是一份草稿提案，采纳前不进正文。
     func runDraftByScenes(store: ProjectStore, config: AgentConfig, chapter n: Int,
                           mainline: String, wordsPerChunk: Int = 1200) async {
-        guard !running else { return }
+        guard !running else {
+            lastError = "已有 AI 任务在运行，请等它结束。"
+            trace(.chapterDraft, "中止", detail: lastError ?? "", isError: true)
+            return
+        }
         running = true
         cancelRequested = false
         runningCapability = .chapterDraft
@@ -1151,14 +1227,22 @@ final class AIService: ObservableObject {
         lastToolLog = []
         lastRunNewProposals = nil
         lastRunProposalIDs = []
-        defer { running = false; runningCapability = nil }
+        trace(.chapterDraft, "开始处理", detail: "分段写作")
+        defer { running = false; runningCapability = nil; endAgent() }
 
+        if let problem = validateConfig(config) {
+            lastError = problem
+            trace(.chapterDraft, "中止", detail: problem, isError: true)
+            return
+        }
         guard let sk = store.chapter(n)?.skeleton, !sk.beats.isEmpty else {
             lastError = "分段写作需要先有骨架（按节拍分块）。先搭骨架并批准，或用普通的「写草稿」。"
+            trace(.chapterDraft, "中止", detail: lastError ?? "", isError: true)
             return
         }
         guard sk.humanApproved else {
             lastError = "分段写作需要作者先批准骨架（写前契约）。批准后再试，或用普通的「写草稿」。"
+            trace(.chapterDraft, "中止", detail: lastError ?? "", isError: true)
             return
         }
         let pack = ContextPackBuilder.build(store: store, forChapter: n, budget: config.contextTokenBudget)
@@ -1184,9 +1268,12 @@ final class AIService: ObservableObject {
             if cancelRequested {
                 pipelineStage = ""
                 lastError = "已取消分段写作（前 \(i) 段未保存）。"
+                trace(.chapterDraft, "已取消", detail: lastError ?? "", isError: true)
                 return
             }
             pipelineStage = "写第 \(i + 1)/\(chunks.count) 段"
+            // Agent 面板的 liveTail 读 currentStep：分段进度不能只留在 PipelineSheet 里
+            currentStep = "一键写作 · 写第 \(i + 1)/\(chunks.count) 段"
             let message = PromptLibrary.sceneDraftTask(
                 chapter: n, title: store.chapter(n)?.title ?? "",
                 beatIndex: i + 1, beatCount: chunks.count,
@@ -1200,13 +1287,20 @@ final class AIService: ObservableObject {
             guard let piece = await streamTextOnly(store: store, config: config,
                                                    capability: .chapterDraft, userMessage: message) else {
                 pipelineStage = ""
-                if lastError == nil { lastError = "第 \(i + 1) 段没有产出，已中止（前 \(i) 段未保存）。" }
+                if cancelRequested {
+                    lastError = "已取消分段写作（前 \(i) 段未保存）。"
+                    trace(.chapterDraft, "已取消", detail: lastError ?? "", isError: true)
+                } else {
+                    if lastError == nil { lastError = "第 \(i + 1) 段没有产出，已中止（前 \(i) 段未保存）。" }
+                    trace(.chapterDraft, "失败", detail: lastError ?? "", isError: true)
+                }
                 return
             }
             let cleaned = Self.stripProsePreamble(piece)
             guard !cleaned.isEmpty else {
                 pipelineStage = ""
                 lastError = "第 \(i + 1) 段返回的是空的，已中止。"
+                trace(.chapterDraft, "失败", detail: lastError ?? "", isError: true)
                 return
             }
             written += (written.isEmpty ? "" : "\n\n") + cleaned
@@ -1226,6 +1320,8 @@ final class AIService: ObservableObject {
         lastRunNewProposals = max(0, store.proposals.count - before)
         lastRunProposalIDs = [draftProposal.id]
         pipelineNote = "分段草稿 v\(version) 已进收件箱（\(WordStats.chineseCount(text)) 字，\(chunks.count) 段）。接着可以跑一致性审查与去AI味。"
+        trace(.chapterDraft, "完成",
+              detail: "分段草稿 v\(version) 已进收件箱（\(WordStats.chineseCount(text)) 字，\(chunks.count) 段）")
     }
 
     /// 剥掉模型爱加的非正文外壳：围栏、"第N章"标题行、"以下是…"之类的开场白。

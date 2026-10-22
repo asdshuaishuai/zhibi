@@ -488,6 +488,22 @@ final class ProjectStore: ObservableObject {
         return String(format: "F%02d", maxN + 1)
     }
 
+    func nextEventID() -> String {
+        let maxN = timelineEvents.compactMap { e -> Int? in
+            guard e.id.hasPrefix("E"), let n = Int(e.id.dropFirst()) else { return nil }
+            return n
+        }.max() ?? 0
+        return String(format: "E%02d", maxN + 1)
+    }
+
+    func nextStorylineID() -> String {
+        let maxN = storylines.compactMap { l -> Int? in
+            guard l.id.hasPrefix("L"), let n = Int(l.id.dropFirst()) else { return nil }
+            return n
+        }.max() ?? 0
+        return String(format: "L%02d", maxN + 1)
+    }
+
     /// 活跃伏笔 due-list（NarraCat：major 全部 + medium 限本卷 + small 限近程）
     func activeClues(currentChapter: Int) -> [Clue] {
         clues.filter { $0.status == .planted || $0.status == .developing }
@@ -576,7 +592,9 @@ final class ProjectStore: ObservableObject {
         var outcome = ApplyOutcome()
         switch payload {
         case .outlineEvents(let events):
-            for e in events {
+            for raw in events {
+                var e = raw
+                if e.id.isEmpty { e.id = nextEventID() }
                 outcome.total += 1
                 // 生产端已保证 E 号全局唯一；这里再按 id|chapter 查重会放进重复 E 号
                 if timelineEvents.contains(where: { $0.id == e.id }) {
@@ -588,7 +606,9 @@ final class ProjectStore: ObservableObject {
             }
             timelineEvents.sort { ($0.chapter, $0.id) < ($1.chapter, $1.id) }
         case .storylines(let lines):
-            for l in lines {
+            for raw in lines {
+                var l = raw
+                if l.id.isEmpty { l.id = nextStorylineID() }
                 outcome.total += 1
                 if storylines.contains(where: { $0.id == l.id }) {
                     outcome.skipped.append("故事线 [\(l.id)] 已存在（编号撞号）")
@@ -598,13 +618,20 @@ final class ProjectStore: ObservableObject {
                 }
             }
         case .clues(let newClues):
-            for c in newClues {
+            for raw in newClues {
+                var c = raw
                 outcome.total += 1
+                guard !c.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                    outcome.skipped.append("伏笔标题为空，未登记")
+                    continue
+                }
+                if c.id.isEmpty { c.id = nextClueID() }
                 if let idx = clues.firstIndex(where: { $0.id == c.id }) {
                     // 编号撞号时保护作者已维护的台账：状态/动作日志/埋设信息不被 AI 版本覆盖
                     var merged = c
                     let existing = clues[idx]
                     let authorTouched = !existing.actions.isEmpty || existing.status != .planted
+                        || !existing.plantedQuote.isEmpty || existing.targetPayoffChapter != nil
                     if authorTouched {
                         merged.status = existing.status
                         merged.actions = existing.actions
@@ -624,6 +651,10 @@ final class ProjectStore: ObservableObject {
                 outcome.skipped.append("提案缺少有效章节号（章节可能已删除）")
                 return outcome
             }
+            guard !sk.beats.isEmpty else {
+                outcome.skipped.append("骨架没有任何节拍，未写入")
+                return outcome
+            }
             updateChapter(n) { $0.skeleton = sk; if $0.status == .empty { $0.status = .skeletoned } }
             // 骨架是写前契约，不是已发生的事实：这里只落骨架，**不碰伏笔台账**。
             // 触点合同由 Validator 对着正文验收；台账的推进/回收只能由作者或正文对账写入。
@@ -633,6 +664,10 @@ final class ProjectStore: ObservableObject {
             // 作者采纳草稿才走到这里；覆盖前自动快照，快照失败则中止采纳（旧稿保住，提案保持待审）
             guard let n = chapter, n > 0, self.chapter(n) != nil else {
                 outcome.skipped.append("提案缺少有效章节号（章节可能已删除）")
+                return outcome
+            }
+            guard !draft.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                outcome.skipped.append("草稿正文为空，未覆盖正文")
                 return outcome
             }
             if let existing = self.chapter(n), !existing.prose.isEmpty {
@@ -665,10 +700,13 @@ final class ProjectStore: ObservableObject {
                     var merged = c
                     let existing = clues[idx]
                     let authorTouched = !existing.actions.isEmpty || existing.status != .planted
+                        || !existing.plantedQuote.isEmpty || existing.targetPayoffChapter != nil
                     if authorTouched {
                         merged.status = existing.status
                         merged.actions = existing.actions
                         merged.lastActionChapter = existing.lastActionChapter
+                        if !existing.plantedQuote.isEmpty { merged.plantedQuote = existing.plantedQuote }
+                        if let target = existing.targetPayoffChapter { merged.targetPayoffChapter = target }
                     }
                     clues[idx] = merged
                 } else {

@@ -77,6 +77,8 @@ struct AIToolboxSheet: View {
                 }
                 .pickerStyle(.segmented)
                 .labelsHidden()
+                // 运行中禁止切工具：否则本次产出会被清掉/错挂到另一个工具下
+                .disabled(ai.running)
                 Spacer()
                 if ai.running {
                     ProgressView().controlSize(.small)
@@ -109,6 +111,16 @@ struct AIToolboxSheet: View {
                     .padding(.bottom, ZBSpace.sm)
                     .background(.regularMaterial)
             }
+        }
+        // 切换工具时清掉上一轮结果：否则「整理旧稿」的提案会被当成「短篇成稿」的产出展示
+        .onChange(of: tool) { _ in
+            resultText = ""
+            coverSVGCode = ""
+            adopted = false
+            savedAsProposal = false
+            localNote = nil
+            ai.lastRunNewProposals = nil
+            ai.lastRunProposalIDs = []
         }
     }
 

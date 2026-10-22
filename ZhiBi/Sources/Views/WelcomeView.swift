@@ -15,6 +15,16 @@ struct RootView: View {
                     ProjectWorkspaceView(vm: vm, store: store)
                 }
             }
+            // 打开工程要读全部账本/章节，大书或 iCloud 卷上会有明显等待；不能点完毫无反馈
+            if vm.openingProject {
+                VStack(spacing: ZBSpace.sm) {
+                    ProgressView().controlSize(.regular)
+                    Text("正在打开项目…").font(.callout).foregroundStyle(.secondary)
+                }
+                .padding(.horizontal, 28).padding(.vertical, 20)
+                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
+                .shadow(color: .black.opacity(0.18), radius: 16, y: 6)
+            }
         }
         // 挂在根视图：书架与工作区都能看到操作反馈（原先只挂工作区，书架导入完成完全没提示）
         .zbToast(vm)

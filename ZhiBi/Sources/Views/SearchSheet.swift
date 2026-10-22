@@ -89,6 +89,11 @@ struct SearchSheet: View {
         }
         .frame(width: ZBSpace.Sheet.wide, height: 560)
         .onChange(of: query) { q in scheduleScan(q) }
+        // 面板开着时后台采纳了提案/改了正文：结果要跟着刷新，不能停在上一次扫描
+        .onChange(of: store.proposals.count) { _ in if !trimmed.isEmpty { flushNow() } }
+        .onChange(of: store.chapters.count) { _ in if !trimmed.isEmpty { flushNow() } }
+        .onChange(of: store.clues.count) { _ in if !trimmed.isEmpty { flushNow() } }
+        .onChange(of: store.facts.count) { _ in if !trimmed.isEmpty { flushNow() } }
         .onAppear { DispatchQueue.main.async { queryFocused = true } }
     }
 

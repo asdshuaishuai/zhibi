@@ -448,7 +448,8 @@ enum ImportService {
                 }
             case .canon, .outline:
                 let meta = Self.canonMetadata(from: item.content)
-                let section = CanonSection(title: item.kind == .outline ? "大纲·\(item.title)" : item.title,
+                let title = item.kind == .outline ? "大纲·\(item.title)" : (meta.title ?? item.title)
+                let section = CanonSection(title: title,
                                            content: meta.body, certainty: meta.certainty,
                                            category: CanonCategory.match(meta.category).rawValue)
                 if !store.canonSections.contains(where: { $0.title == section.title }) {
@@ -478,8 +479,10 @@ enum ImportService {
         for e in summary.timelineEvents where !e.id.isEmpty && !store.timelineEvents.contains(where: { $0.id == e.id }) {
             store.timelineEvents.append(e)
         }
-        // 长程档案卡：按章去重，不覆盖已有
-        for d in summary.dossiers where !store.dossiers.contains(where: { $0.chapter == d.chapter }) {
+        let skippedChapters = Set(summary.items.filter { $0.kind == .skip }.compactMap(\.chapterNumber))
+        // 长程档案卡：按章去重，不覆盖已有；用户明确跳过的章不要带档案
+        for d in summary.dossiers where !skippedChapters.contains(d.chapter)
+            && !store.dossiers.contains(where: { $0.chapter == d.chapter }) {
             store.dossiers.append(d)
         }
         store.dossiers.sort { $0.chapter < $1.chapter }
@@ -520,11 +523,10 @@ enum ImportService {
             store.project.dailyWords = daily
         }
         // 每章结构化 meta：摘要/随手记/骨架（正文 md 之外的权威副本）
-        let skippedChapters = Set(summary.items.filter { $0.kind == .skip }.compactMap(\.chapterNumber))
         for (num, ic) in summary.chapterMeta {
             let hasProseItem = summary.items.contains { $0.kind == .chapter && $0.chapterNumber == num }
-            // 用户明确跳过该章时，不要再用 chapter_meta 把它建回来
-            guard !skippedChapters.contains(num) || store.chapter(num) != nil else { continue }
+            // 用户明确跳过该章时，正文和 meta 都不导入（不能只跳过正文却改骨架/摘要）
+            guard !skippedChapters.contains(num) else { continue }
             // 非执笔导出且该章既没有正文也没有已存在章节：不要凭追踪 JSON 凭空造空章
             guard hasProseItem || summary.fromZhiBiExport || store.chapter(num) != nil else { continue }
             _ = store.ensureChapter(num)
@@ -545,13 +547,17 @@ enum ImportService {
         try store.saveNow()
     }
 
-    /// 从导出 md 头部 HTML 注释读回确定度与分类
-    /// （<!-- zhibi:certainty=canon --> / <!-- zhibi:category=世界观 -->）
-    static func canonMetadata(from content: String) -> (certainty: Certainty, category: String, body: String) {
+    /// 从导出 md 头部 HTML 注释读回标题、确定度与分类
+    /// （<!-- zhibi:title=... --> / certainty=... / category=...）
+    static func canonMetadata(from content: String) -> (certainty: Certainty, category: String, title: String?, body: String) {
         var lines = content.components(separatedBy: "\n")
         var certainty: Certainty = .tentative
         var category = CanonCategory.uncategorized.rawValue
+        var title: String?
         while let first = lines.first, first.hasPrefix("<!-- zhibi:") {
+            if let range = first.range(of: "title=") {
+                title = String(first[range.upperBound...]).replacingOccurrences(of: " -->", with: "")
+            }
             if let range = first.range(of: "certainty=") {
                 let value = String(first[range.upperBound...]).replacingOccurrences(of: " -->", with: "")
                 certainty = ["canon": .canon, "blank": .open][value] ?? .tentative
@@ -562,7 +568,7 @@ enum ImportService {
             lines.removeFirst()
         }
         let body = lines.joined(separator: "\n").trimmingCharacters(in: .newlines)
-        return (certainty, category, body)
+        return (certainty, category, title, body)
     }
 
     /// 容错解析：oh-story 追踪 JSON 常含字符串内裸换行等非法控制字符，

@@ -119,11 +119,16 @@ enum ExportService {
         }
 
         // 设定
+        var usedCanonNames = Set<String>()
         for section in store.canonSections {
             // 确定度与分类写成首行 HTML 注释：人读无感，导入侧回读（等价环需要）
             let certainty = section.certainty == .canon ? "canon" : (section.certainty == .tentative ? "tentative" : "blank")
-            try write("<!-- zhibi:certainty=\(certainty) -->\n<!-- zhibi:category=\(section.category) -->\n" + section.content,
-                      "设定/\(safeName(section.title)).md")
+            // 文件名会清洗空格/特殊字符，标题必须单独存一份才能无损回读
+            var fileName = safeName(section.title)
+            while usedCanonNames.contains(fileName) { fileName += "-x" }
+            usedCanonNames.insert(fileName)
+            try write("<!-- zhibi:title=\(section.title) -->\n<!-- zhibi:certainty=\(certainty) -->\n<!-- zhibi:category=\(section.category) -->\n" + section.content,
+                      "设定/\(fileName).md")
         }
 
         // 正文
@@ -262,9 +267,8 @@ enum ExportService {
     }
 
     private static func safeName(_ s: String) -> String {
-        s.replacingOccurrences(of: "/", with: "_")
-            .replacingOccurrences(of: ":", with: "_")
-            .replacingOccurrences(of: " ", with: "")
+        // 复用项目层文件名清洗（拒绝路径穿越 + 截断到 APFS 安全长度），再去掉空格让目录更紧凑
+        ProjectLayout.safeFileName(s).replacingOccurrences(of: " ", with: "")
     }
 }
 

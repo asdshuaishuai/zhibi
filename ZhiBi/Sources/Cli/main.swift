@@ -327,6 +327,9 @@ if let mIdx = CommandLine.arguments.firstIndex(of: "--mock-agent"), mIdx + 2 < C
     mck("跑完给出下一步指引", ai.pipelineNote.contains("收件箱"), ai.pipelineNote)
     mck("跑完进度标记已清空", ai.pipelineStage.isEmpty)
     mck("一键链路无错误", ai.lastError == nil, String(describing: ai.lastError))
+    mck("一键流水线有轨迹完成标记", ai.trajectory.contains {
+        $0.capability == AICapability.chapterDraft.rawValue && $0.event == "完成"
+    }, "\(ai.trajectory.prefix(6).map { "\($0.capability)/\($0.event)" })")
 
 
     // ---- 7. 分段写作：长章按节拍分块续写再拼装 ----
@@ -355,6 +358,10 @@ if let mIdx = CommandLine.arguments.firstIndex(of: "--mock-agent"), mIdx + 2 < C
     } else {
         for _ in 0..<8 { mck("分段草稿提案", false, "拿不到草稿提案") }
     }
+    mck("分段写作轨迹有开始与结束标记",
+        ai.trajectory.first?.event == "完成"
+        && ai.trajectory.contains { $0.event.hasPrefix("开始处理") && $0.detail.contains("分段写作") },
+        "\(ai.trajectory.prefix(3).map { "\($0.capability)/\($0.event)/\($0.detail)" })")
     // 没有批准的骨架时必须拒绝，而不是硬编一段出来
     _ = store.ensureChapter(5)
     store.updateChapter(5) { $0.title = "第五章"; $0.status = .writing; $0.prose = "" }
@@ -979,8 +986,14 @@ func roundTripTests() async throws {
                                    turns: ["藏身→暴露"], hooks: ["紫亮"], relics: ["断刀"])]
     src.characterAliases = [CharacterAlias(canonicalName: "紫渊", aliases: ["少年"])]
     src.stages = [Stage(id: 1, name: "星火初燃", chapterStart: 1, chapterEnd: 10, theme: "逃亡与相遇")]
-    src.canonSections = [CanonSection(title: "世界观", content: "命数九层。", certainty: .canon,
-                                      category: CanonCategory.worldview.rawValue)]
+    src.canonSections = [
+        CanonSection(title: "世界观", content: "命数九层。", certainty: .canon,
+                     category: CanonCategory.worldview.rawValue),
+        CanonSection(title: "势力 人物", content: "三方对峙。", certainty: .tentative,
+                     category: CanonCategory.faction.rawValue),
+        CanonSection(title: "势力人物", content: "无空格版本。", certainty: .tentative,
+                     category: CanonCategory.faction.rawValue),
+    ]
     src.project.dailyWords = ["2026-09-19": 2100]
 
     let exportDir = try ExportService.exportOhStory(store: src).url
@@ -1034,6 +1047,12 @@ func roundTripTests() async throws {
             && $0.category == CanonCategory.worldview.rawValue
             && $0.content.trimmingCharacters(in: .whitespacesAndNewlines) == "命数九层。"
     })
+    check("往返-设定标题含空格不丢字符", dst.canonSections.contains {
+        $0.title == "势力 人物" && $0.category == CanonCategory.faction.rawValue
+    }, "题名=\(dst.canonSections.map(\.title))")
+    check("往返-设定文件名冲突不丢文档", dst.canonSections.contains {
+        $0.title == "势力人物" && $0.content.trimmingCharacters(in: .whitespacesAndNewlines) == "无空格版本。"
+    }, "题名=\(dst.canonSections.map(\.title))")
     // 大纲 md 是派生视图：不再重复进设定库
     check("往返-大纲不重复入库", !dst.canonSections.contains { $0.title.contains("主线大纲") },
           "设定 \(dst.canonSections.map(\.title))")
@@ -1396,6 +1415,30 @@ func acceptOutcomeTests() async throws {
     } else {
         check("档案卡提案登记", false)
     }
+
+    // ⑤ 空草稿/空骨架必须拒绝，不能把正文或骨架清空
+    let emptyStore = ProjectStore(rootURL: URL(fileURLWithPath: "/tmp/zhibi-ao3-\(UUID().uuidString).zhibi"))
+    emptyStore.ensureChapter(1)
+    emptyStore.updateChapter(1) { $0.prose = "原文还在。" }
+    let emptyDraft = AIProposal(capability: .chapterDraft, chapterNumber: 1, title: "空草稿",
+                                payload: .draft(ChapterDraft(chapter: 1, text: " \n ", version: 1)))
+    emptyStore.addProposal(emptyDraft)
+    check("空草稿不覆盖正文",
+          !emptyStore.acceptProposal(emptyDraft.id) && emptyStore.chapter(1)?.prose == "原文还在。")
+    let emptySkeleton = AIProposal(capability: .chapterSkeleton, chapterNumber: 1, title: "空骨架",
+                                   payload: .skeleton(ChapterSkeleton()))
+    emptyStore.addProposal(emptySkeleton)
+    check("空骨架不写入",
+          !emptyStore.acceptProposal(emptySkeleton.id) && emptyStore.chapter(1)?.skeleton == nil)
+
+    let idStore = ProjectStore(rootURL: URL(fileURLWithPath: "/tmp/zhibi-ao4-\(UUID().uuidString).zhibi"))
+    idStore.ensureChapter(1)
+    let noIDClue = AIProposal(capability: .clueLedger, title: "无编号伏笔",
+                              payload: .clues([Clue(title: "没有编号")]))
+    idStore.addProposal(noIDClue)
+    idStore.acceptProposal(noIDClue.id)
+    check("空伏笔编号自动分配", idStore.clues.first?.id.isEmpty == false,
+          "id=\(idStore.clues.first?.id ?? "<nil>")")
 }
 
 try await acceptOutcomeTests()
