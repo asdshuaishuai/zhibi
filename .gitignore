@@ -5,3 +5,6 @@ xcuserdata/
 build/
 DerivedData/
 .playwright-mcp/
+
+# AI 工具的工作痕迹，不属于项目源码
+.commandcode/
