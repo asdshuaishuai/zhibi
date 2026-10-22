@@ -15,7 +15,7 @@
 ## 人机协同边界（产品铁律）
 
 1. **AI 的产出一律是提案，整章草稿也不例外。** 早期版本"结构上不存在写正文的能力"；现在有了 `propose_draft`，铁律随之精确化为：草稿只能以提案形态存在，作者采纳前不进 `prose.md`，采纳时自动快照可回滚。工具面里依然**不存在任何直接写正文的工具**。
-2. **AI 的一切产出都是"提案"（Proposal）。** 大纲事件、时间线、线索、章节骨架、卷级弧光、记忆事实、验证报告、连贯性审查、埋点修复方案、大纲同步建议、去AI味建议——全部进入提案收件箱，由作者 **接受 / 修改后接受 / 拒绝**。接受前不入库。
+2. **AI 的一切产出都是"提案"（Proposal）。** 大纲事件、时间线、线索、章节骨架、卷级弧光、记忆事实、验证报告、连贯性审查、埋点修复方案、大纲同步建议、去AI味建议——全部进入提案收件箱，由作者 **接受 / 拒绝**；骨架、伏笔、设定等采纳后仍可在对应台账继续修改。接受前不入库。
 3. **确定性代码做账房，LLM 只做花。** 骨架覆盖核对、骨架闸门打分、伏笔合同对账、全书连贯性扫描、大纲计划 vs 实际对账、字数统计、AI 味 25 项扫描、时间线冲突检出——全部零 LLM 成本；LLM 只用于理解与建议。
 4. **审校只查客观错误**（连续性矛盾 / 设定违背 / 骨架锚点不可识别 / 伏笔合同未兑现 / 物理不可能 / 动机断裂 / 能力资源不一致 / 性格漂移 / 称谓身份混乱 / 因果缺口 / 承诺失约），只报告不改正文；文风好坏不评。
 5. **正文永远先落盘。** 人的每一次编辑直接保存；记忆同步、影响评估都是事后行为。
@@ -90,17 +90,17 @@
 
 3000 字以上一次性生成，后半段必然退化：句子开始复读、结尾被草草收掉、骨架后几拍被压缩成一两句交代。`runDraftByScenes` 按节拍的 `suggestedWords` 把骨架切成若干块（单拍不被切开），逐块生成，**每块的 prompt 里带着已经写出来的实际结尾**（尾部 1500 字），要求无缝接住情绪、时态、在场人物与镜头位置；非末块被明确告知"不要收束本章、不要写章尾钩子"，末块才落地钩子。各块文本经 `stripProsePreamble` 剥掉围栏与开场白后拼装，最终只登记**一份**草稿提案——逐块都走 `propose_draft` 的话作者会在收件箱里看到七八个半截草稿。
 
-这里踩过一个坑并已用断言守住：`runDraftByScenes` 走的是 `runTextOnly`（不带工具、只要正文），**不经过 `run()`**，所以 `run()` 里的创作法典集中注入对它无效——分段写作一度整个丢掉了流派档案与创作法，而它恰恰是最需要"怎么写"指导的路径。凡新增旁路通道，注入必须跟着走。
+这里踩过一个坑并已用断言守住：`runDraftByScenes` 走的是 `streamTextOnly`（不带工具、只要正文），**不经过 `run()`**，所以 `run()` 里的创作法典集中注入对它无效——分段写作一度整个丢掉了流派档案与创作法，而它恰恰是最需要"怎么写"指导的路径。凡新增旁路通道，注入必须跟着走。
 
-## Agent 基座（fx 模型同构）
+另一个坑：`runDraftByScenes` 外层已经持有 `running` 运行态，内层若再调用带互斥守卫的 `runTextOnly` 就会必然自锁（"已有 AI 任务在运行"）。因此文本流本体拆成 `streamTextOnly`（不碰 running），由 `runTextOnly` 或分段写作各自接管运行态。
 
-libfx 没有 Swift SDK，因此按其文档模型在 Swift 内同构实现 `AgentCore`：
+## Agent 基座（fx 模型设计 + OpenAgentSDK 实现）
 
-- `FxAgent`：一段内存会话。`prompt(_:tools:)` 返回 `FxTurn`（`AsyncThrowingStream<FxEvent>`，事件：`textDelta / toolCall / finished`）；`checkpoint()` 序列化会话状态，由宿主（项目目录）持久化；`close()`。
+按 fx 的「模型提议、宿主裁决」模型设计，Swift 侧用 OpenAgentSDK 承载会话：
+
 - **宿主三提供**：指令（系统 prompt = PromptLibrary）、工具（仅 `propose_*` 结构化提案工具 + 只读查询工具）、凭据（API Key 存 macOS 钥匙串）。
-- `AgentTransport` 两个实现：
-  - `OpenAICompatibleTransport`（默认）：SSE 流式 chat/completions + tool-calling 循环，兼容 DeepSeek / GLM / Moonshot / OpenAI / Ollama 等。
-  - `ACPTransport`（实验）：以 ACP 客户端身份 spawn `fx acp` 子进程（newline JSON-RPC 2.0 over stdio，先 `initialize` 再 `session/new`/`session/prompt`）。
+- **传输**：OpenAI 兼容 SSE chat/completions + tool-calling 循环，兼容 DeepSeek / GLM / Moonshot / OpenAI / Ollama 与本地端点。没有单独的 ACP 子进程通道；模型不调用工具时，宿主解析围栏 JSON 兜底登记提案（工具名仍受当前能力白名单约束）。
+- **会话状态**：每次任务独立，不持久化会话 checkpoint；`checkpoints/` 目录为预留。
 - **裁决机制**：模型调用 `propose_*` 工具 → 宿主把 payload 建成提案并回复"已登记为提案，等待作者确认"。不存在任何把内容写入正文的工具，模型口头声明不算数，一切以落盘提案 + 人的点击为准。
 
 ## 数据与磁盘布局（人随时可以拿走自己的稿子）
@@ -117,7 +117,7 @@ libfx 没有 Swift SDK，因此按其文档模型在 Swift 内同构实现 `Agen
 │   ├── meta.json         # 标题/状态/字数 + 骨架 + 摘要（瘦身结构：正文不在这里，另有 prose.md）
 │   ├── prose.md          # 人的正文（权威，纯 markdown）
 │   └── snapshots/        # 覆盖/去AI味前的版本快照（可回滚）
-└── checkpoints/          # FxAgent checkpoint 状态
+└── checkpoints/          # 预留（当前任务不持久化会话状态）
 ```
 
 纪律：**正文是 markdown（人读人写人可带走），结构是 JSON（机器权威，程序可校验），UI 里的派生视图一律由代码渲染、不反解析。**

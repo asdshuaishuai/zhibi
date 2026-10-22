@@ -83,8 +83,16 @@ struct ChapterEditorView: View {
             proseEditor
         }
         .animation(ZBMotion.standard(reduceMotion: reduceMotion), value: showSkeletonEditor)
+        .onChange(of: directive) { newValue in
+            let current = store.chapter(chapterNumber)?.directive ?? ""
+            if current != newValue {
+                store.updateChapter(chapterNumber) { $0.directive = newValue }
+            }
+        }
         .onAppear {
             store.autoSaveEnabled = vm.config.autoSave
+            // 本章指令持久化在章 meta 里，切章不会丢
+            directive = store.chapter(chapterNumber)?.directive ?? ""
             // 首次进入时若本章刚写完但还没档案卡，轻提示（每章一次）
             if let ch = store.chapter(chapterNumber), !ch.prose.isEmpty,
                !store.dossiers.contains(where: { $0.chapter == chapterNumber }),
@@ -98,12 +106,10 @@ struct ChapterEditorView: View {
         }
         .sheet(isPresented: $showPipeline) {
             PipelineSheet(vm: vm, store: store, chapterNumber: chapterNumber)
-                // AI 运行中禁止交互关闭：关掉就看不到流式预览与错误，容易以为卡死
-                //（任务本身在 vm 里继续，关不关都不影响提案落箱；但默认拦一下）
-                .interactiveDismissDisabled(vm.ai.running)
+            // 不拦关窗：任务在后台继续、结果进收件箱；拦着反而像卡死
         }
         .sheet(isPresented: $showInbox) {
-            ProposalInboxView(vm: vm, store: store)
+            ProposalInboxView(vm: vm, store: store, onClose: { showInbox = false })
                 .frame(minWidth: ZBSpace.Sheet.wide, minHeight: 480)
         }
         .sheet(isPresented: $showRecall) {
@@ -156,8 +162,9 @@ struct ChapterEditorView: View {
             } label: {
                 Label("一键成章", systemImage: "flowchart")
             }
-            .keyboardShortcut("w", modifiers: [.command, .shift])
-            .help("流水线：主线→骨架→写作→审查→修复→记忆/文风审查（⌘⇧W）")
+            // ⌘⇧W 是「关闭窗口」的习惯位，长任务入口改用 ⌘↩
+            .keyboardShortcut(.return, modifiers: .command)
+            .help("流水线：主线→骨架→写作→审查→修复→记忆/文风审查（⌘↩）")
 
             dailyChip
 
@@ -174,6 +181,28 @@ struct ChapterEditorView: View {
 
             // AI 协作菜单：召回 / 记录 / 快照
             Menu {
+                // 低频动作用菜单收口：编辑器头部在 1020pt 窗口下放不下太多独立按钮
+                Button {
+                    Task { await vm.ai.runSkeleton(store: store, config: vm.config, chapter: chapterNumber, directive: directive) }
+                } label: {
+                    Label("搭骨架（提案）", systemImage: "bone")
+                }
+                .disabled(vm.ai.running)
+                Button {
+                    Task { await vm.ai.runValidation(store: store, config: vm.config, chapter: chapterNumber) }
+                } label: {
+                    Label("一键验证", systemImage: "checkmark.seal")
+                }
+                .disabled(vm.ai.running)
+                .keyboardShortcut("v", modifiers: [.command, .shift])
+                Button {
+                    Task { await vm.ai.runDeslop(store: store, config: vm.config, chapter: chapterNumber) }
+                } label: {
+                    Label("去AI味", systemImage: "sparkles")
+                }
+                .disabled(vm.ai.running)
+                .keyboardShortcut("d", modifiers: [.command, .shift])
+                Divider()
                 Button {
                     showRecall = true
                 } label: {
@@ -202,14 +231,23 @@ struct ChapterEditorView: View {
                 .disabled(vm.ai.running)
                 Divider()
                 Button {
-                    _ = store.snapshotProse(chapter: chapterNumber, tag: "手动")
+                    if store.snapshotProse(chapter: chapterNumber, tag: "手动") != nil {
+                        vm.showToast("已保存本章快照")
+                    } else {
+                        vm.showToast("快照未保存：正文为空或磁盘写入失败", success: false)
+                    }
                 } label: {
                     Label("保存快照", systemImage: "clock.arrow.circlepath")
                 }
                 Button {
                     if let latest = store.snapshots(chapter: chapterNumber).first {
-                        store.restoreSnapshot(chapter: chapterNumber, name: latest.name)
-                        vm.showToast("已回滚到「\(latest.name)」")
+                        if store.restoreSnapshot(chapter: chapterNumber, name: latest.name) {
+                            vm.showToast("已回滚到「\(latest.name)」")
+                        } else {
+                            vm.showToast(store.lastSaveError ?? "回滚失败", success: false)
+                        }
+                    } else {
+                        vm.showToast("还没有可回滚的快照", success: false)
                     }
                 } label: {
                     Label("回滚到最近快照", systemImage: "arrow.counterclockwise")
@@ -232,31 +270,6 @@ struct ChapterEditorView: View {
             .disabled(vm.ai.running)
             .help("拆书 / 整理旧稿 / 封面提案 / 短篇成稿")
 
-            Button {
-                Task { await vm.ai.runSkeleton(store: store, config: vm.config, chapter: chapterNumber, directive: directive) }
-            } label: {
-                Label("搭骨架", systemImage: "bone")
-            }
-            .disabled(vm.ai.running)
-            .help("AI 提出本章骨架提案，由你修改批准；正文由你亲笔完成")
-
-            Button {
-                Task { await vm.ai.runValidation(store: store, config: vm.config, chapter: chapterNumber) }
-            } label: {
-                Label("验证", systemImage: "checkmark.seal")
-            }
-            .disabled(vm.ai.running)
-            .keyboardShortcut("v", modifiers: [.command, .shift])
-            .help("一键验证：确定性体检 + AI 五类客观错误审校（⌘⇧V）")
-
-            Button {
-                Task { await vm.ai.runDeslop(store: store, config: vm.config, chapter: chapterNumber) }
-            } label: {
-                Label("去AI味", systemImage: "sparkles")
-            }
-            .disabled(vm.ai.running)
-            .keyboardShortcut("d", modifiers: [.command, .shift])
-            .help("去AI味：本地扫描 + 逐处修改建议（⌘⇧D）")
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 8)
@@ -555,17 +568,31 @@ struct SnapshotBrowser: View {
     @State private var snapshots: [(name: String, text: String)] = []
 
     var body: some View {
-        HStack(spacing: 0) {
+        VStack(spacing: 0) {
+            HStack {
+                Text("快照 · 第\(chapterNumber)章").font(.headline)
+                Text("回滚前会把当前稿自动存一份").font(.caption2).foregroundStyle(.tertiary)
+                Spacer()
+                Button("完成") { dismiss() }
+                    .controlSize(.small)
+                    .keyboardShortcut(.cancelAction)
+            }
+            .padding(12)
+            Divider()
+            HStack(spacing: 0) {
             List {
                 ForEach(snapshots, id: \.name) { snap in
                     HStack {
                         Text(snap.name).font(.caption.monospaced())
                         Spacer()
                         Button("预览") { preview = snap }.controlSize(.small)
-                        Button("回滚到此版本", role: .destructive) {
-                            store.restoreSnapshot(chapter: chapterNumber, name: snap.name)
-                            vm.showToast("已回滚到「\(snap.name)」")
-                            dismiss()
+                        Button("回滚到此版本") {
+                            if store.restoreSnapshot(chapter: chapterNumber, name: snap.name) {
+                                vm.showToast("已回滚到「\(snap.name)」（回滚前版本已自动存快照）")
+                                dismiss()
+                            } else {
+                                vm.showToast(store.lastSaveError ?? "回滚失败", success: false)
+                            }
                         }
                         .controlSize(.small)
                     }
@@ -594,6 +621,7 @@ struct SnapshotBrowser: View {
             } else {
                 Text("选择一个快照预览").foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
             }
         }
         .frame(width: 860, height: 520)
@@ -661,6 +689,7 @@ struct SkeletonPanel: View {
                 } label: { Image(systemName: "chevron.up") }
                     .buttonStyle(.borderless)
                     .controlSize(.small)
+                    .accessibilityLabel("收起骨架面板")
             }
 
             if let sk = skeleton {
@@ -705,6 +734,7 @@ struct BeatCardView: View {
     let chapterNumber: Int
     let beat: Beat
     @State private var showScene = false
+    @State private var confirmDeleteBeat = false
 
     private var current: Beat {
         store.chapter(chapterNumber)?.skeleton?.beats.first { $0.id == beat.id } ?? beat
@@ -763,13 +793,13 @@ struct BeatCardView: View {
                         .foregroundStyle(current.done ? Color.green : Color.secondary)
                 }
                 .buttonStyle(.borderless)
+                .accessibilityLabel(current.done ? "标记这一拍未完成" : "标记这一拍完成")
                 Button(role: .destructive) {
-                    store.updateChapter(chapterNumber) { ch in
-                        ch.skeleton?.beats.removeAll { $0.id == beat.id }
-                    }
+                    confirmDeleteBeat = true
                 } label: { Image(systemName: "trash") }
                     .buttonStyle(.borderless)
                     .controlSize(.mini)
+                    .accessibilityLabel("删除这一拍")
             }
             TextField("这个节点要发生什么", text: binding.summary, axis: .vertical)
                 .textFieldStyle(.roundedBorder)
@@ -823,7 +853,12 @@ struct BeatCardView: View {
                 Button("合入正文") {
                     let text = current.draftText
                     guard !text.isEmpty else { return }
-                    vm.showToast("节拍草稿已合入第\(chapterNumber)章正文")
+                    // 合入也是改正文：先留快照，失败就不动
+                    let hasProse = !(store.chapter(chapterNumber)?.prose.isEmpty ?? true)
+                    if hasProse, store.snapshotProse(chapter: chapterNumber, tag: "合入节拍前") == nil {
+                        vm.showToast(store.lastSaveError ?? "合入失败：快照写入失败", success: false)
+                        return
+                    }
                     store.updateChapter(chapterNumber) { ch in
                         if !ch.prose.isEmpty { ch.prose += "\n\n" }
                         ch.prose += text
@@ -833,6 +868,7 @@ struct BeatCardView: View {
                         }
                         if ch.status == .empty || ch.status == .skeletoned { ch.status = .writing }
                     }
+                    vm.showToast("节拍草稿已合入第\(chapterNumber)章正文")
                 }
                 .controlSize(.small)
                 .disabled(current.draftText.isEmpty)
@@ -841,5 +877,15 @@ struct BeatCardView: View {
         .padding(8)
         .frame(width: 250)
         .zbGlass(cornerRadius: 8)
+        .confirmationDialog("删除这一拍？", isPresented: $confirmDeleteBeat) {
+            Button("删除", role: .destructive) {
+                store.updateChapter(chapterNumber) { ch in
+                    ch.skeleton?.beats.removeAll { $0.id == beat.id }
+                }
+            }
+            Button("取消", role: .cancel) {}
+        } message: {
+            Text("只删骨架里的这一拍，不改动正文。")
+        }
     }
 }

@@ -57,7 +57,12 @@ enum MemoryHub {
     // MARK: 矛盾体检：同主语同谓词、对象不同、同时有效（读者可见层面）
 
     static func conflicts(_ facts: [MemoryFact]) -> [Conflict] {
-        let valid = facts.filter { $0.isValid(atChapter: 9999) }
+        // 刚建档、宾语还没填的事实不参与矛盾体检（否则空串会和真实状态打架）
+        let valid = facts.filter {
+            $0.isValid(atChapter: 9999)
+                && !$0.subject.trimmingCharacters(in: .whitespaces).isEmpty
+                && !$0.object.trimmingCharacters(in: .whitespaces).isEmpty
+        }
         var groups: [String: [MemoryFact]] = [:]
         // 「关系」一人多对象完全正常（紫渊 关系 白零/苏叶可并存），不参与矛盾体检；
         // 认知类谓词同样允许并存（人物可以先后相信两件事）

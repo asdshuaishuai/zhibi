@@ -24,7 +24,8 @@ enum ExportService {
         let stamp = ProjectStore.fileStamp()
         let dir = exportRoot().appendingPathComponent("\(ProjectLayout.safeFileName(store.project.title))-合并稿", isDirectory: true)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        let fileURL = dir.appendingPathComponent("\(ProjectLayout.safeFileName(store.project.title)).\(format)")
+        // 带时间戳：重复导出不再静默覆盖上一份合并稿
+        let fileURL = dir.appendingPathComponent("\(ProjectLayout.safeFileName(store.project.title))-\(stamp).\(format)")
 
         var out = "# \(store.project.title)\n\n"
         if !store.project.genre.isEmpty { out += "题材：\(store.project.genre)\n\n" }
@@ -41,7 +42,9 @@ enum ExportService {
     /// 分卷 TXT：每 perVolume 章一个文件（网文平台上传友好）
     @MainActor
     static func exportVolumeTxt(store: ProjectStore, perVolume: Int = 20) throws -> Result {
-        let dir = exportRoot().appendingPathComponent("\(ProjectLayout.safeFileName(store.project.title))-分卷", isDirectory: true)
+        // 带时间戳：上次 5 卷、这次 4 卷时，旧卷不会被残留混进打包
+        let stamp = ProjectStore.fileStamp()
+        let dir = exportRoot().appendingPathComponent("\(ProjectLayout.safeFileName(store.project.title))-分卷-\(stamp)", isDirectory: true)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         let drafted = store.chapters.filter { !$0.prose.isEmpty }
         let chunks = drafted.byChunks(of: perVolume)
@@ -117,9 +120,10 @@ enum ExportService {
 
         // 设定
         for section in store.canonSections {
-            // 确定度写首行 HTML 注释：人读无感，导入侧回读（等价环需要）
+            // 确定度与分类写成首行 HTML 注释：人读无感，导入侧回读（等价环需要）
             let certainty = section.certainty == .canon ? "canon" : (section.certainty == .tentative ? "tentative" : "blank")
-            try write("<!-- zhibi:certainty=\(certainty) -->\n" + section.content, "设定/\(safeName(section.title)).md")
+            try write("<!-- zhibi:certainty=\(certainty) -->\n<!-- zhibi:category=\(section.category) -->\n" + section.content,
+                      "设定/\(safeName(section.title)).md")
         }
 
         // 正文
@@ -158,19 +162,30 @@ enum ExportService {
                  "status": c.status.rawValue, "last_action_chapter": c.lastActionChapter,
                  "actions": c.actions.map { ["chapter": $0.chapter, "kind": $0.kind.rawValue, "note": $0.note] }]
             },
-            "storylines": store.storylines.map { l in
-                ["id": l.id, "name": l.name, "kind": l.kind.rawValue, "through_line": l.isThroughLine, "status": l.status.rawValue]
+            "storylines": store.storylines.map { l -> [String: Any] in
+                ["id": l.id, "name": l.name, "kind": l.kind.rawValue, "through_line": l.isThroughLine,
+                 "status": l.status.rawValue, "entry_chapter": l.entryChapter ?? NSNull(),
+                 "planned_payoff_chapter": l.plannedPayoffChapter ?? NSNull(), "notes": l.notes]
             },
-            "timeline_events": store.timelineEvents.map { e in
+            "timeline_events": store.timelineEvents.map { e -> [String: Any] in
                 ["id": e.id, "chapter": e.chapter, "objective_fact": e.objectiveFact,
                  "reader_knowledge": e.readerKnowledge, "revealed": e.revealed,
                  "reveal_chapter": e.revealChapter ?? NSNull(),
-                 "storyline_ids": e.storylineIDs]
+                 "storyline_ids": e.storylineIDs, "notes": e.notes,
+                 "happened": e.happened, "dropped": e.dropped,
+                 "actual_chapter": e.actualChapter ?? NSNull(), "sync_note": e.syncNote,
+                 "synced_at": e.syncedAt.map { ISO8601DateFormatter().string(from: $0) } ?? NSNull()]
             },
-            "facts": store.facts.map { f in
+            "facts": store.facts.map { f -> [String: Any] in
                 ["subject": f.subject, "predicate": f.predicate, "object": f.object,
                  "from_chapter": f.fromChapter, "invalidated_at_chapter": f.invalidatedAtChapter ?? NSNull(),
-                 "public_to_reader": f.publicToReader]
+                 "public_to_reader": f.publicToReader, "source": f.source, "note": f.note]
+            },
+            "dossiers": store.dossiers.map { d -> [String: Any] in
+                ["id": d.id.uuidString, "chapter": d.chapter, "headline": d.headline,
+                 "scenes": d.scenes, "cast": d.cast, "advances": d.advances,
+                 "turns": d.turns, "hooks": d.hooks, "relics": d.relics,
+                 "created_at": ISO8601DateFormatter().string(from: d.createdAt)]
             },
             "character_aliases": store.characterAliases.map { a in
                 ["canonical": a.canonicalName, "aliases": a.aliases]
@@ -180,7 +195,7 @@ enum ExportService {
             "chapter_meta": store.chapters.map { ch in
                 var entry: [String: Any] = [
                     "number": ch.number, "title": ch.title, "status": ch.status.rawValue,
-                    "notes": ch.notes ?? []
+                    "notes": ch.notes ?? [], "directive": ch.directive ?? ""
                 ]
                 if let sum = ch.summary {
                     entry["summary"] = ["text": sum.summary, "key_events": sum.keyEvents, "emotional_tone": sum.emotionalTone]
@@ -189,7 +204,9 @@ enum ExportService {
                     entry["skeleton"] = [
                         "beats": sk.beats.map { b in
                             ["summary": b.summary, "purpose": b.purpose, "suggested_words": b.suggestedWords,
-                             "done": b.done, "clue_ids": b.clueIDs, "id": b.id.uuidString]
+                             "done": b.done, "clue_ids": b.clueIDs, "id": b.id.uuidString,
+                             "draft_text": b.draftText, "pov": b.pov, "location": b.location,
+                             "time_label": b.timeLabel, "cast": b.cast, "turn": b.turn]
                         },
                         "end_hook": sk.endHook,
                         "must_deliver": sk.mustDeliver,
@@ -197,7 +214,11 @@ enum ExportService {
                         "clue_touches": sk.clueTouches.map { t in
                             ["clue_id": t.clueID, "action": t.action.rawValue, "requirement": t.requirement]
                         },
-                        "human_approved": sk.humanApproved
+                        "human_approved": sk.humanApproved,
+                        "proposed_by_ai": sk.proposedByAI,
+                        "approved_at": sk.approvedAt.map { ISO8601DateFormatter().string(from: $0) } ?? NSNull(),
+                        "hook_kind": sk.hookKind, "pov": sk.pov, "payoff_type": sk.payoffType,
+                        "new_expectation": sk.newExpectation, "volume_label": sk.volumeLabel
                     ]
                 }
                 return entry

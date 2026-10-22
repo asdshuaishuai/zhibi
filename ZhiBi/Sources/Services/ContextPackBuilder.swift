@@ -81,7 +81,9 @@ enum ContextPackBuilder {
 
         // 角色状态折叠（截至 n-1 章有效的公开事实，按主体折叠）
         var bySubject: [String: [MemoryFact]] = [:]
-        for f in store.facts where f.isValid(atChapter: n - 1) && f.publicToReader {
+        for f in store.facts where f.isValid(atChapter: n - 1) && f.publicToReader
+            && !f.subject.trimmingCharacters(in: .whitespaces).isEmpty
+            && !f.object.trimmingCharacters(in: .whitespaces).isEmpty {
             bySubject[f.subject, default: []].append(f)
         }
         let stateLines = bySubject.sorted { $0.value.count > $1.value.count }.prefix(8).map { subject, fs -> String in

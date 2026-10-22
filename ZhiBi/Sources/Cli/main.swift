@@ -53,7 +53,7 @@ if let srcIdx = argv.firstIndex(of: "--merge"), srcIdx + 3 < argv.count, argv[sr
             let store = ProjectStore(rootURL: projectURL)
             try store.load()
             let summary = ImportService.scan(srcURL)
-            ImportService.apply(summary, into: store)
+            try! ImportService.apply(summary, into: store)
             print("已并入《\(store.project.title)》：章节 \(summary.chapters)｜设定+大纲 \(summary.canon + summary.outlines)｜阶段 \(summary.stages.count)｜伏笔 \(summary.clues.count)")
             let clueIDs = store.clues.map(\.id).joined(separator: " ")
             print("伏笔：\(clueIDs)")
@@ -313,6 +313,15 @@ if let mIdx = CommandLine.arguments.firstIndex(of: "--mock-agent"), mIdx + 2 < C
         guard p.capability == .deslop, p.chapterNumber == 4, case .deslop(let r) = p.payload else { return false }
         return r.suggestions.count == 2
     }, "\(store.proposals.filter { $0.capability == .deslop }.map(\.title))")
+    let draftID = store.latestDraftProposal(for: 4)?.id
+    mck("去AI味记录的是草稿目标", store.proposals.contains { p in
+        guard p.capability == .deslop, p.chapterNumber == 4, case .deslop(let r) = p.payload else { return false }
+        return r.targetDraftID != nil && r.targetDraftID == draftID
+    }, "draftID=\(String(describing: draftID))")
+    mck("草稿审查不混入旧正文确定性结论", store.proposals.contains { p in
+        guard p.capability == .validation, p.chapterNumber == 4, case .report(let r) = p.payload else { return false }
+        return r.deterministicIssues.isEmpty
+    })
     mck("一键跑完仍停在采纳之前（正文一个字没进）", store.chapter(4)?.prose.isEmpty == true,
         "prose=\(store.chapter(4)?.prose ?? "<nil>")")
     mck("跑完给出下一步指引", ai.pipelineNote.contains("收件箱"), ai.pipelineNote)
@@ -384,6 +393,8 @@ fputs("[p] s1\n", stderr)
 fputs("[probe] s1 中文字数\n", stderr)
 let sample = "他捏碎了手中的茶杯，滚烫的茶水流过指缝。"
 check("中文字数统计（含标点，网文口径）", WordStats.chineseCount(sample) == 20, "实际 \(WordStats.chineseCount(sample))")
+check("英文与数字计入字数", WordStats.chineseCount("LV1 的 S 级") == 6,
+      "实际 \(WordStats.chineseCount("LV1 的 S 级"))")
 
 fputs("[p] s2\n", stderr)
 // MARK: - 2. AI 味确定性扫描
@@ -419,6 +430,11 @@ check("解析『第001章_血夜』", ImportService.parseChapterName("第001章_
 check("解析『第 12 章 风起』", ImportService.parseChapterName("第 12 章 风起")?.0 == 12)
 check("解析全角『第３章』", ImportService.parseChapterName("第３章")?.0 == 3)
 check("非章节名返回 nil", ImportService.parseChapterName("世界观设定") == nil)
+check("解析『001_风起』", ImportService.parseChapterName("001_风起")?.0 == 1 && ImportService.parseChapterName("001_风起")?.1 == "风起")
+check("解析『Chapter 12 - 风起』", ImportService.parseChapterName("Chapter 12 - 风起")?.0 == 12
+      && ImportService.parseChapterName("Chapter 12 - 风起")?.1 == "风起")
+check("解析『chapter_07』", ImportService.parseChapterName("chapter_07")?.0 == 7)
+check("年份不被误判为章节", ImportService.parseChapterName("2024_年度总结") == nil)
 
 // MARK: - 4. 容错 JSON（追踪文件里的裸换行）
 
@@ -512,6 +528,27 @@ func runStoreTests(tmp: URL) async throws {
     store2.updateChapter(2) { $0.prose = "改坏了。" }
     store2.restoreSnapshot(chapter: 2, name: snap ?? "")
     check("快照回滚", store2.chapter(2)?.prose.contains("夜风很冷") == true)
+
+    // 快照必须连 meta 一起回滚：状态/标题/本章指令不能停在改后的值
+    store2.updateChapter(2) { $0.status = .done; $0.title = "回滚前标题"; $0.directive = "回滚前指令" }
+    let metaSnap = store2.snapshotProse(chapter: 2, tag: "meta")
+    store2.updateChapter(2) {
+        $0.prose = "改坏的第二稿。"
+        $0.status = .polished
+        $0.title = "改后标题"
+        $0.directive = "改后指令"
+    }
+    if let metaSnap {
+        let restored = store2.restoreSnapshot(chapter: 2, name: metaSnap)
+        check("快照回滚连 meta 一起还原", restored
+              && store2.chapter(2)?.status == .done
+              && store2.chapter(2)?.title == "回滚前标题"
+              && store2.chapter(2)?.directive == "回滚前指令"
+              && store2.chapter(2)?.prose.contains("夜风很冷") == true,
+              "status=\(store2.chapter(2)?.status.rawValue ?? "nil") title=\(store2.chapter(2)?.title ?? "nil")")
+    } else {
+        check("快照回滚连 meta 一起还原", false)
+    }
 
     // 5.3 确定性验证：章1 伏笔合同应通过；章2 应检出跨章重复
     let report1 = await Validator.deterministicReport(store: store2, chapter: 1)
@@ -832,7 +869,7 @@ MainActor.assumeIsolated {
     }())
 }
 
-// P1-7 skeleton 采纳 → 伏笔台账落动作 + P1-9 状态变更记日志
+// 骨架采纳是写前契约，不碰伏笔台账；状态变更记日志
 @MainActor
 func roundTwoStoreTests() async throws {
     let st = ProjectStore(rootURL: URL(fileURLWithPath: "/tmp/zhibi-r2-\(UUID().uuidString).zhibi"))
@@ -846,8 +883,23 @@ func roundTwoStoreTests() async throws {
         let ok = st.applyPayload(st.proposals.first { $0.id == id }!.payload, chapter: 3)
         check("骨架采纳返回成功", ok)
         let f = st.clues.first { $0.id == "F01" }
-        check("骨架采纳联动伏笔台账", f?.lastActionChapter == 3 && !(f?.actions.isEmpty ?? true),
+        check("骨架采纳不碰伏笔台账（写前契约≠已发生）",
+              f?.lastActionChapter == 0 && (f?.actions.isEmpty ?? true),
               "lastAction=\(f?.lastActionChapter ?? -1) actions=\(f?.actions.count ?? -1)")
+        // 去AI味：逐条标记 applied 后整包采纳应推进到「已润色」
+        let ds = ProjectStore(rootURL: URL(fileURLWithPath: "/tmp/zhibi-ds-\(UUID().uuidString).zhibi"))
+        ds.ensureChapter(1)
+        ds.updateChapter(1) { $0.prose = "原文"; $0.status = .written }
+        let sug = DeslopSuggestion(original: "原文", replacement: "新文")
+        let dsProp = AIProposal(capability: .deslop, chapterNumber: 1, title: "去AI味",
+                                payload: .deslop(DeslopReport(chapter: 1, grade: "轻度", suggestions: [sug])))
+        ds.addProposal(dsProp)
+        check("去AI味建议可标记 applied",
+              ds.markDeslopSuggestionApplied(proposalID: dsProp.id, suggestionID: sug.id))
+        check("去AI味全部应用后推进已润色",
+              ds.acceptProposal(dsProp.id) && ds.chapter(1)?.status == .polished,
+              "status=\(ds.chapter(1)?.status.rawValue ?? "nil")")
+
         // P1-15: reject 可恢复
         let rp = ProjectStore(rootURL: URL(fileURLWithPath: "/tmp/zhibi-rp-\(UUID().uuidString).zhibi"))
         rp.ensureChapter(1)
@@ -861,7 +913,7 @@ func roundTwoStoreTests() async throws {
     // P1-9: 状态菜单式变更也写动作日志
     st.logClueAction(clueID: "F01", chapter: 5, kind: .resolve, note: "状态改为「已回收」")
     let afterStatus = st.clues.first { $0.id == "F01" }
-    check("状态变更记动作日志", afterStatus?.lastActionChapter == 5 && afterStatus?.actions.count == 2)
+    check("状态变更记动作日志", afterStatus?.lastActionChapter == 5 && afterStatus?.actions.count == 1)
 }
 
 try await roundTwoStoreTests()
@@ -881,20 +933,34 @@ func roundTripTests() async throws {
         ch.title = "血夜"
         ch.prose = "临渊区在烧。无器之人在巷子里跑。"
         ch.status = .written
+        ch.directive = "压住节奏，别写打斗"
         ch.summary = ChapterSummary(chapter: 1, summary: "觉醒当晚被追杀。", keyEvents: ["血洗", "逃亡"], emotionalTone: "紧迫")
         ch.notes = ["伏笔：步态"]
         var sk = ChapterSkeleton()
-        sk.beats = [Beat(summary: "开场追杀", purpose: "爽点", suggestedWords: 800, done: true)]
+        var beat = Beat(summary: "开场追杀", purpose: "爽点", suggestedWords: 800, done: true)
+        beat.draftText = "他撞开废窑的门。"
+        beat.pov = "紫渊"; beat.location = "废窑"; beat.timeLabel = "雨夜"; beat.cast = ["紫渊", "哑叔"]; beat.turn = "藏身→暴露"
+        sk.beats = [beat]
         sk.endHook = "一点紫亮"
         sk.mustDeliver = ["第一次亡命"]
         sk.mustAvoid = ["不写觉醒过程"]
+        sk.hookKind = "悬念"; sk.pov = "紫渊"; sk.payoffType = "觉醒"
+        sk.newExpectation = "白零是谁"; sk.volumeLabel = "第一卷"
+        sk.proposedByAI = true; sk.humanApproved = true
+        sk.approvedAt = Date(timeIntervalSince1970: 1_700_000_000)
         ch.skeleton = sk
     }
-    src.updateChapter(8, countWords: false) { ch in ch.title = "雾隐"; ch.status = .written; ch.prose = "雾中照面。" }
-    src.storylines = [Storyline(id: "L01", name: "孤星出逃", kind: .main, isThroughLine: true, status: .active),
-                      Storyline(id: "L02", name: "白零线", kind: .growth, status: .active)]
+    src.updateChapter(8, countWords: false) { ch in ch.title = "雾隐"; ch.status = .done; ch.prose = "雾中照面。" }
+    src.storylines = [
+        Storyline(id: "L01", name: "孤星出逃", kind: .main, isThroughLine: true, status: .active,
+                  entryChapter: 1, plannedPayoffChapter: 40, notes: "贯穿全书"),
+        Storyline(id: "L02", name: "白零线", kind: .growth, status: .dormant),
+    ]
     src.timelineEvents = [
-        TimelineEvent(id: "E01", chapter: 1, objectiveFact: "紫渊觉醒当夜被追杀", readerKnowledge: "少年在逃", revealed: true, storylineIDs: ["L01"]),
+        TimelineEvent(id: "E01", chapter: 1, objectiveFact: "紫渊觉醒当夜被追杀", readerKnowledge: "少年在逃",
+                      revealed: true, storylineIDs: ["L01"], notes: "开篇锚点",
+                      happened: true, actualChapter: 2, syncNote: "实际写在第2章",
+                      syncedAt: Date(timeIntervalSince1970: 1_700_000_100)),
         TimelineEvent(id: "E02", chapter: 8, objectiveFact: "紫渊与白零相遇", readerKnowledge: "雾中照面", revealed: false, revealChapter: 8, storylineIDs: ["L01", "L02"]),
     ]
     src.clues = [
@@ -907,9 +973,14 @@ func roundTripTests() async throws {
         MemoryFact(subject: "紫渊", predicate: "关系", object: "白零", fromChapter: 8, publicToReader: true, source: "extracted"),
         MemoryFact(subject: "白零", predicate: "身份", object: "半精灵", fromChapter: 5, invalidatedAtChapter: 7, source: "extracted"),
     ]
+    src.facts[0].note = "开篇状态"
+    src.dossiers = [ChapterDossier(chapter: 1, headline: "觉醒夜被追杀",
+                                   scenes: ["废窑"], cast: ["紫渊"], advances: ["觉醒"],
+                                   turns: ["藏身→暴露"], hooks: ["紫亮"], relics: ["断刀"])]
     src.characterAliases = [CharacterAlias(canonicalName: "紫渊", aliases: ["少年"])]
     src.stages = [Stage(id: 1, name: "星火初燃", chapterStart: 1, chapterEnd: 10, theme: "逃亡与相遇")]
-    src.canonSections = [CanonSection(title: "世界观", content: "命数九层。", certainty: .canon)]
+    src.canonSections = [CanonSection(title: "世界观", content: "命数九层。", certainty: .canon,
+                                      category: CanonCategory.worldview.rawValue)]
     src.project.dailyWords = ["2026-09-19": 2100]
 
     let exportDir = try ExportService.exportOhStory(store: src).url
@@ -917,14 +988,27 @@ func roundTripTests() async throws {
 
     let dst = ProjectStore(rootURL: URL(fileURLWithPath: "/tmp/zhibi-rt-dst-\(UUID().uuidString).zhibi"))
     dst.ensureChapter(1)
-    ImportService.apply(scanned, into: dst)
+    try! ImportService.apply(scanned, into: dst)
 
-    check("往返-故事线等价", dst.storylines.count == 2 && dst.storylines.contains { $0.id == "L01" && $0.isThroughLine })
-    check("往返-事件等价", dst.timelineEvents.count == 2 && dst.timelineEvents.contains { $0.id == "E02" && !$0.revealed && $0.storylineIDs == ["L01", "L02"] },
-          "得到 \(dst.timelineEvents.map { "\($0.id)/\($0.revealed)" })")
+    check("往返-故事线等价", dst.storylines.count == 2 && dst.storylines.contains {
+        $0.id == "L01" && $0.isThroughLine && $0.status == .active
+            && $0.entryChapter == 1 && $0.plannedPayoffChapter == 40 && $0.notes == "贯穿全书"
+    })
+    check("往返-故事线蛰伏状态", dst.storylines.contains { $0.id == "L02" && $0.status == .dormant })
+    check("往返-事件等价", dst.timelineEvents.count == 2 && dst.timelineEvents.contains {
+        $0.id == "E02" && !$0.revealed && $0.storylineIDs == ["L01", "L02"]
+    }, "得到 \(dst.timelineEvents.map { "\($0.id)/\($0.revealed)" })")
+    check("往返-事件对账字段", dst.timelineEvents.contains {
+        $0.id == "E01" && $0.happened && $0.actualChapter == 2 && $0.syncNote == "实际写在第2章"
+            && $0.notes == "开篇锚点" && $0.syncedAt != nil
+    })
     check("往返-终态伏笔不再丢", dst.clues.count == 2 && dst.clues.contains { $0.id == "F01" && $0.status == .resolved })
     check("往返-伏笔动作日志保留", dst.clues.first { $0.id == "F01" }?.actions.count == 2)
+    check("往返-活跃伏笔不被子集覆盖", dst.clues.first { $0.id == "F02" }?.status == .developing)
     check("往返-事实含双时态", dst.facts.count == 3 && dst.facts.contains { $0.invalidatedAtChapter == 7 })
+    check("往返-事实备注与来源", dst.facts.contains { $0.subject == "紫渊" && $0.note == "开篇状态" && $0.source == "extracted" })
+    check("往返-档案卡", dst.dossiers.count == 1 && dst.dossiers[0].headline == "觉醒夜被追杀"
+          && dst.dossiers[0].relics == ["断刀"] && dst.dossiers[0].turns == ["藏身→暴露"])
     check("往返-阶段等价", dst.stages.count == 1 && dst.stages[0].name == "星火初燃")
     check("往返-别名保留", dst.characterAliases.first?.canonicalName == "紫渊")
     check("往返-正文等价", dst.chapter(1)?.prose.contains("临渊区在烧") == true && dst.chapter(8)?.prose.contains("雾中照面") == true)
@@ -932,11 +1016,24 @@ func roundTripTests() async throws {
     check("往返-随手记保留", dst.chapter(1)?.notes?.isEmpty == false)
     check("往返-骨架保留", dst.chapter(1)?.skeleton?.beats.first?.summary == "开场追杀"
           && dst.chapter(1)?.skeleton?.mustDeliver == ["第一次亡命"])
+    check("往返-骨架场景层与钩子", dst.chapter(1)?.skeleton.map {
+        $0.hookKind == "悬念" && $0.pov == "紫渊" && $0.payoffType == "觉醒"
+            && $0.newExpectation == "白零是谁" && $0.volumeLabel == "第一卷"
+            && $0.humanApproved && $0.approvedAt != nil
+            && $0.beats.first?.location == "废窑" && $0.beats.first?.cast == ["紫渊", "哑叔"]
+            && $0.beats.first?.turn == "藏身→暴露" && $0.beats.first?.draftText == "他撞开废窑的门。"
+    } == true)
+    check("往返-本章指令", dst.chapter(1)?.directive == "压住节奏，别写打斗")
+    check("往返-定稿状态", dst.chapter(8)?.status == .done)
     check("往返-项目元数据", dst.project.premise == "废灵根吞噬命数" && dst.project.authorIntent.contains("慢热")
           && dst.project.currentFocus == "第一卷追杀段" && dst.project.styleNotes == "短句，忌四字格")
     check("往返-体量参数", dst.project.targetChapters == 88 && dst.project.chapterWordTarget == 2500)
     check("往返-每日账本", dst.project.dailyWords?["2026-09-19"] == 2100)
-    check("往返-设定库", dst.canonSections.contains { $0.title == "世界观" && $0.certainty == .canon })
+    check("往返-设定库", dst.canonSections.contains {
+        $0.title == "世界观" && $0.certainty == .canon
+            && $0.category == CanonCategory.worldview.rawValue
+            && $0.content.trimmingCharacters(in: .whitespacesAndNewlines) == "命数九层。"
+    })
     // 大纲 md 是派生视图：不再重复进设定库
     check("往返-大纲不重复入库", !dst.canonSections.contains { $0.title.contains("主线大纲") },
           "设定 \(dst.canonSections.map(\.title))")
@@ -952,8 +1049,22 @@ func roundTripTests() async throws {
     let legacyScanned = ImportService.scan(legacyDir)
     let legacyDst = ProjectStore(rootURL: URL(fileURLWithPath: "/tmp/zhibi-rt-legacydst-\(UUID().uuidString).zhibi"))
     legacyDst.ensureChapter(1)
-    ImportService.apply(legacyScanned, into: legacyDst)
+    try! ImportService.apply(legacyScanned, into: legacyDst)
     check("旧格式仍可导入", legacyDst.clues.contains { $0.id == "F01" } && legacyDst.stages.count == 1)
+
+    // 正文子目录递归扫描 + 非「第N章」命名
+    let nestedDir = URL(fileURLWithPath: "/tmp/zhibi-rt-nested-\(UUID().uuidString)")
+    let vol1 = nestedDir.appendingPathComponent("正文/第一卷", isDirectory: true)
+    let vol2 = nestedDir.appendingPathComponent("正文/第二卷", isDirectory: true)
+    try? FileManager.default.createDirectory(at: vol1, withIntermediateDirectories: true)
+    try? FileManager.default.createDirectory(at: vol2, withIntermediateDirectories: true)
+    try? "风起。".data(using: .utf8)?.write(to: vol1.appendingPathComponent("001_风起.md"))
+    try? "雨夜。".data(using: .utf8)?.write(to: vol2.appendingPathComponent("Chapter 2 - 雨夜.md"))
+    let nested = ImportService.scan(nestedDir)
+    let nestedChapters = nested.items.filter { $0.kind == .chapter }
+    check("递归扫描正文子目录", nestedChapters.count == 2
+          && Set(nestedChapters.compactMap(\.chapterNumber)) == [1, 2],
+          "chapters=\(nestedChapters.map { "\($0.chapterNumber ?? -1)/\($0.title)" })")
 }
 
 try await roundTripTests()
@@ -999,14 +1110,14 @@ func svgCoverTests() async throws {
     check("导入扫描到封面 SVG", scanned.coverSVG == svg)
     let dst = ProjectStore(rootURL: URL(fileURLWithPath: "/tmp/zhibi-svgdst-\(UUID().uuidString).zhibi"))
     dst.ensureChapter(1)
-    ImportService.apply(scanned, into: dst)
+    try! ImportService.apply(scanned, into: dst)
     check("导入后封面等价", dst.coverSVG == svg)
     // 已有封面不被覆盖
     let scanned2 = ImportService.scan(exportDir)
     let dst2 = ProjectStore(rootURL: URL(fileURLWithPath: "/tmp/zhibi-svgdst2-\(UUID().uuidString).zhibi"))
     dst2.ensureChapter(1)
     dst2.setCoverSVG("<svg>自己的</svg>")
-    ImportService.apply(scanned2, into: dst2)
+    try! ImportService.apply(scanned2, into: dst2)
     check("已有封面不被导入覆盖", dst2.coverSVG == "<svg>自己的</svg>")
 }
 
@@ -1326,6 +1437,7 @@ func qualityLoopTests() async throws {
     // 修订历史保留：草稿采纳后仍可继续修订（历史不丢）
     var draft = ChapterDraft(chapter: 5, text: "第一版正文", version: 1)
     draft.feedbackHistory = [DraftFeedback(feedback: "节奏太慢", fromVersion: 1)]
+    st.ensureChapter(5)   // 草稿只能采纳到存在的章节
     st.addProposal(AIProposal(capability: .chapterDraft, chapterNumber: 5, title: "第5章草稿", payload: .draft(draft)))
     if let pid = st.proposals.first(where: { $0.chapterNumber == 5 })?.id {
         st.acceptProposal(pid)   // 采纳后 pending 里没有草稿了
@@ -1339,6 +1451,42 @@ func qualityLoopTests() async throws {
         }
     } else {
         check("草稿提案登记", false)
+    }
+
+    // 被拒绝的草稿不能当下一轮修订的基底（否则拒掉的稿换个版本号又回来）
+    let rejectedStore = ProjectStore(rootURL: URL(fileURLWithPath: "/tmp/zhibi-rej-\(UUID().uuidString).zhibi"))
+    rejectedStore.ensureChapter(1)
+    rejectedStore.addProposal(AIProposal(capability: .chapterDraft, chapterNumber: 1,
+                                         title: "被拒草稿",
+                                         payload: .draft(ChapterDraft(chapter: 1, text: "旧稿", version: 1))))
+    if let pid = rejectedStore.proposals.first?.id {
+        rejectedStore.rejectProposal(pid, reason: "不采用")
+        check("被拒草稿不作为修订基底", rejectedStore.latestAnyDraftProposal(for: 1) == nil)
+    } else {
+        check("被拒草稿不作为修订基底", false)
+    }
+
+    // 草稿不能采纳到不存在的章节，且必须保持待审
+    let guardStore = ProjectStore(rootURL: URL(fileURLWithPath: "/tmp/zhibi-guard-\(UUID().uuidString).zhibi"))
+    guardStore.ensureChapter(1)
+    let ghost = AIProposal(capability: .chapterDraft, chapterNumber: 99, title: "幽灵草稿",
+                           payload: .draft(ChapterDraft(chapter: 99, text: "无主正文", version: 1)))
+    guardStore.addProposal(ghost)
+    check("草稿不能采纳到不存在的章节",
+          !guardStore.acceptProposal(ghost.id) && guardStore.proposals.first?.status == .pending)
+
+    // 修订历史写回新草稿提案
+    let histStore = ProjectStore(rootURL: URL(fileURLWithPath: "/tmp/zhibi-hist-\(UUID().uuidString).zhibi"))
+    histStore.ensureChapter(1)
+    histStore.addProposal(AIProposal(capability: .chapterDraft, chapterNumber: 1, title: "历史草稿",
+                                     payload: .draft(ChapterDraft(chapter: 1, text: "第一版", version: 1))))
+    if let pid = histStore.proposals.first?.id {
+        histStore.updateDraftMetadata(proposalID: pid, mainline: "主线",
+                                      feedbackHistory: [DraftFeedback(feedback: "节奏太慢", fromVersion: 1)])
+        let d = histStore.proposals.first.flatMap { histStore.draftPayload(of: $0) }
+        check("修订历史写回草稿", d?.feedbackHistory.count == 1 && d?.mainline == "主线")
+    } else {
+        check("修订历史写回草稿", false)
     }
 }
 
@@ -1415,6 +1563,15 @@ func proposalsSplitTests() async throws {
     let inboxSizeAfter = (try? FileManager.default.attributesOfItem(atPath: ProjectLayout.proposalsFile(st.rootURL).path)[.size] as? Int) ?? 0
     check("inbox 体积稳定（不随归档增长）", abs(inboxSizeAfter - inboxSizeBefore) < 200,
           "before=\(inboxSizeBefore ?? 0) after=\(inboxSizeAfter ?? 0)")
+
+    // 清空已裁决：必须把空归档写盘，否则重载会把删除的提案复活
+    st.proposals.removeAll { $0.status != .pending }
+    try st.saveNow()
+    let cleared = ProjectStore(rootURL: st.rootURL)
+    try cleared.load()
+    check("清空已裁决重启不复活", cleared.proposals.count == 3
+          && cleared.proposals.allSatisfy { $0.status == .pending },
+          "得到 \(cleared.proposals.count) 条：\(cleared.proposals.map(\.title))")
 }
 
 try await proposalsSplitTests()
@@ -1527,8 +1684,87 @@ func roundThreeTests() async throws {
     try? Data([0xFF, 0xFE, 0x00]).write(to: proseURL)
     let badReloaded = ProjectStore(rootURL: badRoot)
     try? await badReloaded.loadAsync()
-    check("坏编码正文被隔离保留", FileManager.default.fileExists(atPath: proseURL.path + ".corrupt")
-          && badReloaded.lastSaveError?.contains("UTF-8") == true)
+    let badFiles = (try? FileManager.default.contentsOfDirectory(
+        at: proseURL.deletingLastPathComponent(), includingPropertiesForKeys: nil)) ?? []
+    check("坏编码正文被隔离保留",
+          badFiles.contains { $0.lastPathComponent.hasPrefix("prose.md.corrupt") }
+          && badReloaded.loadWarnings?.contains("UTF-8") == true,
+          "files=\(badFiles.map(\.lastPathComponent))")
+
+    // 老 meta 缺 title/status/directive：显式解码器必须兜底，不能整章退化或隔离
+    let oldMetaRoot = URL(fileURLWithPath: "/tmp/zhibi-oldmeta-\(UUID().uuidString).zhibi")
+    let oldMetaSeed = ProjectStore(rootURL: oldMetaRoot)
+    oldMetaSeed.project = NovelProject(title: "旧 meta")
+    oldMetaSeed.ensureChapter(5)
+    try? oldMetaSeed.saveNow()
+    let oldMetaURL = ProjectLayout.chapterDir(oldMetaRoot, number: 5).appendingPathComponent("meta.json")
+    try? Data(#"{"number":5,"notes":["旧档随手记"]}"#.utf8).write(to: oldMetaURL)
+    try? Data("旧正文还在。".utf8).write(to: ProjectLayout.proseFile(oldMetaRoot, number: 5))
+    let oldMetaReload = ProjectStore(rootURL: oldMetaRoot)
+    try? oldMetaReload.load()
+    check("老 meta 缺字段仍可解", oldMetaReload.chapter(5)?.notes?.first == "旧档随手记"
+          && oldMetaReload.chapter(5)?.prose == "旧正文还在。"
+          && oldMetaReload.loadWarnings == nil,
+          "notes=\(oldMetaReload.chapter(5)?.notes ?? []) warnings=\(oldMetaReload.loadWarnings ?? "nil")")
+
+    // 旧账本缺新键：项目仍能打开，伏笔/事实/设定/故事线按默认值兜底
+    let oldLedgerRoot = URL(fileURLWithPath: "/tmp/zhibi-oldledger-\(UUID().uuidString).zhibi")
+    try? FileManager.default.createDirectory(at: oldLedgerRoot, withIntermediateDirectories: true)
+    try? Data(#"{"title":"旧工程"}"#.utf8).write(to: ProjectLayout.projectFile(oldLedgerRoot))
+    try? Data(#"[{"id":"F01","title":"旧伏笔"}]"#.utf8).write(to: ProjectLayout.cluesFile(oldLedgerRoot))
+    try? Data(#"[{"id":"L01","name":"旧线"}]"#.utf8).write(to: ProjectLayout.storylinesFile(oldLedgerRoot))
+    try? Data(#"{"facts":[{"subject":"甲","predicate":"状态","object":"乙"}]}"#.utf8).write(to: ProjectLayout.memoryFile(oldLedgerRoot))
+    try? FileManager.default.createDirectory(at: ProjectLayout.canonDir(oldLedgerRoot), withIntermediateDirectories: true)
+    try? Data(#"[{"title":"旧设定"}]"#.utf8).write(to: ProjectLayout.canonDir(oldLedgerRoot).appendingPathComponent("sections.json"))
+    let oldLedger = ProjectStore(rootURL: oldLedgerRoot)
+    try? oldLedger.load()
+    check("旧 project.json 缺字段可打开", oldLedger.project.title == "旧工程" && oldLedger.project.targetChapters == 100)
+    check("旧伏笔缺字段可解", oldLedger.clues.first?.title == "旧伏笔"
+          && oldLedger.clues.first?.timing == .midArc && oldLedger.clues.first?.actions.isEmpty == true)
+    check("旧事实缺字段可解", oldLedger.facts.first?.publicToReader == true
+          && oldLedger.facts.first?.source == "extracted")
+    check("旧设定缺分类可解", oldLedger.canonSections.first?.category == CanonCategory.uncategorized.rawValue
+          && oldLedger.canonSections.first?.certainty == .tentative)
+    check("旧故事线缺字段可解", oldLedger.storylines.first?.status == .active
+          && oldLedger.storylines.first?.kind == .other)
+
+    // 同题设定：两节必须分别落盘，不能后者覆盖前者的 md
+    let dupRoot = URL(fileURLWithPath: "/tmp/zhibi-canon-dup-\(UUID().uuidString).zhibi")
+    let dupStore = ProjectStore(rootURL: dupRoot)
+    dupStore.project = NovelProject(title: "同题设定")
+    dupStore.ensureChapter(1)
+    dupStore.canonSections = [CanonSection(title: "重复题", content: "甲内容"),
+                              CanonSection(title: "重复题", content: "乙内容")]
+    try? dupStore.saveNow()
+    let dupFiles = (try? FileManager.default.contentsOfDirectory(
+        at: ProjectLayout.canonDir(dupRoot), includingPropertiesForKeys: nil)) ?? []
+    let dupBodies = dupFiles.filter { $0.pathExtension == "md" }.map { Disk.readText($0) }
+    check("同题设定各自落盘", dupBodies.count == 2 && dupBodies.contains("甲内容") && dupBodies.contains("乙内容"),
+          "files=\(dupFiles.map(\.lastPathComponent))")
+
+    // JSON 坏档隔离：不能静默当空数组，然后被下一次保存覆盖
+    let corruptRoot = URL(fileURLWithPath: "/tmp/zhibi-corrupt-\(UUID().uuidString).zhibi")
+    let corruptSeed = ProjectStore(rootURL: corruptRoot)
+    corruptSeed.project = NovelProject(title: "坏档书")
+    corruptSeed.ensureChapter(1)
+    try? corruptSeed.saveNow()
+    try? Data("{ this is not json".utf8).write(to: ProjectLayout.cluesFile(corruptRoot))
+    let corruptReloaded = ProjectStore(rootURL: corruptRoot)
+    try? corruptReloaded.load()
+    let corruptFiles = (try? FileManager.default.contentsOfDirectory(
+        at: corruptRoot, includingPropertiesForKeys: nil)) ?? []
+    check("坏 JSON 被隔离且给出警告",
+          corruptReloaded.clues.isEmpty
+          && corruptReloaded.loadWarnings?.contains("伏笔台账") == true
+          && corruptFiles.contains { $0.lastPathComponent.hasPrefix("clues.json.corrupt-") })
+
+    // 写签名缓存必须核对磁盘：文件被删后，同内容重写不能跳过
+    let sigURL = URL(fileURLWithPath: "/tmp/zhibi-sig-\(UUID().uuidString).txt")
+    let sigData = Data("same-bytes".utf8)
+    try? Disk.write(sigData, to: sigURL)
+    try? FileManager.default.removeItem(at: sigURL)
+    try? Disk.write(sigData, to: sigURL)
+    check("文件被删后同内容重写不跳过", FileManager.default.fileExists(atPath: sigURL.path))
 
     // MarkdownLite 段落缓存语义未被防抖改动破坏：往返仍稳定
     let font = NSFont.systemFont(ofSize: 14)
@@ -1942,8 +2178,9 @@ do {
         st.timelineEvents = [TimelineEvent(id: "E01", chapter: 3, objectiveFact: "少年觉醒", readerKnowledge: "少年觉醒", revealed: false, storylineIDs: ["L01"])]
         st.storylines = [Storyline(id: "L01", name: "复仇", kind: .main, isThroughLine: true, status: .active)]
         st.applyOutlineUpdate(OutlineUpdate(kind: .eventMoved, eventID: "E01", newChapter: 7, reason: "实际写在第7章", confidence: 0.8))
-        check("事件改期落库", st.timelineEvents[0].actualChapter == 7 && st.timelineEvents[0].happened && st.timelineEvents[0].isDiverged)
-        check("改期不覆盖计划章", st.timelineEvents[0].chapter == 3)
+        check("事件改期把计划挪到新章", st.timelineEvents[0].chapter == 7
+              && !st.timelineEvents[0].happened && st.timelineEvents[0].actualChapter == nil)
+        check("改期不是标成已发生", !st.timelineEvents[0].happened && !st.timelineEvents[0].dropped)
         st.applyOutlineUpdate(OutlineUpdate(kind: .eventRevealed, eventID: "E01", newChapter: 9, reason: "读者已知"))
         check("读者已知落库", st.timelineEvents[0].revealed && st.timelineEvents[0].revealChapter == 9)
         st.applyOutlineUpdate(OutlineUpdate(kind: .eventDropped, eventID: "E02", reason: "x"))
@@ -2318,6 +2555,10 @@ MainActor.assumeIsolated {
         if !names.contains(where: { $0.hasPrefix("propose_") }) { noProducer.append("\(cap.rawValue):\(names.joined(separator: ","))") }
     }
     check("每个 AI 能力都至少有一个 propose_* 工具", noProducer.isEmpty, noProducer.joined(separator: "；"))
+    let volumeTools = AIService.volumeSkeletonToolNames()
+    check("卷级设计只交 memo 不碰章节骨架", volumeTools.contains("propose_memo")
+          && !volumeTools.contains("propose_skeleton") && !volumeTools.contains("propose_draft"),
+          "volumeTools=\(volumeTools.sorted())")
     check("连贯性审查能拿到取证工具", AIService.toolNames(for: .continuityAudit).contains("get_chapter"))
     check("大纲同步能读到大纲", AIService.toolNames(for: .outlineSync).contains("get_outline"))
     check("大纲同步能补新事件", AIService.toolNames(for: .outlineSync).contains("propose_outline_events"))

@@ -22,6 +22,31 @@ struct NovelProject: Codable, Identifiable {
     var dailyWords: [String: Int]? = nil
 }
 
+extension NovelProject {
+    private enum Keys: String, CodingKey {
+        case id, title, genre, premise, targetChapters, chapterWordTarget, createdAt
+        case authorIntent, currentFocus, styleNotes, coverStyle, dailyWords
+    }
+
+    /// 显式解码：早期 project.json 没有 targetChapters / authorIntent / styleNotes 等键。
+    /// 合成解码对「带默认值的非可选字段」缺键会直接抛错，整个项目就打不开了。
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: Keys.self)
+        id = try c.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+        title = try c.decodeIfPresent(String.self, forKey: .title) ?? "未命名作品"
+        genre = try c.decodeIfPresent(String.self, forKey: .genre) ?? ""
+        premise = try c.decodeIfPresent(String.self, forKey: .premise) ?? ""
+        targetChapters = try c.decodeIfPresent(Int.self, forKey: .targetChapters) ?? 100
+        chapterWordTarget = try c.decodeIfPresent(Int.self, forKey: .chapterWordTarget) ?? 3000
+        createdAt = try c.decodeIfPresent(Date.self, forKey: .createdAt) ?? Date()
+        authorIntent = try c.decodeIfPresent(String.self, forKey: .authorIntent) ?? ""
+        currentFocus = try c.decodeIfPresent(String.self, forKey: .currentFocus) ?? ""
+        styleNotes = try c.decodeIfPresent(String.self, forKey: .styleNotes) ?? ""
+        coverStyle = try c.decodeIfPresent(Int.self, forKey: .coverStyle)
+        dailyWords = try c.decodeIfPresent([String: Int].self, forKey: .dailyWords)
+    }
+}
+
 /// 确定度三态（NarraCat 立项卡）
 enum Certainty: String, Codable, CaseIterable {
     case canon = "已定"
@@ -39,6 +64,27 @@ struct CanonSection: Codable, Identifiable {
     /// 设定分类（CanonCategory.rawValue；旧档无此键解码为默认值）
     var category: String = CanonCategory.uncategorized.rawValue
     var updatedAt: Date = Date()
+}
+
+extension CanonSection {
+    private enum Keys: String, CodingKey {
+        case id, title, content, certainty, category, updatedAt
+    }
+
+    /// 旧 sections.json 没有 category / updatedAt 键，缺键不能让整份设定索引解不出来。
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: Keys.self)
+        id = try c.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+        title = try c.decodeIfPresent(String.self, forKey: .title) ?? ""
+        content = try c.decodeIfPresent(String.self, forKey: .content) ?? ""
+        if let raw = try c.decodeIfPresent(String.self, forKey: .certainty) {
+            certainty = Certainty(rawValue: raw) ?? .tentative
+        } else {
+            certainty = .tentative
+        }
+        category = try c.decodeIfPresent(String.self, forKey: .category) ?? CanonCategory.uncategorized.rawValue
+        updatedAt = try c.decodeIfPresent(Date.self, forKey: .updatedAt) ?? Date()
+    }
 }
 
 /// 设定分类（设定页按此分组；AI 归类提案写回这里）
@@ -83,6 +129,32 @@ struct Storyline: Codable, Identifiable {
     var entryChapter: Int?
     var plannedPayoffChapter: Int?
     var notes: String = ""
+}
+
+extension Storyline {
+    private enum Keys: String, CodingKey {
+        case id, name, kind, isThroughLine, status, entryChapter, plannedPayoffChapter, notes
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: Keys.self)
+        id = try c.decodeIfPresent(String.self, forKey: .id) ?? ""
+        name = try c.decodeIfPresent(String.self, forKey: .name) ?? ""
+        if let raw = try c.decodeIfPresent(String.self, forKey: .kind) {
+            kind = StorylineKind(rawValue: raw) ?? .other
+        } else {
+            kind = .other
+        }
+        isThroughLine = try c.decodeIfPresent(Bool.self, forKey: .isThroughLine) ?? false
+        if let raw = try c.decodeIfPresent(String.self, forKey: .status) {
+            status = ActiveStatus(rawValue: raw) ?? .active
+        } else {
+            status = .active
+        }
+        entryChapter = try c.decodeIfPresent(Int.self, forKey: .entryChapter)
+        plannedPayoffChapter = try c.decodeIfPresent(Int.self, forKey: .plannedPayoffChapter)
+        notes = try c.decodeIfPresent(String.self, forKey: .notes) ?? ""
+    }
 }
 
 // MARK: - 时间线事件（oh-story 双时间线：作者真相 vs 读者已知）
@@ -168,6 +240,21 @@ struct Stage: Codable, Identifiable {
     var chapterStart: Int = 1
     var chapterEnd: Int = 1
     var theme: String = ""
+}
+
+extension Stage {
+    private enum Keys: String, CodingKey {
+        case id, name, chapterStart, chapterEnd, theme
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: Keys.self)
+        id = try c.decodeIfPresent(Int.self, forKey: .id) ?? 0
+        name = try c.decodeIfPresent(String.self, forKey: .name) ?? ""
+        chapterStart = try c.decodeIfPresent(Int.self, forKey: .chapterStart) ?? 1
+        chapterEnd = try c.decodeIfPresent(Int.self, forKey: .chapterEnd) ?? chapterStart
+        theme = try c.decodeIfPresent(String.self, forKey: .theme) ?? ""
+    }
 }
 
 

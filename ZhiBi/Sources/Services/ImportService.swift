@@ -31,6 +31,7 @@ struct ImportSummary {
     var storylines: [Storyline] = []
     var timelineEvents: [TimelineEvent] = []
     var facts: [MemoryFact] = []
+    var dossiers: [ChapterDossier] = []
     var characterAliases: [CharacterAlias] = []
     var dismissedConflicts: [String] = []
     var dailyWords: [String: Int] = [:]
@@ -58,6 +59,7 @@ struct ImportedChapter {
     var keyEvents: [String] = []
     var emotionalTone: String = ""
     var notes: [String] = []
+    var directive: String = ""
     var skeleton: ChapterSkeleton?
     var status: String = ""
 }
@@ -113,15 +115,20 @@ enum ImportService {
                 }
             }
         }
-        // 正文
+        // 正文：递归扫描（正文/第一卷/第001章.md 这类分层目录很常见）
         let proseDir = url.appendingPathComponent("正文", isDirectory: true)
-        if let files = try? fm.contentsOfDirectory(at: proseDir, includingPropertiesForKeys: nil) {
-            for f in files.sorted(by: { $0.lastPathComponent < $1.lastPathComponent }) where ["md", "txt"].contains(f.pathExtension.lowercased()) {
+        var proseFiles: [URL] = []
+        if let en = fm.enumerator(at: proseDir, includingPropertiesForKeys: [.isSymbolicLinkKey]) {
+            for case let f as URL in en where ["md", "txt"].contains(f.pathExtension.lowercased()) {
                 if (try? f.resourceValues(forKeys: [.isSymbolicLinkKey]))?.isSymbolicLink == true { continue }
-                if let (num, title) = parseChapterName(f.deletingPathExtension().lastPathComponent) {
-                    summary.items.append(ImportItem(kind: .chapter, chapterNumber: num, title: title,
-                                                    content: Disk.readText(f), sourceName: "正文/\(f.lastPathComponent)"))
-                }
+                proseFiles.append(f)
+            }
+        }
+        for f in proseFiles.sorted(by: { $0.path < $1.path }) {
+            if let (num, title) = parseChapterName(f.deletingPathExtension().lastPathComponent) {
+                let rel = f.path.replacingOccurrences(of: url.path + "/", with: "")
+                summary.items.append(ImportItem(kind: .chapter, chapterNumber: num, title: title,
+                                                content: Disk.readText(f), sourceName: rel))
             }
         }
         // 封面 SVG（执笔导出目录；根目录 cover.svg 也认）
@@ -135,7 +142,8 @@ enum ImportService {
         let tracking = url.appendingPathComponent("追踪/_tracking-state.json")
         if let data = try? Data(contentsOf: tracking),
            let obj = parseTolerantJSON(data) as? [String: Any] {
-            if let project = obj["project"] as? [String: Any], let title = project["title"] as? String {
+            if !summary.fromZhiBiExport,
+               let project = obj["project"] as? [String: Any], let title = project["title"] as? String {
                 summary.items.append(ImportItem(kind: .canon, title: "追踪状态（导入摘要）",
                                                 content: "原书名：\(title)。结构化伏笔/阶段已单独提取，无需手动处理。",
                                                 sourceName: "追踪/_tracking-state.json"))
@@ -203,6 +211,13 @@ enum ImportService {
                                    "悬疑线": .mystery, "对抗线": .rivalry, "世界线": .world][k] ?? .other
                     }
                     sl.isThroughLine = (l["through_line"] as? Bool) ?? false
+                    sl.entryChapter = l["entry_chapter"] as? Int
+                    sl.plannedPayoffChapter = l["planned_payoff_chapter"] as? Int
+                    sl.notes = (l["notes"] as? String) ?? ""
+                    if let raw = l["status"] as? String {
+                        sl.status = ["active": .active, "dormant": .dormant, "resolved": .resolved,
+                                     "进行中": .active, "蛰伏": .dormant, "已收束": .resolved][raw] ?? .active
+                    }
                     summary.storylines.append(sl)
                 }
             }
@@ -215,6 +230,12 @@ enum ImportService {
                     ev.revealed = (e["revealed"] as? Bool) ?? false
                     ev.revealChapter = e["reveal_chapter"] as? Int
                     ev.storylineIDs = (e["storyline_ids"] as? [String]) ?? []
+                    ev.notes = (e["notes"] as? String) ?? ""
+                    ev.happened = (e["happened"] as? Bool) ?? false
+                    ev.dropped = (e["dropped"] as? Bool) ?? false
+                    ev.actualChapter = e["actual_chapter"] as? Int
+                    ev.syncNote = (e["sync_note"] as? String) ?? ""
+                    if let raw = e["synced_at"] as? String { ev.syncedAt = ISO8601DateFormatter().date(from: raw) }
                     summary.timelineEvents.append(ev)
                 }
             }
@@ -223,12 +244,31 @@ enum ImportService {
                     guard let subject = f["subject"] as? String,
                           let predicate = f["predicate"] as? String,
                           let object = f["object"] as? String else { continue }
-                    let fact = MemoryFact(subject: subject, predicate: predicate, object: object,
+                    var fact = MemoryFact(subject: subject, predicate: predicate, object: object,
                                           fromChapter: (f["from_chapter"] as? Int) ?? 0,
                                           invalidatedAtChapter: f["invalidated_at_chapter"] as? Int,
                                           publicToReader: (f["public_to_reader"] as? Bool) ?? true,
-                                          source: "imported")
+                                          source: (f["source"] as? String) ?? "imported")
+                    fact.note = (f["note"] as? String) ?? ""
                     summary.facts.append(fact)
+                }
+            }
+            if let ds = obj["dossiers"] as? [[String: Any]] {
+                for d in ds {
+                    guard let num = d["chapter"] as? Int, num > 0,
+                          let headline = d["headline"] as? String, !headline.isEmpty else { continue }
+                    var card = ChapterDossier(chapter: num, headline: headline)
+                    if let id = d["id"] as? String, let uuid = UUID(uuidString: id) { card.id = uuid }
+                    card.scenes = (d["scenes"] as? [String]) ?? []
+                    card.cast = (d["cast"] as? [String]) ?? []
+                    card.advances = (d["advances"] as? [String]) ?? []
+                    card.turns = (d["turns"] as? [String]) ?? []
+                    card.hooks = (d["hooks"] as? [String]) ?? []
+                    card.relics = (d["relics"] as? [String]) ?? []
+                    if let raw = d["created_at"] as? String, let date = ISO8601DateFormatter().date(from: raw) {
+                        card.createdAt = date
+                    }
+                    summary.dossiers.append(card)
                 }
             }
             if let aliases = obj["character_aliases"] as? [[String: Any]] {
@@ -253,8 +293,10 @@ enum ImportService {
                     summary.dailyWords = dw
                 }
             }
-            // 全量伏笔（含已回收等终态）；旧格式没有 clues 键，退回 active_foreshadowing
+            // 全量伏笔（含已回收等终态）；旧格式没有 clues 键，退回 active_foreshadowing。
+            // 全量数据更完整（状态/动作/种下原文），必须覆盖先前解析的活跃子集。
             if let allClues = obj["clues"] as? [[String: Any]] {
+                var fullClues: [Clue] = []
                 for c in allClues {
                     guard let name = c["name"] as? String else { continue }
                     var clue = Clue(id: (c["id"] as? String) ?? "", title: name)
@@ -289,8 +331,9 @@ enum ImportService {
                             return ClueActionLog(chapter: ch, kind: k, note: (a["note"] as? String) ?? "")
                         }
                     }
-                    summary.clues.append(clue)
+                    fullClues.append(clue)
                 }
+                summary.clues = fullClues
             }
             if let cms = obj["chapter_meta"] as? [[String: Any]] {
                 for c in cms {
@@ -299,6 +342,7 @@ enum ImportService {
                     ic.title = (c["title"] as? String) ?? ""
                     ic.status = (c["status"] as? String) ?? ""
                     ic.notes = (c["notes"] as? [String]) ?? []
+                    ic.directive = (c["directive"] as? String) ?? ""
                     if let sum = c["summary"] as? [String: Any] {
                         ic.summaryText = (sum["text"] as? String) ?? ""
                         ic.keyEvents = (sum["key_events"] as? [String]) ?? []
@@ -313,6 +357,12 @@ enum ImportService {
                                                 suggestedWords: (b["suggested_words"] as? Int) ?? 0)
                                 beat.done = (b["done"] as? Bool) ?? false
                                 beat.clueIDs = (b["clue_ids"] as? [String]) ?? []
+                                beat.draftText = (b["draft_text"] as? String) ?? ""
+                                beat.pov = (b["pov"] as? String) ?? ""
+                                beat.location = (b["location"] as? String) ?? ""
+                                beat.timeLabel = (b["time_label"] as? String) ?? ""
+                                beat.cast = (b["cast"] as? [String]) ?? []
+                                beat.turn = (b["turn"] as? String) ?? ""
                                 if let idStr = b["id"] as? String { beat.id = UUID(uuidString: idStr) ?? UUID() }
                                 return beat
                             }
@@ -333,7 +383,15 @@ enum ImportService {
                             }
                         }
                         skeleton.humanApproved = (sk["human_approved"] as? Bool) ?? false
-                        skeleton.proposedByAI = true
+                        skeleton.proposedByAI = (sk["proposed_by_ai"] as? Bool) ?? true
+                        skeleton.hookKind = (sk["hook_kind"] as? String) ?? ""
+                        skeleton.pov = (sk["pov"] as? String) ?? ""
+                        skeleton.payoffType = (sk["payoff_type"] as? String) ?? ""
+                        skeleton.newExpectation = (sk["new_expectation"] as? String) ?? ""
+                        skeleton.volumeLabel = (sk["volume_label"] as? String) ?? ""
+                        if let raw = sk["approved_at"] as? String {
+                            skeleton.approvedAt = ISO8601DateFormatter().date(from: raw)
+                        }
                         ic.skeleton = skeleton
                     }
                     summary.chapterMeta[num] = ic
@@ -372,7 +430,9 @@ enum ImportService {
 
     /// 把确认后的清单写入库
     @MainActor
-    static func apply(_ summary: ImportSummary, into store: ProjectStore) {
+    static func apply(_ summary: ImportSummary, into store: ProjectStore) throws {
+        // 「空书」= 还没有任何正文；新建工程自带的空第一章不算已有内容
+        let wasEmptyBook = store.chapters.allSatisfy { $0.prose.isEmpty }
         for item in summary.items where item.kind != .skip {
             switch item.kind {
             case .chapter:
@@ -387,9 +447,10 @@ enum ImportService {
                     $0.status = .written
                 }
             case .canon, .outline:
-                let (certainty, body) = Self.certaintyFromHeader(item.content)
+                let meta = Self.canonMetadata(from: item.content)
                 let section = CanonSection(title: item.kind == .outline ? "大纲·\(item.title)" : item.title,
-                                           content: body, certainty: certainty)
+                                           content: meta.body, certainty: meta.certainty,
+                                           category: CanonCategory.match(meta.category).rawValue)
                 if !store.canonSections.contains(where: { $0.title == section.title }) {
                     store.canonSections.append(section)
                 }
@@ -417,6 +478,11 @@ enum ImportService {
         for e in summary.timelineEvents where !e.id.isEmpty && !store.timelineEvents.contains(where: { $0.id == e.id }) {
             store.timelineEvents.append(e)
         }
+        // 长程档案卡：按章去重，不覆盖已有
+        for d in summary.dossiers where !store.dossiers.contains(where: { $0.chapter == d.chapter }) {
+            store.dossiers.append(d)
+        }
+        store.dossiers.sort { $0.chapter < $1.chapter }
         // 双时态事实（按 主/谓/宾/起始章 去重；别名与忽略矛盾一并回读）
         for f in summary.facts where !store.facts.contains(where: {
             $0.subject == f.subject && $0.predicate == f.predicate && $0.object == f.object && $0.fromChapter == f.fromChapter
@@ -426,6 +492,9 @@ enum ImportService {
         for a in summary.characterAliases where !store.characterAliases.contains(where: { $0.canonicalName == a.canonicalName }) {
             store.characterAliases.append(a)
         }
+        // 导入完成后做一次确定性整理（去重 + 别名归一），与记忆回笼走同一条规则
+        let consolidated = MemoryHub.consolidate(facts: store.facts, aliases: store.characterAliases)
+        store.facts = consolidated.facts
         var dismissed = store.dismissedConflicts ?? []
         for key in summary.dismissedConflicts where !dismissed.contains(key) {
             dismissed.append(key)
@@ -444,13 +513,20 @@ enum ImportService {
         if !summary.styleNotes.isEmpty { store.project.styleNotes = summary.styleNotes }
         if let tc = summary.targetChapters { store.project.targetChapters = tc }
         if let cwt = summary.chapterWordTarget { store.project.chapterWordTarget = cwt }
-        if !summary.dailyWords.isEmpty {
+        // 只有全新空书才接管导出方的每日字数；并入已有作品时混入别人的日账会污染统计
+        if !summary.dailyWords.isEmpty, wasEmptyBook {
             var daily = store.project.dailyWords ?? [:]
             for (k, v) in summary.dailyWords { daily[k] = max(daily[k] ?? 0, v) }
             store.project.dailyWords = daily
         }
         // 每章结构化 meta：摘要/随手记/骨架（正文 md 之外的权威副本）
+        let skippedChapters = Set(summary.items.filter { $0.kind == .skip }.compactMap(\.chapterNumber))
         for (num, ic) in summary.chapterMeta {
+            let hasProseItem = summary.items.contains { $0.kind == .chapter && $0.chapterNumber == num }
+            // 用户明确跳过该章时，不要再用 chapter_meta 把它建回来
+            guard !skippedChapters.contains(num) || store.chapter(num) != nil else { continue }
+            // 非执笔导出且该章既没有正文也没有已存在章节：不要凭追踪 JSON 凭空造空章
+            guard hasProseItem || summary.fromZhiBiExport || store.chapter(num) != nil else { continue }
             _ = store.ensureChapter(num)
             store.updateChapter(num, countWords: false) { ch in
                 if ch.title.isEmpty { ch.title = ic.title }
@@ -460,24 +536,33 @@ enum ImportService {
                 }
                 if let sk = ic.skeleton, ch.skeleton == nil { ch.skeleton = sk }
                 if ch.notes == nil || ch.notes?.isEmpty == true, !ic.notes.isEmpty { ch.notes = ic.notes }
+                if (ch.directive ?? "").isEmpty, !ic.directive.isEmpty { ch.directive = ic.directive }
+                // 状态是导出时的权威值（定稿/已验证等），等价环要还原
+                if let st = ChapterStatus(rawValue: ic.status) { ch.status = st }
             }
         }
-        try? store.saveNow()
+        // 导入是显式写盘动作：失败必须上抛，不能预览显示"完成"而磁盘上什么都没有
+        try store.saveNow()
     }
 
-    /// 从导出 md 首行 HTML 注释读回确定度（<!-- zhibi:certainty=canon|tentative|blank -->）
-    static func certaintyFromHeader(_ content: String) -> (Certainty, String) {
-        var body = content
-        guard content.hasPrefix("<!-- zhibi:certainty=") else { return (.tentative, content) }
-        let firstLine = String(content.prefix(while: { $0 != "\n" }))
-        guard let range = firstLine.range(of: "certainty=") else { return (.tentative, content) }
-        let value = String(firstLine[range.upperBound...]).replacingOccurrences(of: " -->", with: "")
-        body = String(String(content.dropFirst(firstLine.count)).drop(while: { $0 == "\n" }))
-        switch value {
-        case "canon": return (.canon, body)
-        case "blank": return (.open, body)
-        default: return (.tentative, body)
+    /// 从导出 md 头部 HTML 注释读回确定度与分类
+    /// （<!-- zhibi:certainty=canon --> / <!-- zhibi:category=世界观 -->）
+    static func canonMetadata(from content: String) -> (certainty: Certainty, category: String, body: String) {
+        var lines = content.components(separatedBy: "\n")
+        var certainty: Certainty = .tentative
+        var category = CanonCategory.uncategorized.rawValue
+        while let first = lines.first, first.hasPrefix("<!-- zhibi:") {
+            if let range = first.range(of: "certainty=") {
+                let value = String(first[range.upperBound...]).replacingOccurrences(of: " -->", with: "")
+                certainty = ["canon": .canon, "blank": .open][value] ?? .tentative
+            }
+            if let range = first.range(of: "category=") {
+                category = String(first[range.upperBound...]).replacingOccurrences(of: " -->", with: "")
+            }
+            lines.removeFirst()
         }
+        let body = lines.joined(separator: "\n").trimmingCharacters(in: .newlines)
+        return (certainty, category, body)
     }
 
     /// 容错解析：oh-story 追踪 JSON 常含字符串内裸换行等非法控制字符，
@@ -560,28 +645,52 @@ enum ImportService {
         return total &+ section &+ current
     }
 
-    /// 解析「第001章_血夜」「第 12 章 风起」类文件名
+    /// 解析章节文件名。支持：
+    /// 「第001章_血夜」「第 12 章 风起」「第３章」
+    /// 「001_风起.md」「001-风起」「001.风起」
+    /// 「Chapter 1 - 风起」「chapter_01」
     static func parseChapterName(_ name: String) -> (Int, String)? {
-        guard let re = try? NSRegularExpression(pattern: "第\\s*([0-9０-９一二三四五六七八九十百零两]+)\\s*章[_\\-\\s]*(.*)") else { return nil }
         let ns = name as NSString
-        guard let m = re.firstMatch(in: name, range: NSRange(location: 0, length: ns.length)),
-              m.range(at: 1).location != NSNotFound else { return nil }
-        var numStr = ns.substring(with: m.range(at: 1))
-        // 全角数字转半角
-        let map = "０１２３４５６７８９"
-        for (i, ch) in map.enumerated() {
-            numStr = numStr.replacingOccurrences(of: String(ch), with: String(i))
+        if let re = try? NSRegularExpression(pattern: "第\\s*([0-9０-９一二三四五六七八九十百零两]+)\\s*章[_\\-\\s]*(.*)"),
+           let m = re.firstMatch(in: name, range: NSRange(location: 0, length: ns.length)),
+           m.range(at: 1).location != NSNotFound {
+            var numStr = ns.substring(with: m.range(at: 1))
+            let map = "０１２３４５６７８９"
+            for (i, ch) in map.enumerated() {
+                numStr = numStr.replacingOccurrences(of: String(ch), with: String(i))
+            }
+            let num = Int(numStr) ?? chineseNumeral(numStr)
+            guard num >= 1 else { return nil }
+            var title = m.range(at: 2).location != NSNotFound ? ns.substring(with: m.range(at: 2)) : ""
+            title = title.trimmingCharacters(in: .whitespacesAndNewlines)
+            if title.isEmpty { title = "第\(num)章" }
+            return (num, title)
         }
-        let num: Int
-        if let parsed = Int(numStr) {
-            num = parsed
-        } else {
-            num = chineseNumeral(numStr)
+        // 数字前缀：001_风起 / 001-风起 / 001.风起 / 001 风起
+        // 只接受零填充或 ≤3 位数字，避免把「2024_年度总结」当成第 2024 章
+        if let re = try? NSRegularExpression(pattern: "^\\s*(0*)(\\d{1,5})\\s*[\\._\\-、\\s]\\s*(.+)$"),
+           let m = re.firstMatch(in: name, range: NSRange(location: 0, length: ns.length)),
+           m.range(at: 1).location != NSNotFound, m.range(at: 2).location != NSNotFound,
+           m.range(at: 3).location != NSNotFound {
+            let zeros = ns.substring(with: m.range(at: 1))
+            let digits = ns.substring(with: m.range(at: 2))
+            if !zeros.isEmpty || digits.count <= 3,
+               let num = Int(digits), num >= 1 {
+                var title = ns.substring(with: m.range(at: 3)).trimmingCharacters(in: .whitespacesAndNewlines)
+                if title.isEmpty { title = "第\(num)章" }
+                return (num, title)
+            }
         }
-        guard num >= 1 else { return nil }
-        var title = m.range(at: 2).location != NSNotFound ? ns.substring(with: m.range(at: 2)) : ""
-        title = title.trimmingCharacters(in: .whitespacesAndNewlines)
-        if title.isEmpty { title = "第\(num)章" }
-        return (num, title)
+        // Chapter 1 / Chapter_01 - 风起
+        if let re = try? NSRegularExpression(pattern: "(?i)^\\s*chapter[\\s._-]*(\\d{1,5})\\s*[:\\-_.、\\s]*(.*)$"),
+           let m = re.firstMatch(in: name, range: NSRange(location: 0, length: ns.length)),
+           m.range(at: 1).location != NSNotFound,
+           let num = Int(ns.substring(with: m.range(at: 1))), num >= 1 {
+            var title = m.range(at: 2).location != NSNotFound ? ns.substring(with: m.range(at: 2)) : ""
+            title = title.trimmingCharacters(in: .whitespacesAndNewlines)
+            if title.isEmpty { title = "第\(num)章" }
+            return (num, title)
+        }
+        return nil
     }
 }

@@ -187,8 +187,55 @@ struct ChapterMeta: Codable {
     var skeleton: ChapterSkeleton?
     var summary: ChapterSummary?
     var notes: [String]?
+    /// 作者给 AI 的本章指令（可选；旧档无此键解码为 nil）
+    var directive: String?
     var cachedWords: Int?
     var updatedAt: Date = Date()
+
+    enum CodingKeys: String, CodingKey {
+        case id, number, title, status, skeleton, summary, notes, directive, cachedWords, updatedAt
+    }
+
+    /// 显式解码：老 meta.json 可能缺 title/status/updatedAt 等键。
+    /// Swift 合成的 Decodable 对「带默认值的非可选字段」缺键会直接抛错，
+    /// 一旦被 `??` 吞掉就会把章节退化成空章并在下次保存覆盖原档。
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+        // number 是 meta 的锚点：缺了就是坏档，必须抛错让读取侧隔离原文件
+        number = try c.decode(Int.self, forKey: .number)
+        title = try c.decodeIfPresent(String.self, forKey: .title) ?? ""
+        if let raw = try c.decodeIfPresent(String.self, forKey: .status) {
+            status = ChapterStatus(rawValue: raw) ?? .empty
+        } else {
+            status = .empty
+        }
+        skeleton = try c.decodeIfPresent(ChapterSkeleton.self, forKey: .skeleton)
+        summary = try c.decodeIfPresent(ChapterSummary.self, forKey: .summary)
+        notes = try c.decodeIfPresent([String].self, forKey: .notes)
+        directive = try c.decodeIfPresent(String.self, forKey: .directive)
+        cachedWords = try c.decodeIfPresent(Int.self, forKey: .cachedWords)
+        updatedAt = try c.decodeIfPresent(Date.self, forKey: .updatedAt) ?? Date()
+    }
+
+    init() {
+        number = 0
+    }
+
+    init(id: UUID = UUID(), number: Int, title: String = "", status: ChapterStatus = .empty,
+         skeleton: ChapterSkeleton? = nil, summary: ChapterSummary? = nil, notes: [String]? = nil,
+         directive: String? = nil, cachedWords: Int? = nil, updatedAt: Date = Date()) {
+        self.id = id
+        self.number = number
+        self.title = title
+        self.status = status
+        self.skeleton = skeleton
+        self.summary = summary
+        self.notes = notes
+        self.directive = directive
+        self.cachedWords = cachedWords
+        self.updatedAt = updatedAt
+    }
 }
 
 // MARK: - 章节
@@ -204,6 +251,8 @@ struct Chapter: Codable, Identifiable {
     var summary: ChapterSummary?
     /// 随手记：写作时顺手记下的关键节点/记忆/埋点候选（旁路记录，人写）
     var notes: [String]? = []
+    /// 给 AI 的本章指令（可选；必须持久化，否则切章就丢）
+    var directive: String?
     var updatedAt: Date = Date()
     /// 字数缓存：prose 变更时由 store 更新；nil = 未统计（旧文件/未扫描），读取时现算
     var cachedWords: Int? = nil
@@ -220,4 +269,15 @@ struct ChapterSummary: Codable {
     var summary: String = ""
     var keyEvents: [String] = []
     var emotionalTone: String = ""
+}
+
+extension ChapterSummary {
+    private enum Keys: String, CodingKey { case chapter, summary, keyEvents, emotionalTone }
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: Keys.self)
+        chapter = try c.decodeIfPresent(Int.self, forKey: .chapter) ?? 0
+        summary = try c.decodeIfPresent(String.self, forKey: .summary) ?? ""
+        keyEvents = try c.decodeIfPresent([String].self, forKey: .keyEvents) ?? []
+        emotionalTone = try c.decodeIfPresent(String.self, forKey: .emotionalTone) ?? ""
+    }
 }

@@ -63,6 +63,15 @@ final class AppViewModel: ObservableObject {
 
     /// 书架卡牌：换封面风格（盘 IO 在后台线程，返回新风格序号）
     func cycleCoverStyle(for ref: ProjectRef) async -> Int? {
+        // 工程正开着：必须改内存里的 store，否则后台整份写 project.json
+        // 会和 store 的下一次保存互相覆盖。
+        if let store, store.rootURL == ref.url {
+            let base = store.project.coverStyle ?? CoverStyle.defaultIndex(for: store.project.title)
+            let next = (base + 1) % CoverStyle.count
+            store.project.coverStyle = next
+            store.saveSoon()
+            return next
+        }
         let file = ProjectLayout.projectFile(ref.url)
         return await Task.detached(priority: .utility) {
             guard var project = try? Disk.readJSON(NovelProject.self, from: file) else { return nil }
@@ -96,7 +105,15 @@ final class AppViewModel: ObservableObject {
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         let store = ProjectStore(rootURL: dir)
         store.project = NovelProject(title: title, genre: genre, premise: premise, chapterWordTarget: wordTarget)
-        try? store.saveNow()
+        // 新书必须有第一章：否则打开后右侧只有「选择或新建一个章节」，
+        // 而新手引导条挂在编辑器内部，零章时永远看不见。
+        _ = store.ensureChapter(1)
+        do {
+            try store.saveNow()
+        } catch {
+            projectOpenError = "新书创建失败：\(error.localizedDescription)（检查磁盘/权限后重试）"
+            return
+        }
         open(store: store)
         if buildFramework {
             // 创建即搭框架：全部走提案通道（收件箱待审），核心机制不变
@@ -144,11 +161,21 @@ final class AppViewModel: ObservableObject {
     }
 
     func closeProject() {
-        do {
-            try store?.saveNow()
-        } catch {
-            // 保存失败不能静默：错误留在 store 上（书架状态条可见），再返回
-            store?.lastSaveError = "保存失败：\(error.localizedDescription)（不要直接删项目目录）"
+        ProseEditorFlush.now()
+        if let store {
+            do {
+                try store.saveNow()
+            } catch {
+                // 错误不能挂在即将释放的 store 上：那等于静默失败
+                let alert = NSAlert()
+                alert.messageText = "保存失败，尚未返回书架"
+                alert.informativeText = error.localizedDescription
+                    + "\n\n留在项目里可以重试保存（自动保存会继续尝试）；仍要返回则未落盘的修改可能丢失。"
+                alert.alertStyle = .critical
+                alert.addButton(withTitle: "留在这里重试")
+                alert.addButton(withTitle: "仍要返回")
+                if alert.runModal() == .alertFirstButtonReturn { return }
+            }
         }
         store = nil
         screen = .welcome
@@ -156,7 +183,10 @@ final class AppViewModel: ObservableObject {
     }
 
     func deleteProject(_ ref: ProjectRef) {
-        ProjectStore.moveToTrash(ref.url)
+        if FileManager.default.fileExists(atPath: ref.url.path), !ProjectStore.moveToTrash(ref.url) {
+            showToast("无法移到废纸篓（检查权限/磁盘），项目未删除。", success: false)
+            return
+        }
         projects.removeAll { $0.id == ref.id }
         ProjectRegistry.save(projects)
     }
@@ -199,24 +229,30 @@ final class AppViewModel: ObservableObject {
     func confirmImport(intoExisting existing: ProjectStore? = nil) {
         guard let preview = importPreview else { return }
         var importedInto: ProjectStore?
-        if let existing {
-            ImportService.apply(preview, into: existing)
-            importedInto = existing
-        } else {
-            let title = importNewProjectTitle.isEmpty ? "导入作品" : importNewProjectTitle
-            let base = ProjectLayout.safeFileName(title)
-            var dir = defaultProjectsDir().appendingPathComponent("\(base).zhibi", isDirectory: true)
-            var suffix = 2
-            while FileManager.default.fileExists(atPath: dir.path) {
-                dir = defaultProjectsDir().appendingPathComponent("\(base)-\(suffix).zhibi", isDirectory: true)
-                suffix += 1
+        do {
+            if let existing {
+                try ImportService.apply(preview, into: existing)
+                importedInto = existing
+            } else {
+                let title = importNewProjectTitle.isEmpty ? "导入作品" : importNewProjectTitle
+                let base = ProjectLayout.safeFileName(title)
+                var dir = defaultProjectsDir().appendingPathComponent("\(base).zhibi", isDirectory: true)
+                var suffix = 2
+                while FileManager.default.fileExists(atPath: dir.path) {
+                    dir = defaultProjectsDir().appendingPathComponent("\(base)-\(suffix).zhibi", isDirectory: true)
+                    suffix += 1
+                }
+                try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+                let store = ProjectStore(rootURL: dir)
+                store.project.title = title
+                try ImportService.apply(preview, into: store)
+                open(store: store)
+                importedInto = store
             }
-            try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-            let store = ProjectStore(rootURL: dir)
-            store.project.title = title
-            ImportService.apply(preview, into: store)
-            open(store: store)
-            importedInto = store
+        } catch {
+            // 预览窗保持打开，作者可检查磁盘/权限后重试；绝不显示"导入完成"
+            showToast("导入失败：\(error.localizedDescription)", success: false)
+            return
         }
         importPreview = nil
         showToast("导入完成：\(preview.chapters) 章 · 设定/大纲 \(preview.canon + preview.outlines) 篇")
@@ -237,18 +273,64 @@ final class AppViewModel: ObservableObject {
 
     // MARK: - 去AI味建议采纳（首条采纳前自动快照，可回滚）
 
+    /// 最近一次去AI味采纳失败的具体原因（原文找不到 / 出现多次），供收件箱就地提示
+    @Published var lastDeslopIssue: String?
+
     @discardableResult
-    func applyDeslopSuggestion(_ suggestion: DeslopSuggestion, chapter n: Int, snapshotTag: String? = nil) -> Bool {
-        guard let store, var ch = store.chapter(n) else { return false }
-        if let tag = snapshotTag {
-            _ = store.snapshotProse(chapter: n, tag: tag)
+    func applyDeslopSuggestion(_ suggestion: DeslopSuggestion, chapter n: Int,
+                               snapshotTag: String? = nil, targetDraftID: UUID? = nil) -> Bool {
+        lastDeslopIssue = nil
+        guard let store else { return false }
+        guard !suggestion.original.isEmpty else {
+            lastDeslopIssue = "建议的原文为空，无法定位。"
+            return false
         }
-        guard let range = ch.prose.range(of: suggestion.original, options: [.literal]) else { return false }
+        // 送审的是草稿：建议必须改回草稿提案，绝不能动已入库正文
+        // 草稿已采纳后，同样的文本已经进了正文：此时建议应落到正文，
+        // 再去改归档里的草稿提案没有意义。
+        if let draftID = targetDraftID,
+           let idx = store.proposals.firstIndex(where: { $0.id == draftID }),
+           store.proposals[idx].status == .pending,
+           case .draft(var draft) = store.proposals[idx].payload {
+            guard let range = uniqueRange(of: suggestion.original, in: draft.text) else { return false }
+            draft.text.replaceSubrange(range, with: suggestion.replacement)
+            store.proposals[idx].payload = .draft(draft)
+            store.saveSoon()
+            return true
+        }
+        guard var ch = store.chapter(n) else { return false }
+        guard let range = uniqueRange(of: suggestion.original, in: ch.prose) else { return false }
+        if let tag = snapshotTag {
+            guard store.snapshotProse(chapter: n, tag: tag) != nil else { return false }
+        }
         ch.prose.replaceSubrange(range, with: suggestion.replacement)
         store.updateChapter(n) {
             $0.prose = ch.prose
         }
         return true
+    }
+
+    /// 只允许替换唯一命中的片段：同一句出现多次时静默改第一处，很可能改错位置。
+    private func uniqueRange(of needle: String, in text: String) -> Range<String.Index>? {
+        var count = 0
+        var first: Range<String.Index>?
+        var searchStart = text.startIndex
+        while searchStart < text.endIndex,
+              let r = text.range(of: needle, options: [.literal], range: searchStart..<text.endIndex) {
+            count += 1
+            if first == nil { first = r }
+            if count > 1 { break }
+            searchStart = r.upperBound
+        }
+        if count == 0 {
+            lastDeslopIssue = "原文在目标文本里找不到（可能已被你手改）。"
+            return nil
+        }
+        if count > 1 {
+            lastDeslopIssue = "原文出现 \(count) 次，无法确定改哪一处——请手动修改。"
+            return nil
+        }
+        return first
     }
 
     // MARK: - 导出

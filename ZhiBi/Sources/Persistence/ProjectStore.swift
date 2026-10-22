@@ -22,6 +22,8 @@ final class ProjectStore: ObservableObject {
     @Published var proposals: [AIProposal] = []
     /// 最近一次保存失败原因（磁盘满/权限等）——UI 状态条展示
     @Published var lastSaveError: String?
+    /// 读盘隔离/损坏警告（不随自动保存成功被清掉，需作者确认）
+    @Published var loadWarnings: String?
     /// 自动保存开关（由设置页控制；关掉后只走 ⌘S 手动保存）
     var autoSaveEnabled = true
     /// 脏章节集合：saveNow 只落盘这些章（避免全书全量重写）
@@ -79,32 +81,43 @@ final class ProjectStore: ObservableObject {
             guard FileManager.default.fileExists(atPath: f.path) else { return nil }
             return try? String(contentsOf: f, encoding: .utf8)
         }()
+            var quarantineNotes: [String] = []
             let sectionsFile = ProjectLayout.canonDir(rootURL).appendingPathComponent("sections.json")
+            let canonRead = Disk.readJSONOrQuarantine([CanonSection].self, from: sectionsFile, label: "设定索引")
+            if let note = canonRead.note { quarantineNotes.append(note) }
             let canon: [CanonSection]
-            if FileManager.default.fileExists(atPath: sectionsFile.path) {
-                canon = (try? Disk.readJSON([CanonSection].self, from: sectionsFile)) ?? []
+            if let loaded = canonRead.value {
+                canon = loaded
             } else {
+                // 文件缺失或已隔离：从 canon/*.md 重建（内容仍在，至少不丢文档）
                 canon = ProjectStore.loadCanonFromDisk(rootURL: rootURL)
             }
-            let storylines = (try? Disk.readJSON([Storyline].self, from: ProjectLayout.storylinesFile(rootURL))) ?? []
-            let timelineEvents = (try? Disk.readJSON([TimelineEvent].self, from: ProjectLayout.eventsFile(rootURL))) ?? []
-            let stages = (try? Disk.readJSON([Stage].self, from: ProjectLayout.stagesFile(rootURL))) ?? []
-            let clues = (try? Disk.readJSON([Clue].self, from: ProjectLayout.cluesFile(rootURL))) ?? []
-            let memory = try? Disk.readJSON(MemoryFile.self, from: ProjectLayout.memoryFile(rootURL))
-            let dossiers = (try? Disk.readJSON([ChapterDossier].self, from: ProjectLayout.dossiersFile(rootURL))) ?? []
-            let pending = (try? Disk.readJSON([AIProposal].self, from: ProjectLayout.proposalsFile(rootURL))) ?? []
-            let archived = (try? Disk.readJSON([AIProposal].self, from: ProjectLayout.proposalsArchiveFile(rootURL))) ?? []
+            func read<T: Decodable>(_ type: T.Type, _ url: URL, _ label: String, fallback: T) -> T {
+                let r = Disk.readJSONOrQuarantine(type, from: url, label: label)
+                if let note = r.note { quarantineNotes.append(note) }
+                return r.value ?? fallback
+            }
+            let storylines = read([Storyline].self, ProjectLayout.storylinesFile(rootURL), "故事线", fallback: [])
+            let timelineEvents = read([TimelineEvent].self, ProjectLayout.eventsFile(rootURL), "时间线事件", fallback: [])
+            let stages = read([Stage].self, ProjectLayout.stagesFile(rootURL), "阶段", fallback: [])
+            let clues = read([Clue].self, ProjectLayout.cluesFile(rootURL), "伏笔台账", fallback: [])
+            let memory = Disk.readJSONOrQuarantine(MemoryFile.self, from: ProjectLayout.memoryFile(rootURL), label: "记忆库")
+            if let note = memory.note { quarantineNotes.append(note) }
+            let dossiers = read([ChapterDossier].self, ProjectLayout.dossiersFile(rootURL), "档案卡", fallback: [])
+            let pending = read([AIProposal].self, ProjectLayout.proposalsFile(rootURL), "提案收件箱", fallback: [])
+            let archived = read([AIProposal].self, ProjectLayout.proposalsArchiveFile(rootURL), "提案归档", fallback: [])
             let proposals = (pending + archived).sorted { $0.createdAt > $1.createdAt }
 
             var loaded: [Chapter] = []
-            var quarantineNotes: [String] = []
             let fm = FileManager.default
             if let dirs = try? fm.contentsOfDirectory(at: ProjectLayout.chaptersDir(rootURL), includingPropertiesForKeys: nil) {
                 for dir in dirs.sorted(by: { $0.lastPathComponent < $1.lastPathComponent }) where dir.lastPathComponent.hasPrefix("ch-") {
                     guard let num = Int(dir.lastPathComponent.dropFirst(3)) else { continue }
                     let proseFile = ProjectLayout.proseFile(rootURL, number: num)
-                    var ch = ProjectStore.loadChapterMeta(rootURL: rootURL, number: num,
-                                                         proseFileMissing: !fm.fileExists(atPath: proseFile.path))
+                    let metaResult = ProjectStore.loadChapterMeta(rootURL: rootURL, number: num,
+                                                                  proseFileMissing: !fm.fileExists(atPath: proseFile.path))
+                    var ch = metaResult.chapter
+                    if let note = metaResult.note { quarantineNotes.append(note) }
                     // 正文读不了（非 UTF-8 等）：原稿隔离为 .corrupt，绝不静默清空后覆盖
                     if fm.fileExists(atPath: proseFile.path) {
                         let (text, quarantined) = Disk.readTextOrQuarantine(proseFile)
@@ -117,7 +130,7 @@ final class ProjectStore: ObservableObject {
                 }
             }
             return LoadSnapshot(project: project, coverSVG: coverSVG, canonSections: canon, storylines: storylines,
-                                timelineEvents: timelineEvents, stages: stages, clues: clues, memory: memory,
+                                timelineEvents: timelineEvents, stages: stages, clues: clues, memory: memory.value,
                                 proposals: proposals, dossiers: dossiers, chapters: loaded, quarantineNotes: quarantineNotes)
         }
     }
@@ -129,9 +142,9 @@ final class ProjectStore: ObservableObject {
         self.coverSVG = snapshot.coverSVG
         self.canonSections = snapshot.canonSections
         self.storylines = snapshot.storylines
-        self.timelineEvents = snapshot.timelineEvents
-        self.stages = snapshot.stages
-        self.clues = snapshot.clues
+        self.timelineEvents = snapshot.timelineEvents.sorted { ($0.chapter, $0.id) < ($1.chapter, $1.id) }
+        self.stages = snapshot.stages.sorted { $0.id < $1.id }
+        self.clues = snapshot.clues.sorted { $0.id < $1.id }
         self.facts = snapshot.memory?.facts ?? []
         self.characterAliases = snapshot.memory?.aliases ?? []
         self.dismissedConflicts = snapshot.memory?.dismissedConflicts ?? []
@@ -140,43 +153,52 @@ final class ProjectStore: ObservableObject {
         self.chapters = snapshot.chapters.sorted { $0.number < $1.number }
         dirtyChapters.removeAll()
         if !snapshot.quarantineNotes.isEmpty {
-            lastSaveError = snapshot.quarantineNotes.joined(separator: " ")
+            loadWarnings = snapshot.quarantineNotes.joined(separator: " ")
             // 隔离过的正文：写签名失效，强制下次保存真正落盘
             for ch in snapshot.chapters where ch.prose.isEmpty {
                 Disk.invalidateSignature(ProjectLayout.proseFile(rootURL, number: ch.number))
             }
+        } else {
+            loadWarnings = nil
         }
         return true
     }
 
     func loadSync() throws {
-        let sectionsFile = ProjectLayout.canonDir(rootURL).appendingPathComponent("sections.json")
-        if FileManager.default.fileExists(atPath: sectionsFile.path) {
-            canonSections = (try? Disk.readJSON([CanonSection].self, from: sectionsFile)) ?? []
-        } else {
-            canonSections = Self.loadCanonFromDisk(rootURL: rootURL)
+        var quarantineNotes: [String] = []
+        func read<T: Decodable>(_ type: T.Type, _ url: URL, _ label: String, fallback: T) -> T {
+            let r = Disk.readJSONOrQuarantine(type, from: url, label: label)
+            if let note = r.note { quarantineNotes.append(note) }
+            return r.value ?? fallback
         }
-        storylines = (try? Disk.readJSON([Storyline].self, from: ProjectLayout.storylinesFile(rootURL))) ?? []
-        timelineEvents = (try? Disk.readJSON([TimelineEvent].self, from: ProjectLayout.eventsFile(rootURL))) ?? []
-        stages = (try? Disk.readJSON([Stage].self, from: ProjectLayout.stagesFile(rootURL))) ?? []
-        clues = (try? Disk.readJSON([Clue].self, from: ProjectLayout.cluesFile(rootURL))) ?? []
-        let mem = try? Disk.readJSON(MemoryFile.self, from: ProjectLayout.memoryFile(rootURL))
+        let sectionsFile = ProjectLayout.canonDir(rootURL).appendingPathComponent("sections.json")
+        let canonRead = Disk.readJSONOrQuarantine([CanonSection].self, from: sectionsFile, label: "设定索引")
+        if let note = canonRead.note { quarantineNotes.append(note) }
+        canonSections = canonRead.value ?? Self.loadCanonFromDisk(rootURL: rootURL)
+        storylines = read([Storyline].self, ProjectLayout.storylinesFile(rootURL), "故事线", fallback: [])
+        timelineEvents = read([TimelineEvent].self, ProjectLayout.eventsFile(rootURL), "时间线事件", fallback: [])
+        stages = read([Stage].self, ProjectLayout.stagesFile(rootURL), "阶段", fallback: [])
+        clues = read([Clue].self, ProjectLayout.cluesFile(rootURL), "伏笔台账", fallback: [])
+        let memoryRead = Disk.readJSONOrQuarantine(MemoryFile.self, from: ProjectLayout.memoryFile(rootURL), label: "记忆库")
+        if let note = memoryRead.note { quarantineNotes.append(note) }
+        let mem = memoryRead.value
         facts = mem?.facts ?? []
         characterAliases = mem?.aliases ?? []
         dismissedConflicts = mem?.dismissedConflicts ?? []
-        let pendingLoaded = (try? Disk.readJSON([AIProposal].self, from: ProjectLayout.proposalsFile(rootURL))) ?? []
-        let archivedLoaded = (try? Disk.readJSON([AIProposal].self, from: ProjectLayout.proposalsArchiveFile(rootURL))) ?? []
+        let pendingLoaded = read([AIProposal].self, ProjectLayout.proposalsFile(rootURL), "提案收件箱", fallback: [])
+        let archivedLoaded = read([AIProposal].self, ProjectLayout.proposalsArchiveFile(rootURL), "提案归档", fallback: [])
         proposals = (pendingLoaded + archivedLoaded).sorted { $0.createdAt > $1.createdAt }
 
         var loaded: [Chapter] = []
-        var quarantineNotes: [String] = []
         let fm = FileManager.default
         if let dirs = try? fm.contentsOfDirectory(at: ProjectLayout.chaptersDir(rootURL), includingPropertiesForKeys: nil) {
             for dir in dirs.sorted(by: { $0.lastPathComponent < $1.lastPathComponent }) where dir.lastPathComponent.hasPrefix("ch-") {
                 guard let num = Int(dir.lastPathComponent.dropFirst(3)) else { continue }
                 let proseFile = ProjectLayout.proseFile(rootURL, number: num)
-                var ch = Self.loadChapterMeta(rootURL: rootURL, number: num,
-                                              proseFileMissing: !fm.fileExists(atPath: proseFile.path))
+                let metaResult = Self.loadChapterMeta(rootURL: rootURL, number: num,
+                                                      proseFileMissing: !fm.fileExists(atPath: proseFile.path))
+                var ch = metaResult.chapter
+                if let note = metaResult.note { quarantineNotes.append(note) }
                 // 正文读不了（非 UTF-8 等）：原稿隔离为 .corrupt，绝不静默清空后覆盖
                 if fm.fileExists(atPath: proseFile.path) {
                     let (text, quarantined) = Disk.readTextOrQuarantine(proseFile)
@@ -189,9 +211,10 @@ final class ProjectStore: ObservableObject {
                 loaded.append(ch)
             }
         }
-        if !quarantineNotes.isEmpty {
-            lastSaveError = quarantineNotes.joined(separator: " ")
-        }
+        loadWarnings = quarantineNotes.isEmpty ? nil : quarantineNotes.joined(separator: " ")
+        timelineEvents.sort { ($0.chapter, $0.id) < ($1.chapter, $1.id) }
+        stages.sort { $0.id < $1.id }
+        clues.sort { $0.id < $1.id }
         loaded.sort { $0.number < $1.number }
         chapters = loaded
         dirtyChapters.removeAll()
@@ -202,7 +225,11 @@ final class ProjectStore: ObservableObject {
         let fm = FileManager.default
         guard let files = try? fm.contentsOfDirectory(at: ProjectLayout.canonDir(rootURL), includingPropertiesForKeys: nil) else { return [] }
         return files.filter { $0.pathExtension == "md" }.sorted { $0.lastPathComponent < $1.lastPathComponent }
-            .map { CanonSection(title: $0.deletingPathExtension().lastPathComponent, content: Disk.readText($0)) }
+            .map {
+                // 非 UTF-8 的设定 md：隔离原文件并保留 latin1 可读内容，不能静默变空
+                let (text, _) = Disk.readTextOrQuarantine($0)
+                return CanonSection(title: $0.deletingPathExtension().lastPathComponent, content: text)
+            }
     }
 
     func saveSoon() {
@@ -236,15 +263,21 @@ final class ProjectStore: ObservableObject {
             var skeleton: ChapterSkeleton?
             var summary: ChapterSummary?
             var notes: [String]?
+            var directive: String?
             var cachedWords: Int?
             var updatedAt: Date
         }
         for ch in chapters where dirtyChapters.contains(ch.number) {
             let meta = MetaChapter(id: ch.id, number: ch.number, title: ch.title, status: ch.status,
                                    skeleton: ch.skeleton, summary: ch.summary, notes: ch.notes,
-                                   cachedWords: ch.cachedWords, updatedAt: ch.updatedAt)
+                                   directive: ch.directive, cachedWords: ch.cachedWords, updatedAt: ch.updatedAt)
             try Disk.writeJSON(meta, to: Self.chapterMetaURL(rootURL, ch.number))
             try Disk.write(Data(ch.prose.utf8), to: ProjectLayout.proseFile(rootURL, number: ch.number))
+        }
+        // 日账只留最近一年：否则 project.json 会随天数无限增长
+        if let daily = project.dailyWords, daily.count > 400 {
+            let keep = Set(daily.keys.sorted().suffix(366))
+            project.dailyWords = daily.filter { keep.contains($0.key) }
         }
         try Disk.writeJSON(project, to: ProjectLayout.projectFile(rootURL))
         // 封面 SVG（AI 绘制/作者采用后落盘；无封面不写文件）
@@ -257,12 +290,14 @@ final class ProjectStore: ObservableObject {
         // 把 -x 副本当孤儿吃回来，节数无限 +1。
         let canonDir = ProjectLayout.canonDir(rootURL)
         var writtenNames = Set<String>()
-        var nameByTitle: [String: String] = [:]
+        // 用与 canonSections 同下标的数组：同题设定不能用 title 做字典键，
+        // 否则后一个会覆盖前一个的文件名，导致两节写进同一个 md、丢一节。
+        var sectionFileNames: [String] = []
         for section in canonSections {
             var name = ProjectLayout.safeFileName(section.title)
             while writtenNames.contains(name + ".md") { name += "-x" }
             writtenNames.insert(name + ".md")
-            nameByTitle[section.title] = name
+            sectionFileNames.append(name)
         }
         if let existing = try? FileManager.default.contentsOfDirectory(at: canonDir, includingPropertiesForKeys: nil) {
             for f in existing.sorted(by: { $0.lastPathComponent < $1.lastPathComponent })
@@ -273,15 +308,15 @@ final class ProjectStore: ObservableObject {
                     var name = title
                     while writtenNames.contains(name + ".md") { name += "-x" }
                     writtenNames.insert(name + ".md")
-                    nameByTitle[title] = name
+                    sectionFileNames.append(name)
                 }
             }
         }
         try Disk.writeJSON(canonSections, to: canonDir.appendingPathComponent("sections.json"))
         // 每节 md：内容没变就跳过写（省 iCloud 上传/主线程）；单节失败不中断保存
         var canonWriteFailed = false
-        for section in canonSections {
-            let name = nameByTitle[section.title] ?? ProjectLayout.safeFileName(section.title)
+        for (idx, section) in canonSections.enumerated() {
+            let name = idx < sectionFileNames.count ? sectionFileNames[idx] : ProjectLayout.safeFileName(section.title)
             let url = canonDir.appendingPathComponent(name + ".md")
             do {
                 let existing = try? String(contentsOf: url, encoding: .utf8)
@@ -302,9 +337,9 @@ final class ProjectStore: ObservableObject {
         let pendingProposals = proposals.filter { $0.status == .pending }
         let archivedProposals = proposals.filter { $0.status != .pending }
         try Disk.writeJSON(pendingProposals, to: ProjectLayout.proposalsFile(rootURL))
-        if !archivedProposals.isEmpty {
-            try Disk.writeJSON(archivedProposals, to: ProjectLayout.proposalsArchiveFile(rootURL))
-        }
+        // 归档必须无条件写（空数组也要写）：否则「清空已裁决」只清了内存，
+        // 旧 archive.json 还在盘上，下次打开会把刚清掉的提案全部复活。
+        try Disk.writeJSON(archivedProposals, to: ProjectLayout.proposalsArchiveFile(rootURL))
         try Disk.writeJSON(dossiers, to: ProjectLayout.dossiersFile(rootURL))
         dirtyChapters.removeAll()
         if canonWriteFailed {
@@ -325,11 +360,14 @@ final class ProjectStore: ObservableObject {
     /// 而 Chapter.prose 是非可选字段，用 Chapter 解必然抛 keyNotFound，
     /// 被 `?? Chapter(number:)` 吞掉之后，每章的状态/骨架/摘要/随手记都会静默退化成默认值——
     /// 表现就是「打开工程后骨架全没了」，再自动保存就从盘上永久抹掉。
-    nonisolated static func loadChapterMeta(rootURL: URL, number n: Int, proseFileMissing: Bool) -> Chapter {
+    nonisolated static func loadChapterMeta(rootURL: URL, number n: Int,
+                                            proseFileMissing: Bool) -> (chapter: Chapter, note: String?) {
         let url = chapterMetaURL(rootURL, n)
-        guard let meta = try? Disk.readJSON(ChapterMeta.self, from: url) else {
-            // meta.json 真的解不出来（更老的格式）：退回 Chapter，至少把能认出来的字段救回来
-            return (try? Disk.readJSON(Chapter.self, from: url)) ?? Chapter(number: n)
+        let (meta, note) = Disk.readJSONOrQuarantine(ChapterMeta.self, from: url,
+                                                     label: "第\(n)章 meta")
+        guard let meta else {
+            // 解不出来时原文件已被隔离：返回空章让作者看见，但绝不把默认值写回覆盖原档
+            return (Chapter(number: n), note)
         }
         var ch = Chapter(number: n)
         ch.id = meta.id
@@ -338,12 +376,13 @@ final class ProjectStore: ObservableObject {
         ch.skeleton = meta.skeleton
         ch.summary = meta.summary
         ch.notes = meta.notes
+        ch.directive = meta.directive
         ch.cachedWords = meta.cachedWords
         ch.updatedAt = meta.updatedAt
         if proseFileMissing, let legacy = try? Disk.readJSON(LegacyMetaProse.self, from: url) {
             ch.prose = legacy.prose ?? ""
         }
-        return ch
+        return (ch, note)
     }
 
     // MARK: - 章节操作
@@ -365,7 +404,14 @@ final class ProjectStore: ObservableObject {
     func updateChapter(_ number: Int, countWords: Bool = true, _ mutate: (inout Chapter) -> Void) {
         guard let idx = chapters.firstIndex(where: { $0.number == number }) else { return }
         let oldCount = chapters[idx].wordCount
+        let oldStatus = chapters[idx].status
+        let oldProse = chapters[idx].prose
         mutate(&chapters[idx])
+        // 正文被改动、而调用方没有显式给新状态 → 旧的验证/润色/定稿结论失效
+        if chapters[idx].prose != oldProse, chapters[idx].status == oldStatus,
+           oldStatus == .checked || oldStatus == .polished || oldStatus == .done {
+            chapters[idx].status = .writing
+        }
         chapters[idx].updatedAt = Date()
         chapters[idx].cachedWords = WordStats.chineseCount(chapters[idx].prose)
         if countWords {
@@ -399,20 +445,31 @@ final class ProjectStore: ObservableObject {
     }
 
     func deleteChapter(_ number: Int) {
+        let dir = ProjectLayout.chapterDir(rootURL, number: number)
+        // 先移废纸篓，成功后再改内存：废纸篓失败时绝不能回退成永久删除
+        if FileManager.default.fileExists(atPath: dir.path), !Self.moveToTrash(dir) {
+            lastSaveError = "删除中止：章节目录无法移入废纸篓（检查权限/磁盘），未做任何删除。"
+            return
+        }
         chapters.removeAll { $0.number == number }
         timelineEvents.removeAll { $0.chapter == number }
+        dossiers.removeAll { $0.chapter == number }
         dirtyChapters.remove(number)
-        Self.moveToTrash(ProjectLayout.chapterDir(rootURL, number: number))
+        // 目录进废纸篓后，写签名缓存必须失效：否则重新导入同内容的章节时
+        // Disk.write 会以「字节没变」为由跳过，prose.md 根本不会重建。
+        Disk.invalidateSignature(ProjectLayout.proseFile(rootURL, number: number))
+        Disk.invalidateSignature(Self.chapterMetaURL(rootURL, number))
         saveSoon()
     }
 
-    /// 删除走废纸篓（可恢复）；废纸篓失败才真删
-    static func moveToTrash(_ url: URL) {
+    /// 删除走废纸篓（可恢复）。返回 false = 无法移入废纸篓，调用方必须中止删除。
+    @discardableResult
+    static func moveToTrash(_ url: URL) -> Bool {
         do {
             try FileManager.default.trashItem(at: url, resultingItemURL: nil)
-            return
+            return true
         } catch {
-            try? FileManager.default.removeItem(at: url)
+            return false
         }
     }
 
@@ -429,21 +486,6 @@ final class ProjectStore: ObservableObject {
             return n
         }.max() ?? 0
         return String(format: "F%02d", maxN + 1)
-    }
-
-    func applyClueActions(chapter: Int, touches: [ClueTouch]) {
-        for touch in touches {
-            guard let idx = clues.firstIndex(where: { $0.id == touch.clueID }) else { continue }
-            clues[idx].lastActionChapter = chapter
-            clues[idx].actions.append(ClueActionLog(chapter: chapter, kind: touch.action, note: touch.requirement))
-            switch touch.action {
-            case .plant: clues[idx].status = .planted
-            case .develop: if clues[idx].status == .planted { clues[idx].status = .developing }
-            case .reveal, .resolve: clues[idx].status = .resolved
-            case .`defer`: clues[idx].status = .deferred
-            }
-        }
-        saveSoon()
     }
 
     /// 活跃伏笔 due-list（NarraCat：major 全部 + medium 限本卷 + small 限近程）
@@ -466,26 +508,30 @@ final class ProjectStore: ObservableObject {
     /// 上一次采纳的未入库清单（收件箱据此提示；清空于下次成功采纳）
     @Published var lastAcceptIssues: String?
 
-    func acceptProposal(_ id: UUID) {
-        guard let idx = proposals.firstIndex(where: { $0.id == id }) else { return }
-        guard proposals[idx].status == .pending else { return }  // 防重复采纳覆盖手改
+    /// 采纳提案。返回 true = 全部入库并已标记采纳；false = 未入库或部分入库（提案保持 pending）。
+    /// 调用方必须看返回值，不能假设"点过就算写入"。
+    @discardableResult
+    func acceptProposal(_ id: UUID) -> Bool {
+        guard let idx = proposals.firstIndex(where: { $0.id == id }) else { return false }
+        guard proposals[idx].status == .pending else { return false }  // 防重复采纳覆盖手改
         let p = proposals[idx]
         let outcome = applyPayloadDetailed(p.payload, chapter: p.chapterNumber)
         guard outcome.applied > 0 else {
             // 完全没入库：保持 pending（否则提案从待审列表消失且永不可再采纳）
             lastAcceptIssues = "未采纳：\(outcome.summary)"
-            return
+            return false
         }
         guard outcome.isFullSuccess else {
             // 全无或部分入库：部分成功时也保持 pending——已入库的部分有幂等保护
             // （事件/故事线按 id 去重、设定同题保护、伏笔同 id 合并），重试不会重复
             lastAcceptIssues = "部分采纳：\(outcome.summary)。提案保持待审——修好未入库项后可再点采纳（已入库项不会重复）。"
-            return
+            return false
         }
         lastAcceptIssues = nil
         proposals[idx].status = .accepted
         proposals[idx].decidedAt = Date()
         saveSoon()
+        return true
     }
 
     func rejectProposal(_ id: UUID, reason: String? = nil) {
@@ -532,8 +578,9 @@ final class ProjectStore: ObservableObject {
         case .outlineEvents(let events):
             for e in events {
                 outcome.total += 1
-                if timelineEvents.contains(where: { $0.id == e.id && $0.chapter == e.chapter }) {
-                    outcome.skipped.append("事件 [\(e.id)]@第\(e.chapter)章 已存在")
+                // 生产端已保证 E 号全局唯一；这里再按 id|chapter 查重会放进重复 E 号
+                if timelineEvents.contains(where: { $0.id == e.id }) {
+                    outcome.skipped.append("事件 [\(e.id)] 已存在（编号撞号）")
                 } else {
                     timelineEvents.append(e)
                     outcome.applied += 1
@@ -554,7 +601,18 @@ final class ProjectStore: ObservableObject {
             for c in newClues {
                 outcome.total += 1
                 if let idx = clues.firstIndex(where: { $0.id == c.id }) {
-                    clues[idx] = c
+                    // 编号撞号时保护作者已维护的台账：状态/动作日志/埋设信息不被 AI 版本覆盖
+                    var merged = c
+                    let existing = clues[idx]
+                    let authorTouched = !existing.actions.isEmpty || existing.status != .planted
+                    if authorTouched {
+                        merged.status = existing.status
+                        merged.actions = existing.actions
+                        merged.lastActionChapter = existing.lastActionChapter
+                        if !existing.plantedQuote.isEmpty { merged.plantedQuote = existing.plantedQuote }
+                        if let target = existing.targetPayoffChapter { merged.targetPayoffChapter = target }
+                    }
+                    clues[idx] = merged
                 } else {
                     clues.append(c)
                 }
@@ -562,19 +620,19 @@ final class ProjectStore: ObservableObject {
             }
             clues.sort { $0.id < $1.id }
         case .skeleton(let sk):
-            guard let n = chapter else {
-                outcome.skipped.append("提案缺少章节号")
+            guard let n = chapter, n > 0, self.chapter(n) != nil else {
+                outcome.skipped.append("提案缺少有效章节号（章节可能已删除）")
                 return outcome
             }
             updateChapter(n) { $0.skeleton = sk; if $0.status == .empty { $0.status = .skeletoned } }
-            // 骨架里的伏笔触点合同落到台账（AI 骨架声明 F03 本章揭示 → 台账记一笔）
-            applyClueActions(chapter: n, touches: sk.clueTouches)
+            // 骨架是写前契约，不是已发生的事实：这里只落骨架，**不碰伏笔台账**。
+            // 触点合同由 Validator 对着正文验收；台账的推进/回收只能由作者或正文对账写入。
             outcome.total += 1
             outcome.applied += 1
         case .draft(let draft):
             // 作者采纳草稿才走到这里；覆盖前自动快照，快照失败则中止采纳（旧稿保住，提案保持待审）
-            guard let n = chapter else {
-                outcome.skipped.append("提案缺少章节号")
+            guard let n = chapter, n > 0, self.chapter(n) != nil else {
+                outcome.skipped.append("提案缺少有效章节号（章节可能已删除）")
                 return outcome
             }
             if let existing = self.chapter(n), !existing.prose.isEmpty {
@@ -587,13 +645,14 @@ final class ProjectStore: ObservableObject {
             outcome.total += 1
             updateChapter(n) {
                 $0.prose = draft.text
-                if $0.status == .empty || $0.status == .skeletoned || $0.status == .writing { $0.status = .written }
+                // 新稿覆盖旧稿后，旧的「已验证/已润色/定稿」结论失效——状态必须退回初稿
+                $0.status = .written
             }
             outcome.applied += 1
         case .memoryPack(let newFacts, let summary, let newClues):
             // 章节 guard 前置：避免半途 append 后失败导致重复追加
-            guard let n = chapter else {
-                outcome.skipped.append("提案缺少章节号")
+            guard let n = chapter, n > 0, self.chapter(n) != nil else {
+                outcome.skipped.append("提案缺少有效章节号（章节可能已删除）")
                 return outcome
             }
             outcome.total += 1
@@ -618,6 +677,9 @@ final class ProjectStore: ObservableObject {
                     clues.append(cand)
                 }
             }
+            // 记忆回笼后做确定性整理：去重 + 按别名归一主语（不做任何 AI 判断）
+            let consolidated = MemoryHub.consolidate(facts: facts, aliases: characterAliases)
+            facts = consolidated.facts
             updateChapter(n) { $0.summary = summary }
             outcome.applied += 1
         case .canonClassify(let items):
@@ -632,6 +694,9 @@ final class ProjectStore: ObservableObject {
                 canonSections[idx].category = CanonCategory.match(item.category).rawValue
                 if let rename = item.rename, !rename.isEmpty, rename != item.title,
                    !canonSections.contains(where: { $0.title == rename }) {
+                    // 删掉旧文件名的 md：否则下次保存的孤儿扫描会把它吃回来，
+                    // 设定列表凭空多出一份旧副本。
+                    deleteCanonMarkdown(title: item.title)
                     canonSections[idx].title = rename
                 }
             }
@@ -680,6 +745,16 @@ final class ProjectStore: ObservableObject {
         case .report, .deslop, .memo:
             // 报告类提案（验证/去AI味/备忘）本就是「已阅」语义，无需入库——
             // 采纳动作对它们是有效决定，计 1 项成功（否则永远无法标记已采纳）
+            if case .deslop(let report) = payload, report.targetDraftID == nil,
+               !report.suggestions.isEmpty, report.suggestions.allSatisfy(\.applied) {
+                // 全部建议已应用到正文 → 生命周期推进到「已润色」
+                updateChapter(report.chapter) {
+                    // 逐条采纳会先把正文改动降级为「写作中」，这里一并推进到已润色
+                    if $0.status == .checked || $0.status == .written || $0.status == .writing {
+                        $0.status = .polished
+                    }
+                }
+            }
             outcome.total += 1
             outcome.applied += 1
         }
@@ -707,6 +782,11 @@ final class ProjectStore: ObservableObject {
             return true
         }
         guard let idx = clues.firstIndex(where: { $0.id == fix.clueID }) else { return false }
+        // 幂等：逐条采纳过的修复，再点整包采纳时不能重复写动作日志
+        let planned = Self.fixAction(fix, currentChapter: currentChapter)
+        if clues[idx].actions.contains(where: { $0.chapter == planned.chapter && $0.note == planned.note }) {
+            return true
+        }
         var c = clues[idx]
         switch fix.kind {
         case .retarget:
@@ -742,6 +822,18 @@ final class ProjectStore: ObservableObject {
         return true
     }
 
+    /// 与 applyClueFix 的动作日志一一对应，用于幂等判重
+    private static func fixAction(_ fix: ClueFix, currentChapter: Int) -> (chapter: Int, note: String) {
+        switch fix.kind {
+        case .retarget: return (currentChapter, "改期：" + fix.reason)
+        case .resolve: return (fix.chapter, fix.reason)
+        case .defer: return (currentChapter, fix.reason)
+        case .abandon: return (currentChapter, "放弃：" + fix.reason)
+        case .replant: return (fix.chapter, "作者确认补埋（正文待补写）：" + fix.reason)
+        case .requote, .register: return (-1, "")
+        }
+    }
+
     // MARK: - 大纲同步落库
 
     /// 采纳一条大纲更新。事件不删除——取消用 dropped 标记，保留「曾经计划过什么」的痕迹。
@@ -757,8 +849,12 @@ final class ProjectStore: ObservableObject {
                 e.happened = true
                 if e.actualChapter == nil { e.actualChapter = u.newChapter ?? e.chapter }
             case .eventMoved:
-                e.happened = true
-                e.actualChapter = u.newChapter ?? e.actualChapter
+                // 「改期」是把计划挪到新章，不是声称它已经发生。
+                // 旧实现置 happened=true 却不改 chapter，导致事件既显示旧章又退出后续对账。
+                if let dest = u.newChapter { e.chapter = dest }
+                e.happened = false
+                e.actualChapter = nil
+                e.dropped = false
             case .eventRevealed:
                 e.revealed = true
                 if e.revealChapter == nil { e.revealChapter = u.newChapter ?? e.actualChapter ?? e.chapter }
@@ -792,19 +888,59 @@ final class ProjectStore: ObservableObject {
         }
     }
 
-    /// 某章最近一份**任意状态**的草稿提案（含已采纳/已拒绝）。
-    /// 修订历史的价值不随采纳消失——采纳后继续修订时用它恢复 feedbackHistory。
+    /// 某章最近一份可继续修订的草稿提案（已采纳/待审；**排除已拒绝**）。
+    /// 修订历史的价值不随采纳消失——采纳后继续修订时用它恢复 feedbackHistory；
+    /// 但被拒绝的稿子不能换个版本号又回来。
     func latestAnyDraftProposal(for n: Int) -> AIProposal? {
         proposals.first { p in
-            guard p.chapterNumber == n else { return false }
+            guard p.chapterNumber == n, p.status != .rejected else { return false }
             if case .draft = p.payload { return true }
             return false
         }
     }
 
+    /// 修订完成后把意见历史与主线写进新草稿提案（工具 schema 不携带这两项）
+    func updateDraftMetadata(proposalID: UUID, mainline: String, feedbackHistory: [DraftFeedback]) {
+        guard let idx = proposals.firstIndex(where: { $0.id == proposalID }),
+              case .draft(var d) = proposals[idx].payload else { return }
+        d.mainline = mainline
+        d.feedbackHistory = feedbackHistory
+        proposals[idx].payload = .draft(d)
+        saveSoon()
+    }
+
     func draftPayload(of p: AIProposal) -> ChapterDraft? {
         if case .draft(let d) = p.payload { return d }
         return nil
+    }
+
+    // MARK: - 去AI味 / 验证报告的可变入口
+
+    func mutateDeslopReport(proposalID: UUID, _ mutate: (inout DeslopReport) -> Void) {
+        guard let idx = proposals.firstIndex(where: { $0.id == proposalID }),
+              case .deslop(var report) = proposals[idx].payload else { return }
+        mutate(&report)
+        proposals[idx].payload = .deslop(report)
+        saveSoon()
+    }
+
+    @discardableResult
+    func markDeslopSuggestionApplied(proposalID: UUID, suggestionID: UUID) -> Bool {
+        var found = false
+        mutateDeslopReport(proposalID: proposalID) { report in
+            guard let i = report.suggestions.firstIndex(where: { $0.id == suggestionID }) else { return }
+            report.suggestions[i].applied = true
+            found = true
+        }
+        return found
+    }
+
+    func mutateValidationReport(proposalID: UUID, _ mutate: (inout ValidationReport) -> Void) {
+        guard let idx = proposals.firstIndex(where: { $0.id == proposalID }),
+              case .report(var report) = proposals[idx].payload else { return }
+        mutate(&report)
+        proposals[idx].payload = .report(report)
+        saveSoon()
     }
 
     /// 草稿版本号 = 已有草稿提案数 + 1
@@ -831,31 +967,90 @@ final class ProjectStore: ObservableObject {
             name = "\(stamp)-\(tag)-\(seq).md"
             seq += 1
         }
+        let proseURL = dir.appendingPathComponent(name)
+        let metaURL = dir.appendingPathComponent(name + ".meta.json")
+        // 正文与 meta 一起快照：只回滚正文会留下「旧稿 + 新状态/新骨架」的组合
+        let meta = ChapterMeta(id: ch.id, number: ch.number, title: ch.title, status: ch.status,
+                               skeleton: ch.skeleton, summary: ch.summary, notes: ch.notes,
+                               directive: ch.directive, cachedWords: ch.cachedWords, updatedAt: ch.updatedAt)
         do {
-            try Disk.write(Data(ch.prose.utf8), to: dir.appendingPathComponent(name))
+            try Disk.write(Data(ch.prose.utf8), to: proseURL)
+            try Disk.writeJSON(meta, to: metaURL)
+            Self.pruneSnapshots(in: dir, keep: 100)
             return name
         } catch {
+            try? FileManager.default.removeItem(at: proseURL)
+            try? FileManager.default.removeItem(at: metaURL)
             lastSaveError = "快照写入失败：\(error.localizedDescription)"
             return nil
         }
     }
 
-    func snapshots(chapter n: Int) -> [(name: String, text: String)] {
-        let dir = ProjectLayout.chapterDir(rootURL, number: n).appendingPathComponent("snapshots", isDirectory: true)
-        guard let files = try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil) else { return [] }
-        return files.filter { $0.pathExtension == "md" }.sorted { $0.lastPathComponent > $1.lastPathComponent }
-            .map { ($0.lastPathComponent, Disk.readText($0)) }
+    /// 每章最多保留最近 100 个快照（含 meta sidecar），避免自动快照无限增长
+    private static func pruneSnapshots(in dir: URL, keep: Int) {
+        guard let files = try? FileManager.default.contentsOfDirectory(
+            at: dir, includingPropertiesForKeys: [.contentModificationDateKey]) else { return }
+        let proseFiles = files.filter { $0.pathExtension == "md" }
+        guard proseFiles.count > keep else { return }
+        let sorted = proseFiles.sorted { a, b in
+            let da = (try? a.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
+            let db = (try? b.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
+            if da != db { return da > db }
+            return a.lastPathComponent < b.lastPathComponent
+        }
+        for old in sorted.dropFirst(keep) {
+            try? FileManager.default.removeItem(at: old)
+            try? FileManager.default.removeItem(at: old.appendingPathExtension("meta.json"))
+        }
     }
 
-    /// 用快照回滚某章正文
-    func restoreSnapshot(chapter n: Int, name: String) {
+    func snapshots(chapter n: Int) -> [(name: String, text: String)] {
+        let dir = ProjectLayout.chapterDir(rootURL, number: n).appendingPathComponent("snapshots", isDirectory: true)
+        guard let files = try? FileManager.default.contentsOfDirectory(
+            at: dir, includingPropertiesForKeys: [.contentModificationDateKey]) else { return [] }
+        let sorted = files.filter { $0.pathExtension == "md" }.sorted { a, b in
+            let da = (try? a.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
+            let db = (try? b.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
+            if da != db { return da > db }
+            // 同秒快照：带 -2 后缀的是后建的；按名字降序会让基名排前面，这里改成升序兜底
+            return a.lastPathComponent < b.lastPathComponent
+        }
+        return sorted.map { ($0.lastPathComponent, Disk.readText($0)) }
+    }
+
+    /// 用快照回滚某章正文。返回 false = 快照读不到/为空，界面不能再报"已回滚"。
+    @discardableResult
+    func restoreSnapshot(chapter n: Int, name: String) -> Bool {
         let url = ProjectLayout.chapterDir(rootURL, number: n).appendingPathComponent("snapshots").appendingPathComponent(name)
         let text = Disk.readText(url)
-        guard !text.isEmpty else { return }
-        _ = snapshotProse(chapter: n, tag: "回滚前")   // 回滚不毁当前稿
+        guard !text.isEmpty else {
+            lastSaveError = "回滚失败：快照「\(name)」读不到或为空（文件可能已被移动）。"
+            return false
+        }
+        guard snapshotProse(chapter: n, tag: "回滚前") != nil || chapter(n)?.prose.isEmpty == true else {
+            lastSaveError = "回滚中止：当前稿的快照写入失败（检查磁盘/权限）。"
+            return false
+        }
         // 外部写过的文件：让写签名失效，强制本次回滚内容真正落盘
         Disk.invalidateSignature(ProjectLayout.proseFile(rootURL, number: n))
+        let metaURL = ProjectLayout.chapterDir(rootURL, number: n)
+            .appendingPathComponent("snapshots")
+            .appendingPathComponent(name + ".meta.json")
+        let meta = try? Disk.readJSON(ChapterMeta.self, from: metaURL)
+        // 先回正文（会自动降级状态），再用快照 meta 覆盖状态/骨架/摘要：
+        // 顺序反了会被 updateChapter 的「改正文即降级」规则把快照状态冲掉。
         updateChapter(n) { $0.prose = text }
+        if let meta {
+            updateChapter(n, countWords: false) { ch in
+                ch.title = meta.title
+                ch.status = meta.status
+                ch.skeleton = meta.skeleton
+                ch.summary = meta.summary
+                ch.notes = meta.notes
+                ch.directive = meta.directive
+            }
+        }
+        return true
     }
 
     static func fileStamp(_ date: Date = Date()) -> String {
@@ -919,4 +1114,14 @@ struct MemoryFile: Codable {
     var aliases: [CharacterAlias] = []
     /// 已裁决"保留两条"的矛盾键（不重复提醒）
     var dismissedConflicts: [String]? = []
+}
+
+extension MemoryFile {
+    private enum Keys: String, CodingKey { case facts, aliases, dismissedConflicts }
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: Keys.self)
+        facts = try c.decodeIfPresent([MemoryFact].self, forKey: .facts) ?? []
+        aliases = try c.decodeIfPresent([CharacterAlias].self, forKey: .aliases) ?? []
+        dismissedConflicts = try c.decodeIfPresent([String].self, forKey: .dismissedConflicts)
+    }
 }

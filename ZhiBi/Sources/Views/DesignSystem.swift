@@ -189,6 +189,7 @@ struct BookCoverTile: View {
 
 struct ZBToastModifier: ViewModifier {
     @ObservedObject var vm: AppViewModel
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     func body(content: Content) -> some View {
         content
@@ -215,10 +216,10 @@ struct ZBToastModifier: ViewModifier {
                     .shadow(color: .black.opacity(0.18), radius: 10, y: 4)
                     .padding(.top, ZBSpace.md)
                     .transition(.move(edge: .top).combined(with: .opacity))
-                    .onTapGesture {}
+                    .onTapGesture { vm.toast = nil }   // 点一下提前关（注释承诺过）
                 }
             }
-            .animation(ZBMotion.standard(reduceMotion: false), value: vm.toast)
+            .animation(ZBMotion.standard(reduceMotion: reduceMotion), value: vm.toast)
     }
 }
 

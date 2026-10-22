@@ -3,13 +3,14 @@ import SwiftUI
 // MARK: - 记忆图谱：人物关系 / 剧情 / 事件 三种交叉视图
 //
 // 与账本同源：图由 MemoryGraphEngine 从事实/故事线/事件/伏笔机械派生。
-// 交互：拖拽平移、滚轮缩放（触控板双指）、点节点出「记忆回溯」全链、
+// 交互：拖拽平移、触控板双指缩放、点节点出「记忆回溯」全链、
 // 顶部搜索框做全库关键词回溯。跳「去第 N 章」回调工作区打开该章。
 
 struct MemoryGraphView: View {
     @ObservedObject var vm: AppViewModel
     @ObservedObject var store: ProjectStore
     let onGotoChapter: (Int) -> Void
+    var onGotoClues: ((String) -> Void)? = nil
 
     enum GraphMode: String, CaseIterable {
         case characters = "人物关系图"
@@ -23,6 +24,7 @@ struct MemoryGraphView: View {
     @State private var pan: CGSize = .zero
     @State private var panStart: CGSize = .zero
     @State private var scale: CGFloat = 1.0
+    @State private var scaleStart: CGFloat = 1.0
 
     /// 图缓存：只在账本规模签名变化时重建（避免拖拽每帧全量重建 4-6 次）。
     /// 用类引用持有，避免在 body 求值里写 @State。
@@ -33,9 +35,27 @@ struct MemoryGraphView: View {
     @State private var graphCache = GraphCache()
 
     private var graph: MemoryGraph {
-        let stamp = store.facts.count + store.timelineEvents.count * 1_000
-            + store.clues.count * 1_000_000 + store.storylines.count * 1_000_000_000
-            + store.characterAliases.count * 1_000_000_000_000
+        // 只按条数失效会导致改名/改谓词/改状态后图上仍是旧内容：
+        // 这里把影响节点与关系的字段一起哈希。
+        var hasher = Hasher()
+        for f in store.facts {
+            hasher.combine(f.id); hasher.combine(f.subject); hasher.combine(f.predicate)
+            hasher.combine(f.object); hasher.combine(f.invalidatedAtChapter)
+        }
+        for c in store.clues {
+            hasher.combine(c.id); hasher.combine(c.title); hasher.combine(c.status.rawValue)
+        }
+        for e in store.timelineEvents {
+            hasher.combine(e.id); hasher.combine(e.chapter); hasher.combine(e.objectiveFact)
+            hasher.combine(e.storylineIDs.joined(separator: "|"))
+        }
+        for l in store.storylines {
+            hasher.combine(l.id); hasher.combine(l.name); hasher.combine(l.status.rawValue)
+        }
+        for a in store.characterAliases {
+            hasher.combine(a.canonicalName); hasher.combine(a.aliases.joined(separator: "|"))
+        }
+        let stamp = hasher.finalize()
         if graphCache.stamp != stamp {
             graphCache.stamp = stamp
             graphCache.graph = MemoryGraphEngine.build(from: store)
@@ -89,9 +109,6 @@ struct MemoryGraphView: View {
             let positions = layoutPositions(mode: mode, graph: graph, in: size)
 
             ZStack {
-                // 滚轮缩放的桥接视图（透明、不吃事件，只把 scrollWheel 转成 scale）
-                ScrollWheelZoom(scale: $scale)
-                    .allowsHitTesting(false)
                 Canvas { context, _ in
                     drawEdges(context: context, mode: mode, graph: graph, positions: positions)
                     drawNodes(context: context, mode: mode, graph: graph, positions: positions)
@@ -108,10 +125,10 @@ struct MemoryGraphView: View {
                 .simultaneousGesture(
                     MagnificationGesture()
                         .onChanged { s in
-                            let clamped = max(0.4, min(3.0, s))
-                            // 以视图中心为锚缩放，避免节点飞出
-                            scale = clamped
+                            // MagnificationGesture 给的是相对手势起点的倍率，必须乘起始值
+                            scale = max(0.4, min(3.0, scaleStart * s))
                         }
+                        .onEnded { _ in scaleStart = scale }
                 )
                 .onTapGesture { loc in
                     let hit = nearestNode(toGraphPoint(loc, size: geo.size), positions: positions,
@@ -451,19 +468,26 @@ struct MemoryGraphView: View {
                         Text(item.sub).font(.caption2).foregroundStyle(.tertiary)
                     }
                     if let target = item.target {
-                        Button {
-                            switch target {
-                            case .chapter(let n): onGotoChapter(n)
-                            case .clue: break
-                            }
-                        } label: {
-                            if case .chapter(let n) = target {
+                        switch target {
+                        case .chapter(let n):
+                            Button { onGotoChapter(n) } label: {
                                 Label("去第\(n)章", systemImage: "arrow.right.circle")
                                     .font(.caption2)
                             }
+                            .buttonStyle(.link)
+                            .controlSize(.mini)
+                        case .clue(let id):
+                            if let onGotoClues {
+                                Button { onGotoClues(id) } label: {
+                                    Label("去伏笔台账 \(id)", systemImage: "arrow.right.circle")
+                                        .font(.caption2)
+                                }
+                                .buttonStyle(.link)
+                                .controlSize(.mini)
+                            } else {
+                                Text("伏笔 \(id)").font(.caption2).foregroundStyle(.secondary)
+                            }
                         }
-                        .buttonStyle(.link)
-                        .controlSize(.mini)
                     }
                 }
                 Spacer()

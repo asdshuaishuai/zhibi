@@ -13,6 +13,7 @@ struct SearchSheet: View {
     /// 防抖 150ms 后的全本扫描结果：停顿才扫一次并缓存，不随击键重扫
     @State private var results: [Hit] = []
     @State private var debounceTask: Task<Void, Never>?
+    @FocusState private var queryFocused: Bool
 
     struct Hit: Identifiable {
         let id: UUID = UUID()
@@ -33,6 +34,7 @@ struct SearchSheet: View {
                 TextField("搜索全书：章节 / 伏笔 / 设定 / 时间线 / 记忆…", text: $query)
                     .textFieldStyle(.plain)
                     .font(.title3)
+                    .focused($queryFocused)
                     .onSubmit { flushNow(); openFirst() }
                 if !query.isEmpty {
                     Text("\(results.count) 条").font(.caption).foregroundStyle(.tertiary)
@@ -87,6 +89,7 @@ struct SearchSheet: View {
         }
         .frame(width: ZBSpace.Sheet.wide, height: 560)
         .onChange(of: query) { q in scheduleScan(q) }
+        .onAppear { DispatchQueue.main.async { queryFocused = true } }
     }
 
     // MARK: 防抖与扫描
@@ -113,8 +116,12 @@ struct SearchSheet: View {
     }
 
     private func openFirst() {
-        if let first = results.first, let n = first.chapterNumber {
+        guard let first = results.first else { return }
+        if let n = first.chapterNumber {
             onSelectChapter(n)
+            dismiss()
+        } else if let sec = first.section {
+            onSelectSection(sec)
             dismiss()
         }
     }

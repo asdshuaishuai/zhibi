@@ -14,19 +14,21 @@ struct MemoryView: View {
     }
 
     @State private var tab: Tab = .ledger
-    @State private var showReaderOnly = true
-    @State private var atChapter = 9999
+    @State private var showReaderOnly = false
+    @State private var atChapter = 9999   // 9999 = 尚未初始化；onAppear 落到当前章
     @State private var searchText = ""
     @State private var consolidationNote: String?
     @State private var newAliasTarget = ""
     @State private var newAliasInput = ""
+    @State private var pendingDeleteFactID: UUID?
+    @State private var confirmConsolidate = false
 
     private var stats: MemoryHub.LedgerStats { MemoryHub.ledgerStats(store: store) }
 
     private var visibleFacts: [MemoryFact] {
         store.facts
             .filter { $0.isValid(atChapter: atChapter) }
-            .filter { showReaderOnly || $0.publicToReader }
+            .filter { showReaderOnly ? $0.publicToReader : true }
             .filter { searchText.isEmpty || "\($0.subject)\($0.predicate)\($0.object)".localizedCaseInsensitiveContains(searchText) }
             .sorted { $0.fromChapter < $1.fromChapter }
     }
@@ -57,6 +59,39 @@ struct MemoryView: View {
             }
         }
         .background(ZB.canvas)
+        .onAppear {
+            if atChapter == 9999 { atChapter = max(1, store.currentChapter - 1) }
+        }
+        // 两个操作共用同一个弹窗：同一视图挂两个 confirmationDialog 会互相抢呈现
+        .confirmationDialog(pendingDeleteFactID != nil ? "删除这条事实？" : "整理事实账本？",
+                            isPresented: Binding(
+                                get: { pendingDeleteFactID != nil || confirmConsolidate },
+                                set: { if !$0 { pendingDeleteFactID = nil; confirmConsolidate = false } })) {
+            if let id = pendingDeleteFactID {
+                Button("删除", role: .destructive) {
+                    store.facts.removeAll { $0.id == id }
+                    store.saveSoon()
+                    pendingDeleteFactID = nil
+                }
+            } else {
+                Button("整理") {
+                    let result = MemoryHub.consolidate(facts: store.facts, aliases: store.characterAliases)
+                    store.facts = result.facts
+                    consolidationNote = result.report.summary
+                    store.saveSoon()
+                    vm?.showToast("账本已整理：\(result.report.summary)")
+                    confirmConsolidate = false
+                }
+            }
+            Button("取消", role: .cancel) {
+                pendingDeleteFactID = nil
+                confirmConsolidate = false
+            }
+        } message: {
+            Text(pendingDeleteFactID != nil
+                 ? "只从事实账本删除，不改正文。删除后无法撤销。"
+                 : "会清除完全重复事实、按别名归并主语；有效事实不会被删除。此操作没有撤销。")
+        }
     }
 
     // MARK: 头部 + 统计
@@ -70,14 +105,12 @@ struct MemoryView: View {
                 .font(.caption).foregroundStyle(.tertiary)
             Spacer()
             Button {
-                let result = MemoryHub.consolidate(facts: store.facts, aliases: store.characterAliases)
-                store.facts = result.facts
-                consolidationNote = result.report.summary
-                store.saveSoon()
+                confirmConsolidate = true
             } label: {
                 Label("一键整理（本地）", systemImage: "wand.and.rays")
             }
             .controlSize(.small)
+            .help("去重 + 按别名归一主语；不删除有效事实")
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
@@ -212,11 +245,12 @@ struct MemoryView: View {
                 Toggle("仅读者视角", isOn: $showReaderOnly)
                     .toggleStyle(.checkbox)
                     .font(.caption)
-                Stepper("截至第 \(min(atChapter, max(1, store.currentChapter - 1))) 章", value: $atChapter, in: 1...9999)
+                Stepper("截至第 \(atChapter) 章", value: $atChapter, in: 1...max(1, store.currentChapter))
                     .font(.caption)
+                    .help("只显示在这个章号之前仍然有效的事实")
                 Spacer()
                 Button("新增事实") {
-                    store.facts.append(MemoryFact(fromChapter: min(atChapter, 9999), source: "authored"))
+                    store.facts.append(MemoryFact(fromChapter: atChapter, source: "authored"))
                     store.saveSoon()
                 }
                 .controlSize(.small)
@@ -245,7 +279,7 @@ struct MemoryView: View {
                             .foregroundStyle(f.invalidatedAtChapter == nil ? Color.green : Color.secondary)
                         if f.invalidatedAtChapter == nil {
                             Button("标记失效") {
-                                mutate(f.id) { $0.invalidatedAtChapter = min(atChapter, 9999) }
+                                mutate(f.id) { $0.invalidatedAtChapter = atChapter }
                             }
                             .buttonStyle(.borderless).controlSize(.mini)
                         }
@@ -260,10 +294,10 @@ struct MemoryView: View {
                 }.width(70)
                 TableColumn("") { f in
                     Button(role: .destructive) {
-                        store.facts.removeAll { $0.id == f.id }
-                        store.saveSoon()
+                        pendingDeleteFactID = f.id
                     } label: { Image(systemName: "trash") }
                     .buttonStyle(.borderless).controlSize(.mini)
+                    .accessibilityLabel("删除这条事实")
                 }.width(36)
             } rows: {
                 ForEach(visibleFacts) { f in
@@ -278,6 +312,18 @@ struct MemoryView: View {
     private var conflictsTab: some View {
         ScrollView {
             VStack(spacing: 10) {
+                if let dismissed = store.dismissedConflicts, !dismissed.isEmpty {
+                    HStack {
+                        Text("已忽略 \(dismissed.count) 组矛盾提醒").font(.caption2).foregroundStyle(.tertiary)
+                        Spacer()
+                        Button("恢复提醒") {
+                            store.dismissedConflicts = []
+                            store.saveSoon()
+                            vm?.showToast("已恢复全部矛盾提醒")
+                        }
+                        .controlSize(.mini)
+                    }
+                }
                 if openConflicts.isEmpty {
                     VStack(spacing: 8) {
                         Image(systemName: "checkmark.shield").font(.system(size: 34)).foregroundStyle(.green)
@@ -320,10 +366,11 @@ struct MemoryView: View {
         let others = c.values.flatMap(\.factIDs).filter { !keepSet.contains($0) }
         for id in others {
             if let idx = store.facts.firstIndex(where: { $0.id == id }) {
-                store.facts[idx].invalidatedAtChapter = atChapter == 9999 ? (store.facts[idx].fromChapter + 1) : min(atChapter, 9999)
+                store.facts[idx].invalidatedAtChapter = atChapter == 9999 ? (store.facts[idx].fromChapter + 1) : atChapter
             }
         }
         store.saveSoon()
+        vm?.showToast("已以此为准，其余事实标记为失效")
     }
 
     private func dismissConflict(_ c: MemoryHub.Conflict) {
@@ -331,6 +378,7 @@ struct MemoryView: View {
         list.append(c.id)
         store.dismissedConflicts = list
         store.saveSoon()
+        vm?.showToast("已保留两条，并隐藏这组提醒")
     }
 
     // MARK: 页签 3：人物归一
@@ -493,7 +541,13 @@ struct CanonView: View {
                     HStack {
                         TextField("标题", text: Binding(
                             get: { store.canonSections.indices.contains(idx) ? store.canonSections[idx].title : "" },
-                            set: { if store.canonSections.indices.contains(idx) { store.canonSections[idx].title = $0; store.saveSoon() } }))
+                            set: { newTitle in
+                                guard store.canonSections.indices.contains(idx) else { return }
+                                let oldTitle = store.canonSections[idx].title
+                                if oldTitle != newTitle { store.deleteCanonMarkdown(title: oldTitle) }
+                                store.canonSections[idx].title = newTitle
+                                store.saveSoon()
+                            }))
                             .font(.headline)
                             .textFieldStyle(.plain)
                         Picker("确定度", selection: Binding(
@@ -515,14 +569,13 @@ struct CanonView: View {
                         .controlSize(.small)
                         .help("设定分类——AI 归类提案会写到这里；也可手动改")
                         Button(role: .destructive) {
+                            // 与右键菜单走同一个确认流程：最常用的入口不能比右键更危险
                             guard store.canonSections.indices.contains(idx) else { return }
-                            let removed = store.canonSections.remove(at: idx)
-                            selectedSection = nil
-                            store.deleteCanonMarkdown(title: removed.title)
-                            store.saveSoon()
-                            vm.showToast("已删除「\(removed.title)」（md 已同步清理）")
+                            pendingDeleteSection = store.canonSections[idx]
                         } label: { Image(systemName: "trash") }
                         .controlSize(.small)
+                        .help("删除设定（会先确认）")
+                        .accessibilityLabel("删除设定")
                     }
                     .padding(10)
                     Divider()

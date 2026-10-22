@@ -8,6 +8,18 @@ import AppKit
 // 增强：AI 味命中（禁用词/堆叠副词/鉴定词等）与伏笔关键词以临时属性实时高亮，
 //       临时属性不参与序列化，正文文件保持干净。
 
+extension Notification.Name {
+    /// 保存/退出/切项目前，让所有正文编辑器立即把防抖中的文本交回 store
+    static let zbFlushProseEditors = Notification.Name("ZhiBi.flushProseEditors")
+}
+
+enum ProseEditorFlush {
+    /// 同步触发（NotificationCenter 在主线程同步派发）
+    static func now() {
+        NotificationCenter.default.post(name: .zbFlushProseEditors, object: nil)
+    }
+}
+
 struct RichProseEditor: NSViewRepresentable {
     @Binding var markdown: String
     let baseFont: NSFont
@@ -74,6 +86,13 @@ struct RichProseEditor: NSViewRepresentable {
         return scroll
     }
 
+    /// 视图被移除（切章/切板块）时把最后 250ms 的输入同步回 store。
+    /// SwiftUI 换章用 .id(n) 重建整个编辑器，没有这一步会静默丢字。
+    static func dismantleNSView(_ scroll: NSScrollView, coordinator: Coordinator) {
+        if coordinator.textView == nil { coordinator.textView = scroll.documentView as? NSTextView }
+        MainActor.assumeIsolated { coordinator.flushSerialize() }
+    }
+
     func updateNSView(_ scroll: NSScrollView, context: Context) {
         guard let tv = scroll.documentView as? NSTextView else { return }
         let coordinator = context.coordinator
@@ -81,14 +100,17 @@ struct RichProseEditor: NSViewRepresentable {
 
         // 排版设置变化（宋体/字号）→ 重新渲染已有正文
         if coordinator.lastFont != baseFont {
+            coordinator.cancelPendingSerialize()
             coordinator.lastFont = baseFont
             coordinator.reload(markdown: coordinator.lastSerialized, baseFont: baseFont, textColor: textColor)
             coordinator.scheduleHighlights()
             return
         }
 
-        // 外部值变化（切章/加载/快照回滚）→ 重新渲染
+        // 外部值变化（切章/加载/快照回滚/采纳草稿/去AI味）→ 重新渲染
         if coordinator.lastSerialized != markdown {
+            // 丢弃防抖中的旧文本：否则它会在渲染后回写 store，把刚完成的回滚/采纳覆盖掉
+            coordinator.cancelPendingSerialize()
             let selected = tv.selectedRange()
             coordinator.reload(markdown: markdown, baseFont: baseFont, textColor: textColor)
             coordinator.lastSerialized = markdown
@@ -150,6 +172,11 @@ struct RichProseEditor: NSViewRepresentable {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.25, execute: work)
         }
 
+        func cancelPendingSerialize() {
+            serializeWork?.cancel()
+            serializeWork = nil
+        }
+
         /// 立即序列化并回传（保存/退出的唯一 flush 点）
         func flushSerialize() {
             serializeWork?.cancel()
@@ -173,6 +200,12 @@ struct RichProseEditor: NSViewRepresentable {
                 }
             NotificationCenter.default.addObserver(
                 forName: NSApplication.willTerminateNotification, object: nil, queue: .main) { [weak self] _ in
+                    self?.flushSerialize()
+                }
+            // 宿主保存前主动 flush（⌘S / 关闭项目 / 退出）：willTerminate 排在保存之后，
+            // 只靠它会让最后一次保存漏掉防抖窗口里的字。
+            NotificationCenter.default.addObserver(
+                forName: .zbFlushProseEditors, object: nil, queue: .main) { [weak self] _ in
                     self?.flushSerialize()
                 }
         }

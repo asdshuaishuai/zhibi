@@ -13,7 +13,9 @@ struct ZhiBiApp: App {
     }
 
     var body: some Scene {
-        WindowGroup {
+        // 单窗口：AppViewModel/ProjectStore 是进程级单例，多窗口会同时编辑
+        // 同一章并互相覆盖防抖序列化的结果。需要并排参考时用系统分屏。
+        Window("执笔", id: "main") {
             RootView(vm: vm)
                 .frame(minWidth: 1020, minHeight: 660)
         }
@@ -48,6 +50,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// ⌘Q/关窗落在 1 秒防抖窗口内也不丢最后一次编辑
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         guard let store = AppDelegate.activeModel?.store else { return .terminateNow }
+        // 先把编辑器防抖里的最后几个字交回 store，再保存；顺序反了就会丢最后一次输入
+        ProseEditorFlush.now()
         store.saveNow_forced()
         // 保存失败不能静默退出：否则「最后一次成功保存之后」的编辑静默丢失
         if let err = store.lastSaveError, !err.isEmpty {

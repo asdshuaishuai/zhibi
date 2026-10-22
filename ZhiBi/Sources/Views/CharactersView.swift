@@ -4,7 +4,9 @@ import SwiftUI
 
 struct CharactersView: View {
     @ObservedObject var store: ProjectStore
+    @ObservedObject var vm: AppViewModel
     @State private var newSubject = ""
+    @State private var pendingDeleteFactID: UUID?
 
     private struct CharacterCard: Identifiable {
         var id: String { name }
@@ -35,11 +37,14 @@ struct CharactersView: View {
                     .textFieldStyle(.roundedBorder)
                     .frame(width: 140)
                 Button("建档（登记一条事实）") {
-                    guard !newSubject.isEmpty else { return }
-                    store.facts.append(MemoryFact(subject: newSubject, predicate: "状态", object: "（待登记）",
-                                                  fromChapter: 1, source: "authored"))
+                    let name = newSubject.trimmingCharacters(in: .whitespaces)
+                    guard !name.isEmpty else { return }
+                    store.facts.append(MemoryFact(subject: name, predicate: "状态", object: "",
+                                                  fromChapter: max(1, store.currentChapter - 1),
+                                                  source: "authored"))
                     newSubject = ""
                     store.saveSoon()
+                    vm.showToast("已建档：点卡片里的「状态」即可补充身份/处境")
                 }
                 .controlSize(.small)
                 .disabled(newSubject.isEmpty)
@@ -49,7 +54,7 @@ struct CharactersView: View {
             if cards.isEmpty {
                 VStack(spacing: 8) {
                     Image(systemName: "person.2").font(.system(size: 36)).foregroundStyle(.tertiary)
-                    Text("还没有人物事实。\n写完章节用「让 AI 记一笔」，或在这里手动建档。")
+                    Text("还没有人物事实。\n写完章节用「让 AI 记一笔」，或在这里手动建档；建档后点事实文字即可编辑。")
                         .font(.callout).foregroundStyle(.secondary).multilineTextAlignment(.center)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -108,9 +113,22 @@ struct CharactersView: View {
             ForEach(card.facts.suffix(5).reversed()) { f in
                 HStack(alignment: .top, spacing: 5) {
                     Text("[\(f.predicate)]").font(.caption2.monospaced()).foregroundStyle(.teal)
-                    Text(f.object).font(.caption)
+                    TextField("补充状态/身份", text: Binding(
+                        get: { store.facts.first { $0.id == f.id }?.object ?? f.object },
+                        set: { newValue in
+                            guard let idx = store.facts.firstIndex(where: { $0.id == f.id }) else { return }
+                            store.facts[idx].object = newValue
+                            store.saveSoon()
+                        }))
+                        .textFieldStyle(.plain)
+                        .font(.caption)
                     Spacer()
                     Text("第\(f.fromChapter)章起").font(.caption2).foregroundStyle(.tertiary)
+                    Button(role: .destructive) {
+                        pendingDeleteFactID = f.id
+                    } label: { Image(systemName: "trash") }
+                        .buttonStyle(.borderless).controlSize(.mini)
+                        .accessibilityLabel("删除这条人物事实")
                 }
             }
             if !trace.isEmpty {
@@ -157,5 +175,19 @@ struct CharactersView: View {
         }
         .padding(10)
         .zbGlass(cornerRadius: 10)
+        .confirmationDialog("删除这条人物事实？", isPresented: Binding(
+            get: { pendingDeleteFactID != nil },
+            set: { if !$0 { pendingDeleteFactID = nil } })) {
+            Button("删除", role: .destructive) {
+                if let id = pendingDeleteFactID {
+                    store.facts.removeAll { $0.id == id }
+                    store.saveSoon()
+                }
+                pendingDeleteFactID = nil
+            }
+            Button("取消", role: .cancel) { pendingDeleteFactID = nil }
+        } message: {
+            Text("只从事实账本删除，不改正文。")
+        }
     }
 }

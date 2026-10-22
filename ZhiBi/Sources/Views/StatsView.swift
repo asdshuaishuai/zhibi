@@ -82,6 +82,12 @@ struct StatsView: View {
             .padding(.horizontal, 14)
             .padding(.bottom, 8)
 
+            if totalWords == 0 {
+                Text("还没有写作记录——开始写第一章后，这里会显示每日净增、连续天数与目标进度。")
+                    .font(.caption).foregroundStyle(.secondary)
+                    .padding(.horizontal, 14)
+            }
+
             chart
                 .frame(height: 180)
                 .padding(14)
@@ -126,7 +132,7 @@ struct StatsView: View {
                 }
                 // 日期标签
                 context.draw(Text(bar.label)
-                    .font(.system(size: 9))
+                    .font(.caption2)
                     .foregroundStyle(bar.isToday ? Color.primary : Color.secondary),
                     at: CGPoint(x: x + barWidth / 2, y: chartHeight + 10))
                 // 连续天数的点
@@ -138,5 +144,8 @@ struct StatsView: View {
             }
         }
         .zbCard(padding: 8)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("最近 14 天每日字数")
+        .accessibilityValue(bars.map { "\($0.label) \($0.words) 字" }.joined(separator: "，"))
     }
 }

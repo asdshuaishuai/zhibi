@@ -56,9 +56,14 @@ struct AgentConfig: Codable {
     var baseURL: String = "https://api.deepseek.com"
     var model: String = "deepseek-flash"
     var apiKey: String = ""   // 仅内存使用；持久化走钥匙串
-    var temperature: Double = 0.5
     var contextTokenBudget: Int = 12000
     var autoSave: Bool = true
+    /// 单次 AI 请求硬超时（秒）。可选：旧 settings.json 没有该键时用默认值。
+    var requestTimeoutSeconds: Int? = nil
+
+    var effectiveTimeout: Int {
+        max(30, min(1800, requestTimeoutSeconds ?? 300))
+    }
 
     /// 上一次 load 的告警（settings.json 损坏被重置等）——设置页展示，不落盘
     static var lastLoadIssue: String?

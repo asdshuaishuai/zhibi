@@ -139,7 +139,9 @@ struct CoverDesignSheet: View {
 
     private func run() {
         svgCode = ""
+        preview = nil          // 重绘时必须清掉旧预览，否则会对着上一版点「采用」
         adopted = false
+        ai.lastError = nil
         let author = authorName
         let moodText = mood
         let dirText = direction
@@ -156,6 +158,10 @@ struct CoverDesignSheet: View {
                 await MainActor.run {
                     svgCode = code
                     preview = CoverSVG.render(code, width: 240, height: 320)
+                }
+            } else {
+                await MainActor.run {
+                    ai.lastError = "这次没有解析到可用的 <svg>——可以重试，或把画面方向写得更具体（主体/场景/色调）。"
                 }
             }
         }

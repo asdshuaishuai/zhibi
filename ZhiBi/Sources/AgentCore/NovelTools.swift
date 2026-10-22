@@ -516,7 +516,7 @@ enum NovelTools {
         }
     }
 
-    static func proposeMemo(store: ProjectStore) -> AgentTool {
+    static func proposeMemo(store: ProjectStore, capability: AICapability = .recallMemo) -> AgentTool {
         AgentTool(
             name: "propose_memo",
             description: "提交写作备忘提案（召回后给作者的写作提醒，2-3 条以内，人话）。",
@@ -526,7 +526,7 @@ enum NovelTools {
         ) { args in
             struct Payload: Decodable { let note: String?; let text: String }
             let p = try decode(Payload.self, args)
-            await store.addProposal(AIProposal(capability: .recallMemo, title: "写作备忘", note: p.note ?? "", payload: .memo(p.text)))
+            await store.addProposal(AIProposal(capability: capability, title: "写作备忘", note: p.note ?? "", payload: .memo(p.text)))
             return "已登记为提案「写作备忘」。"
         }
     }
@@ -685,7 +685,13 @@ enum NovelTools {
         ) { args in
             struct P: Decodable { let at_chapter: Int }
             let p = try decode(P.self, args)
-            let facts = await MainActor.run { store.facts.filter { $0.isValid(atChapter: p.at_chapter) } }
+            let facts = await MainActor.run {
+                store.facts.filter {
+                    $0.isValid(atChapter: p.at_chapter)
+                        && !$0.subject.trimmingCharacters(in: .whitespaces).isEmpty
+                        && !$0.object.trimmingCharacters(in: .whitespaces).isEmpty
+                }
+            }
             guard !facts.isEmpty else { return "暂无事实。" }
             return facts.map { "[第\($0.fromChapter)章] \($0.subject) \($0.predicate) \($0.object)\($0.publicToReader ? "" : "（读者未知）")" }.joined(separator: "\n")
         }
@@ -693,7 +699,8 @@ enum NovelTools {
 
     /// 把按章绑定的工具版本替换进工具面（单点实现，供工具循环与围栏 JSON 回退共用）
     static func bindChapter(tools: [AgentTool], store: ProjectStore, chapter: Int?) -> [AgentTool] {
-        guard let n = chapter else { return tools }
+        // 0 章/无章号不是合法绑定目标：否则卷级任务的骨架会静默落到「第 0 章」
+        guard let n = chapter, n > 0 else { return tools }
         var out = tools
         let bindings: [(String, AgentTool)] = [
             ("propose_skeleton", proposeSkeleton(store: store, chapter: n)),

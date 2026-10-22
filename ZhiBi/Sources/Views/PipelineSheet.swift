@@ -144,6 +144,10 @@ struct PipelineSheet: View {
                                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                                 .background(Color(nsColor: .underPageBackgroundColor))
                                 .cornerRadius(8)
+                        } else if let accepted = store.latestAnyDraftProposal(for: chapterNumber),
+                                  accepted.status == .accepted,
+                                  let d = store.draftPayload(of: accepted) {
+                            emptyHint("草稿 v\(d.version) 已采纳进正文。要再改，可继续「写草稿」出新版本。")
                         } else {
                             emptyHint("还没有草稿——先点上面的「写草稿」。")
                         }
@@ -183,7 +187,11 @@ struct PipelineSheet: View {
                     stage(7, "AI 文风综合审查（去AI味 + 强化风格）") {
                         HStack {
                             Button("三 pass 综合（审草稿）") {
-                                Task { await vm.ai.runDeslop(store: store, config: vm.config, chapter: chapterNumber, overrideText: currentDraft?.text) }
+                                Task {
+                                    await vm.ai.runDeslop(store: store, config: vm.config, chapter: chapterNumber,
+                                                          overrideText: currentDraft?.text,
+                                                          draftProposalID: store.latestDraftProposal(for: chapterNumber)?.id)
+                                }
                             }
                             .zbGlassButton()
                             .disabled(vm.ai.running || currentDraft == nil)
@@ -202,14 +210,20 @@ struct PipelineSheet: View {
                             }
                         }
                         HStack {
-                            Button("采纳 v\(currentDraft?.version ?? 0) → 写入正文") {
+                            Button {
                                 acceptDraft()
+                            } label: {
+                                Text(currentDraft.map { "采纳 v\($0.version) → 写入正文" }
+                                     ?? "采纳草稿 → 写入正文")
                             }
                             .zbGlassButton(prominent: true)
                             .disabled(currentDraft == nil)
                             if let note = acceptedNote {
                                 Text("✓ \(note)").font(.caption).foregroundStyle(.green)
                             }
+                        }
+                        if let issues = store.lastAcceptIssues {
+                            Text(issues).font(.caption).foregroundStyle(.orange)
                         }
                         Text("覆盖正文前会自动存快照（章节目录 snapshots/），随时可回滚。入库后建议在章节页跑「让 AI 记一笔」更新账本。")
                             .font(.caption2).foregroundStyle(.tertiary)
@@ -270,8 +284,12 @@ struct PipelineSheet: View {
 
     private func acceptDraft() {
         guard let proposal = latestDraft, let draft = store.draftPayload(of: proposal) else { return }
-        store.acceptProposal(proposal.id)
-        acceptedNote = "草稿 v\(draft.version) 已写入第\(chapterNumber)章正文（\(WordStats.chineseCount(draft.text)) 字）"
+        // 必须看返回值：快照失败/章节被删时提案保持待审，不能对作者说"已写入"。
+        if store.acceptProposal(proposal.id) {
+            acceptedNote = "草稿 v\(draft.version) 已写入第\(chapterNumber)章正文（\(WordStats.chineseCount(draft.text)) 字）"
+        } else {
+            acceptedNote = nil
+        }
     }
 
     private var header: some View {
@@ -284,6 +302,10 @@ struct PipelineSheet: View {
             if vm.ai.running {
                 ProgressView().controlSize(.small)
                 Text(vm.ai.runningCapability?.rawValue ?? "").font(.caption).foregroundStyle(.secondary)
+                Text("关窗不会中断任务，结果照常进收件箱").font(.caption2).foregroundStyle(.tertiary)
+                Button("停止") { vm.ai.cancelCurrentRun() }
+                    .controlSize(.mini)
+                    .help("在当前步骤结束后停止；已产出的提案保留")
             }
             Button("完成") { dismiss() }.controlSize(.small)
         }

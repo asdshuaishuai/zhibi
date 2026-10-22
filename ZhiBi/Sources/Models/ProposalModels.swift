@@ -210,4 +210,97 @@ struct DeslopReport: Codable {
     var lint: LintSummary?
     var suggestions: [DeslopSuggestion] = []
     var checkedAt: Date = Date()
+    /// 送审文本是草稿时指向那份草稿提案：采纳建议必须改草稿，不能改正文。
+    /// nil = 针对已入库正文（老提案解码后也是 nil）。
+    var targetDraftID: UUID? = nil
+}
+
+// MARK: - 旧提案 JSON 兼容（显式解码，缺新键不整份失败）
+
+extension DraftFeedback {
+    private enum Keys: String, CodingKey { case id, feedback, fromVersion, at }
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: Keys.self)
+        id = try c.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+        feedback = try c.decodeIfPresent(String.self, forKey: .feedback) ?? ""
+        fromVersion = try c.decodeIfPresent(Int.self, forKey: .fromVersion) ?? 0
+        at = try c.decodeIfPresent(Date.self, forKey: .at) ?? Date()
+    }
+}
+
+extension ChapterDraft {
+    private enum Keys: String, CodingKey { case chapter, text, version, mainline, feedbackHistory }
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: Keys.self)
+        chapter = try c.decodeIfPresent(Int.self, forKey: .chapter) ?? 0
+        text = try c.decodeIfPresent(String.self, forKey: .text) ?? ""
+        version = try c.decodeIfPresent(Int.self, forKey: .version) ?? 1
+        mainline = try c.decodeIfPresent(String.self, forKey: .mainline) ?? ""
+        feedbackHistory = try c.decodeIfPresent([DraftFeedback].self, forKey: .feedbackHistory) ?? []
+    }
+}
+
+extension DeslopSuggestion {
+    private enum Keys: String, CodingKey { case id, gate, original, replacement, reason, applied }
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: Keys.self)
+        id = try c.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+        gate = try c.decodeIfPresent(String.self, forKey: .gate) ?? ""
+        original = try c.decodeIfPresent(String.self, forKey: .original) ?? ""
+        replacement = try c.decodeIfPresent(String.self, forKey: .replacement) ?? ""
+        reason = try c.decodeIfPresent(String.self, forKey: .reason) ?? ""
+        applied = try c.decodeIfPresent(Bool.self, forKey: .applied) ?? false
+    }
+}
+
+extension DeslopReport {
+    private enum Keys: String, CodingKey {
+        case chapter, grade, lint, suggestions, checkedAt, targetDraftID
+    }
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: Keys.self)
+        chapter = try c.decodeIfPresent(Int.self, forKey: .chapter) ?? 0
+        grade = try c.decodeIfPresent(String.self, forKey: .grade) ?? ""
+        lint = try c.decodeIfPresent(LintSummary.self, forKey: .lint)
+        suggestions = try c.decodeIfPresent([DeslopSuggestion].self, forKey: .suggestions) ?? []
+        checkedAt = try c.decodeIfPresent(Date.self, forKey: .checkedAt) ?? Date()
+        targetDraftID = try c.decodeIfPresent(UUID.self, forKey: .targetDraftID)
+    }
+}
+
+extension ValidationReport {
+    private enum Keys: String, CodingKey {
+        case chapter, deterministicIssues, aiIssues, lintSummary, checkedAt
+    }
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: Keys.self)
+        chapter = try c.decodeIfPresent(Int.self, forKey: .chapter) ?? 0
+        deterministicIssues = try c.decodeIfPresent([ValidationIssue].self, forKey: .deterministicIssues) ?? []
+        aiIssues = try c.decodeIfPresent([ValidationIssue].self, forKey: .aiIssues) ?? []
+        lintSummary = try c.decodeIfPresent(LintSummary.self, forKey: .lintSummary)
+        checkedAt = try c.decodeIfPresent(Date.self, forKey: .checkedAt) ?? Date()
+    }
+}
+
+extension AIProposal {
+    private enum Keys: String, CodingKey {
+        case id, capability, chapterNumber, title, note, payload, status, createdAt, decidedAt, rejectReason
+    }
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: Keys.self)
+        id = try c.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+        capability = try c.decodeIfPresent(AICapability.self, forKey: .capability) ?? .recallMemo
+        chapterNumber = try c.decodeIfPresent(Int.self, forKey: .chapterNumber)
+        title = try c.decodeIfPresent(String.self, forKey: .title) ?? ""
+        note = try c.decodeIfPresent(String.self, forKey: .note) ?? ""
+        payload = try c.decode(ProposalPayload.self, forKey: .payload)
+        if let raw = try c.decodeIfPresent(String.self, forKey: .status) {
+            status = ProposalStatus(rawValue: raw) ?? .pending
+        } else {
+            status = .pending
+        }
+        createdAt = try c.decodeIfPresent(Date.self, forKey: .createdAt) ?? Date()
+        decidedAt = try c.decodeIfPresent(Date.self, forKey: .decidedAt)
+        rejectReason = try c.decodeIfPresent(String.self, forKey: .rejectReason)
+    }
 }

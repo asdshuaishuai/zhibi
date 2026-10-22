@@ -63,9 +63,8 @@ struct AIToolboxSheet: View {
     @State private var savedAsProposal = false
     @State private var copiedText = false
     @State private var copiedSVG = false
-    @State private var showSaveFailed = false
-
-    private var needsStore: Bool { tool == .organize || tool == .shortStory }
+    /// sheet 内的就地反馈：全局 toast 会被弹窗盖住
+    @State private var localNote: String?
 
     var body: some View {
         VStack(alignment: .leading, spacing: ZBSpace.sm) {
@@ -102,10 +101,13 @@ struct AIToolboxSheet: View {
         .padding(ZBSpace.lg)
         .frame(minWidth: ZBSpace.Sheet.wide, minHeight: 560)
 
-        // 结果区（纯文本类工具就地展示；提案类完成后提示去收件箱）
-        .overlay(alignment: .bottom) {
-            if ai.running || !resultText.isEmpty || ai.lastError != nil || !ai.lastToolLog.isEmpty {
+        // 结果区用 safeAreaInset 而不是 overlay：overlay 会压在输入区与底部按钮上
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            if ai.running || !resultText.isEmpty || ai.lastError != nil || !ai.lastToolLog.isEmpty || localNote != nil {
                 resultFooter
+                    .padding(.horizontal, ZBSpace.lg)
+                    .padding(.bottom, ZBSpace.sm)
+                    .background(.regularMaterial)
             }
         }
     }
@@ -124,7 +126,9 @@ struct AIToolboxSheet: View {
         switch tool {
         case .canonClassify: return !store.canonSections.isEmpty
         case .analyze: return referenceText.trimmingCharacters(in: .whitespacesAndNewlines).count >= 50
-        case .organize, .coverSVG, .shortStory: return true
+        case .organize: return store.chapters.contains { !$0.prose.isEmpty }
+        case .coverSVG: return true
+        case .shortStory: return !shortConflict.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         }
     }
 
@@ -204,6 +208,10 @@ struct AIToolboxSheet: View {
     private var resultFooter: some View {
         VStack(alignment: .leading, spacing: ZBSpace.xs) {
             Divider()
+            if let note = localNote {
+                Label(note, systemImage: "checkmark.circle.fill")
+                    .font(.caption).foregroundStyle(.green)
+            }
             if let err = ai.lastError {
                 Label(err, systemImage: "exclamationmark.triangle.fill")
                     .font(.caption).foregroundStyle(.orange)
@@ -304,7 +312,10 @@ struct AIToolboxSheet: View {
 
     /// 最新一条归类提案（收件箱 newest-first，可能已被作者在收件箱先行处理）
     private var latestClassifyProposal: AIProposal? {
-        store.proposals.first { $0.capability == .canonClassify }
+        // 只看本次运行登记的提案：否则第二次运行失败时会把上一轮结果当成本次结果展示
+        store.proposals.first {
+            $0.capability == .canonClassify && ai.lastRunProposalIDs.contains($0.id)
+        }
     }
 
     @ViewBuilder
@@ -317,7 +328,13 @@ struct AIToolboxSheet: View {
                     Spacer()
                     switch p.status {
                     case .pending:
-                        Button("全部采纳") { store.acceptProposal(p.id) }
+                        Button("全部采纳") {
+                            if store.acceptProposal(p.id) {
+                                localNote = "归类已全部采纳"
+                            } else {
+                                localNote = nil
+                            }
+                        }
                             .buttonStyle(.borderedProminent)
                             .controlSize(.small)
                     case .accepted:
@@ -441,19 +458,24 @@ struct AIToolboxSheet: View {
         ai.lastToolLog = []
         ai.lastError = nil
         ai.lastRunNewProposals = nil
+        localNote = nil
         Task {
             switch tool {
             case .analyze:
-                let r = await ai.runAnalyzeText(store: store, referenceText: referenceText, focus: analyzeFocus)
+                let r = await ai.runAnalyzeText(store: store, config: vm.config, referenceText: referenceText, focus: analyzeFocus)
                 resultText = r ?? ""
             case .organize:
                 await ai.runOrganize(store: store, config: vm.config)
-                vm.showToast("旧稿整理完成——\(vm.ai.lastRunNewProposals ?? 0) 条提案待审")
+                if ai.lastError == nil {
+                    localNote = "旧稿整理完成——\(ai.lastRunNewProposals ?? 0) 条提案待审"
+                }
             case .canonClassify:
                 await ai.runCanonClassify(store: store, config: vm.config)
-                vm.showToast("设定归类完成——结果在下方，过目后一键采纳")
+                if ai.lastError == nil {
+                    localNote = "设定归类完成——结果在下方，过目后一键采纳"
+                }
             case .coverSVG:
-                let r = await ai.runCoverSVG(store: store, authorName: coverAuthor,
+                let r = await ai.runCoverSVG(store: store, config: vm.config, authorName: coverAuthor,
                                                 mood: coverMood, direction: coverDirection)
                 if let code = CoverSVG.extractSVG(r ?? "") {
                     coverSVGCode = code

@@ -1,13 +1,17 @@
 import SwiftUI
 
-// MARK: - 提案收件箱：AI 的一切产出在这里被作者裁决（接受 / 修改后接受 / 拒绝）
+// MARK: - 提案收件箱：AI 的一切产出在这里被作者裁决（接受 / 拒绝；采纳后可在对应台账继续改）
 
 struct ProposalInboxView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @ObservedObject var vm: AppViewModel
     @ObservedObject var store: ProjectStore
+    /// 作为 sheet 打开时提供关闭按钮；嵌在工作区里则为 nil
+    var onClose: (() -> Void)? = nil
     @State private var filterPendingOnly = true
     @State private var expanded: Set<UUID> = []
+    @State private var actionError: String?
+    @State private var confirmClear = false
 
     private var visible: [AIProposal] {
         filterPendingOnly ? store.proposals.filter { $0.status == .pending } : store.proposals
@@ -25,13 +29,37 @@ struct ProposalInboxView: View {
                     .toggleStyle(.checkbox)
                     .font(.caption)
                 qualityBadge
-                Button("清空已裁决") {
-                    store.proposals.removeAll { $0.status != .pending }
-                    store.saveSoon()
+                Button("清空已裁决") { confirmClear = true }
+                    .controlSize(.small)
+                    .confirmationDialog("清空所有已采纳/已拒绝的提案？", isPresented: $confirmClear) {
+                        Button("清空（不可撤销）", role: .destructive) {
+                            store.proposals.removeAll { $0.status != .pending }
+                            actionError = nil
+                            store.saveSoon()
+                        }
+                        Button("取消", role: .cancel) {}
+                    } message: {
+                        Text("会同时清空采纳率与拒收理由账本；归档文件也会被清空。此操作不可撤销。")
+                    }
+                if let onClose {
+                    Button("完成") { onClose() }
+                        .controlSize(.small)
+                        .keyboardShortcut(.cancelAction)
                 }
-                .controlSize(.small)
             }
             .padding(12)
+
+            if let err = actionError {
+                HStack(alignment: .top, spacing: 6) {
+                    Image(systemName: "exclamationmark.circle.fill").foregroundStyle(.red)
+                    Text(err).font(.caption)
+                    Spacer()
+                    Button { actionError = nil } label: { Image(systemName: "xmark").font(.caption2) }
+                        .buttonStyle(.plain)
+                }
+                .padding(.horizontal, 12).padding(.vertical, 6)
+                .background(Color.red.opacity(0.07))
+            }
 
             // 采纳未入库清单：部分失败时明示（提案保持待审可重试）
             if let issues = store.lastAcceptIssues {
@@ -51,7 +79,9 @@ struct ProposalInboxView: View {
             if visible.isEmpty {
                 VStack(spacing: 8) {
                     Image(systemName: "tray").font(.system(size: 36)).foregroundStyle(.tertiary)
-                    Text("收件箱是空的。\n在章节页点「AI 搭骨架 / 一键验证 / 去AI味」，产出都会送到这里等你裁决。")
+                    Text(filterPendingOnly && !store.proposals.isEmpty
+                         ? "没有待确认的提案。\n关掉「只看待确认」可查看已采纳/已拒绝记录。"
+                         : "收件箱是空的。\n在章节页点「AI 搭骨架 / 一键验证 / 去AI味」，产出都会送到这里等你裁决。")
                         .font(.callout).foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
                 }
@@ -103,6 +133,7 @@ struct ProposalInboxView: View {
                     Image(systemName: isOpen ? "chevron.up" : "chevron.down")
                 }
                 .buttonStyle(.borderless)
+                .accessibilityLabel(isOpen ? "收起提案详情" : "展开提案详情")
             }
 
             if !p.note.isEmpty {
@@ -128,11 +159,16 @@ struct ProposalInboxView: View {
                         .menuStyle(.borderlessButton)
                         .fixedSize()
                         .help("拒收理由会进质量账本——AI 产出改进的依据")
-                        Button("接受并入库") {
-                            store.acceptProposal(p.id)
+                        Button(acceptLabel(p)) {
+                            if !store.acceptProposal(p.id) {
+                                actionError = store.lastAcceptIssues ?? "未能入库，请查看上方原因。"
+                            } else {
+                                actionError = nil
+                            }
                         }
                         .buttonStyle(.borderedProminent)
                         .tint(.green)
+                        .help(acceptHelp(p))
                     }
                 }
             }
@@ -143,6 +179,21 @@ struct ProposalInboxView: View {
             RoundedRectangle(cornerRadius: 10)
                 .strokeBorder(p.status == .pending ? Color.orange.opacity(0.4) : Color.secondary.opacity(0.15))
         )
+    }
+
+    /// 去AI味的"采纳"只是把报告标记已阅；建议没应用时不能让人误以为正文改过了
+    private func acceptLabel(_ p: AIProposal) -> String {
+        if case .deslop(let r) = p.payload, r.suggestions.contains(where: { !$0.applied }) {
+            return "仅标记已阅"
+        }
+        return "接受并入库"
+    }
+
+    private func acceptHelp(_ p: AIProposal) -> String {
+        if case .deslop(let r) = p.payload, r.suggestions.contains(where: { !$0.applied }) {
+            return "还有 \(r.suggestions.filter { !$0.applied }.count) 条建议未应用——此按钮只关闭报告，不改正文。要改文本请点上方「全部采纳」或逐条「采纳」。"
+        }
+        return "把这份提案写入书里（提案未入库的部分会保持待审）"
     }
 
     private func capabilityTag(_ c: AICapability) -> some View {
@@ -322,16 +373,29 @@ struct ProposalInboxView: View {
                         var snapshotted = false
                         var failed = 0
                         for s in report.suggestions where !s.applied {
-                            let ok = vm.applyDeslopSuggestion(s, chapter: report.chapter,
-                                                              snapshotTag: snapshotted ? nil : "deslop前")
-                            if ok { snapshotted = true } else { failed += 1 }
+                            let ok = vm.applyDeslopSuggestion(
+                                s, chapter: report.chapter,
+                                snapshotTag: snapshotted ? nil : "deslop前",
+                                targetDraftID: report.targetDraftID)
+                            if ok {
+                                snapshotted = true
+                                // 必须逐条回写 applied：否则第二次点「全部采纳」时，
+                                // 已改过的原文对不上，会永远卡在 failed > 0、无法结案。
+                                _ = store.markDeslopSuggestionApplied(proposalID: p.id, suggestionID: s.id)
+                            } else {
+                                failed += 1
+                            }
                         }
                         // 有任一建议没落地（原文对不上）就不标已采纳——否则提案从待审列表
                         // 消失、状态却停在未应用，作者永远不知道哪条没改
                         if failed == 0 {
-                            store.acceptProposal(p.id)
+                            if !store.acceptProposal(p.id) {
+                                actionError = store.lastAcceptIssues ?? "去AI味报告未能结案。"
+                            } else {
+                                actionError = nil
+                            }
                         } else {
-                            vm.ai.lastError = "\(failed) 条建议的原文对不上（可能已被你手改），已落地的保持落地；其余保持待审。"
+                            actionError = "\(failed) 条建议未应用：\(vm.lastDeslopIssue ?? "原文对不上或出现多次")。已落地的保持落地，其余保持待审。"
                         }
                     }
                     .controlSize(.small)
@@ -350,8 +414,12 @@ struct ProposalInboxView: View {
                         Spacer()
                         Button("采纳") {
                             if vm.applyDeslopSuggestion(s, chapter: report.chapter,
-                                                        snapshotTag: s.applied ? nil : "deslop前") {
-                                markSuggestionApplied(p, s)
+                                                        snapshotTag: s.applied ? nil : "deslop前",
+                                                        targetDraftID: report.targetDraftID) {
+                                _ = store.markDeslopSuggestionApplied(proposalID: p.id, suggestionID: s.id)
+                                actionError = nil
+                            } else {
+                                actionError = vm.lastDeslopIssue ?? "这条建议未能应用，未改动。"
                             }
                         }
                         .controlSize(.small)
@@ -454,8 +522,14 @@ struct ProposalInboxView: View {
                                 Text("第\(f.chapter)章").font(.caption2).foregroundStyle(.tertiary)
                             }
                             Spacer()
-                            Button("只采纳这一条") { store.applyClueFix(f) }
-                                .controlSize(.mini)
+                            Button("只采纳这一条") {
+                                if !store.applyClueFix(f) {
+                                    actionError = "这条修复未能应用：目标伏笔不存在或与现有台账冲突。"
+                                } else {
+                                    actionError = nil
+                                }
+                            }
+                            .controlSize(.mini)
                         }
                         Text(f.reason).font(.caption)
                         Text("→ \(f.action)").font(.caption).foregroundStyle(.secondary)
@@ -486,6 +560,14 @@ struct ProposalInboxView: View {
                             if u.confidence > 0 {
                                 Text("匹配度 \(Int(u.confidence * 100))%").font(.caption2).foregroundStyle(.tertiary)
                             }
+                            Button("只采纳这一条") {
+                                if !store.applyOutlineUpdate(u) {
+                                    actionError = "这条更新未能应用：目标事件/故事线/阶段不存在。"
+                                } else {
+                                    actionError = nil
+                                }
+                            }
+                            .controlSize(.mini)
                         }
                         Text(u.reason).font(.caption)
                         if !u.evidence.isEmpty {
@@ -509,17 +591,6 @@ struct ProposalInboxView: View {
             Text(title).font(.caption2.bold()).foregroundStyle(.secondary)
                 .frame(width: 76, alignment: .leading)
             Text(items.joined(separator: "；")).font(.caption2)
-        }
-    }
-
-    private func markSuggestionApplied(_ p: AIProposal, _ s: DeslopSuggestion) {
-        guard let idx = store.proposals.firstIndex(where: { $0.id == p.id }) else { return }
-        if case .deslop(var report) = store.proposals[idx].payload {
-            if let sIdx = report.suggestions.firstIndex(where: { $0.id == s.id }) {
-                report.suggestions[sIdx].applied = true
-                store.proposals[idx].payload = .deslop(report)
-                store.saveSoon()
-            }
         }
     }
 

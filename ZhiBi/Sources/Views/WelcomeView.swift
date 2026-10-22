@@ -16,6 +16,8 @@ struct RootView: View {
                 }
             }
         }
+        // 挂在根视图：书架与工作区都能看到操作反馈（原先只挂工作区，书架导入完成完全没提示）
+        .zbToast(vm)
         .sheet(isPresented: $vm.showImportPreview) {
             ImportPreviewSheet(vm: vm, ai: vm.ai)
         }
@@ -49,6 +51,7 @@ struct WelcomeView: View {
     @State private var newGenre = ""
     @State private var newPremise = ""
     @State private var buildFramework = true
+    @FocusState private var titleFocused: Bool
 
     /// 常用题材快选（点一下填入，可再手改）
     static let genreChips = ["东方玄幻", "都市异能", "科幻末世", "悬疑推理", "历史权谋", "仙侠修真", "无限流", "言情世情"]
@@ -175,12 +178,23 @@ struct WelcomeView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
+        // macOS 惯例：把素材目录/文件直接拖到书架
+        .dropDestination(for: URL.self) { urls, _ in
+            guard let first = urls.first else { return false }
+            vm.beginImport(urls: [first])
+            return true
+        }
         .sheet(isPresented: $showCreate) {
             createSheet
         }
         .sheet(isPresented: $showTopicScan) {
-            TopicScanSheet(vm: vm, ai: vm.ai)
-                .frame(minWidth: ZBSpace.Sheet.wide, minHeight: 520)
+            TopicScanSheet(vm: vm, ai: vm.ai, onStartProject: { text in
+                newPremise = text
+                showTopicScan = false
+                // 等选题窗退场后再开新建窗，避免两个 sheet 抢同一时机
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { showCreate = true }
+            })
+            .frame(minWidth: ZBSpace.Sheet.wide, minHeight: 520)
         }
         .sheet(item: $coverDesignRef) { designRef in
             CoverDesignSheet(ref: designRef, vm: vm, ai: vm.ai, onAdopted: { coverRefresh = UUID() })
@@ -265,7 +279,8 @@ struct WelcomeView: View {
                                      onOpen: { vm.openProject(ref) },
                                      onReveal: { NSWorkspace.shared.activateFileViewerSelecting([ref.url]) },
                                      onDelete: { projectPendingDelete = ref },
-                                     onCoverDesign: { coverDesignRef = ref })
+                                     onCoverDesign: { coverDesignRef = ref },
+                                     onCycleStyle: { await vm.cycleCoverStyle(for: ref) })
                     }
                 }
                 .padding(.horizontal, 22)
@@ -288,11 +303,6 @@ struct WelcomeView: View {
         }
     }
 
-    private var shelfFormatter: DateFormatter {
-        let f = DateFormatter()
-        f.dateFormat = "M月d日"
-        return f
-    }
 }
 
 // MARK: - 书架卡牌（微信读书式：封面竖排书名 + 章节字数速览）
@@ -316,7 +326,6 @@ struct ShelfBookCard: View {
     @State private var stats: ShelfStats?
     @State private var style: Int?
     @State private var hovering = false
-    @State private var openingFlag = false
     @State private var svgCover: NSImage?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -340,6 +349,8 @@ struct ShelfBookCard: View {
         .scaleEffect(hovering && !reduceMotion ? 1.035 : 1)
         .animation(ZBMotion.curve(ZBMotion.standard, reduceMotion: reduceMotion), value: hovering)
         .onTapGesture { onOpen() }
+        .accessibilityAddTraits(.isButton)
+        .accessibilityLabel("打开《\(ref.title)》")
         .onHover { hovering = $0 }
         .contextMenu {
             Button("AI 封面设计…") { onCoverDesign() }
@@ -392,17 +403,20 @@ struct ShelfBookCard: View {
             .overlay(alignment: .topTrailing) {
                 if hovering {
                     HStack(spacing: 4) {
-                        Button {
-                            Task { style = await onCycleStyle() }
-                        } label: {
-                            Image(systemName: "arrow.triangle.2.circlepath")
-                                .font(.system(size: 10, weight: .semibold))
-                                .foregroundStyle(.white)
-                                .frame(width: 22, height: 22)
-                                .background(Circle().fill(.black.opacity(0.45)))
+                        if svgCover == nil {
+                            Button {
+                                Task { style = await onCycleStyle() }
+                            } label: {
+                                Image(systemName: "arrow.triangle.2.circlepath")
+                                    .font(.system(size: 10, weight: .semibold))
+                                    .foregroundStyle(.white)
+                                    .frame(width: 22, height: 22)
+                                    .background(Circle().fill(.black.opacity(0.45)))
+                            }
+                            .buttonStyle(.plain)
+                            .help("换一种封面")
+                            .accessibilityLabel("换一种封面")
                         }
-                        .buttonStyle(.plain)
-                        .help("换一种封面")
                         Button {
                             onCoverDesign()
                         } label: {
@@ -414,6 +428,7 @@ struct ShelfBookCard: View {
                         }
                         .buttonStyle(.plain)
                         .help("AI 封面设计（SVG 绘制）")
+                        .accessibilityLabel("AI 封面设计")
                     }
                     .transition(.opacity)
                     .padding(6)
@@ -440,7 +455,7 @@ struct ShelfBookCard: View {
         ShelfBookCard.loadProjectMeta(url: url)?.coverStyle
     }
 
-    private nonisolated static func loadProjectMeta(url: URL) -> NovelProject? {
+    nonisolated static func loadProjectMeta(url: URL) -> NovelProject? {
         let file = url.appendingPathComponent("project.json")
         return try? Disk.readJSON(NovelProject.self, from: file)
     }
@@ -460,8 +475,7 @@ struct ShelfBookCard: View {
         }
         for dir in dirs where dir.lastPathComponent.hasPrefix("ch-") {
             let meta = dir.appendingPathComponent("meta.json")
-            guard let data = try? Data(contentsOf: meta),
-                  let ch = try? Disk.readJSON(ChapterMeta.self, from: meta) else { continue }
+            guard let ch = try? Disk.readJSON(ChapterMeta.self, from: meta) else { continue }
             let words = ch.cachedWords ?? 0
             if words > 0 { result.chapters += 1 }
             result.words += words
@@ -478,10 +492,12 @@ struct ShelfListRow: View {
     let onReveal: () -> Void
     let onDelete: () -> Void
     var onCoverDesign: () -> Void = {}
+    var onCycleStyle: () async -> Int? = { nil }
 
     @State private var stats: ShelfStats?
     @State private var openingFlag = false
     @State private var svgCover: NSImage?
+    @State private var coverStyle: Int?
 
     var body: some View {
         HStack(spacing: 12) {
@@ -491,7 +507,9 @@ struct ShelfListRow: View {
                         .frame(width: 42, height: 56)
                         .clipShape(RoundedRectangle(cornerRadius: 3))
                 } else {
-                    BookCover(title: ref.title, style: CoverStyle.defaultIndex(for: ref.title), width: 42, height: 56)
+                    BookCover(title: ref.title,
+                              style: coverStyle ?? CoverStyle.defaultIndex(for: ref.title),
+                              width: 42, height: 56)
                 }
             }
             VStack(alignment: .leading, spacing: 2) {
@@ -508,6 +526,12 @@ struct ShelfListRow: View {
                 .zbGlassButton(prominent: true)
                 .controlSize(.small)
             Menu {
+                if svgCover == nil {
+                    Button("换一种封面") {
+                        Task { coverStyle = await onCycleStyle() }
+                    }
+                }
+                Button("AI 封面设计…") { onCoverDesign() }
                 Button("在访达中显示") { onReveal() }
                 Divider()
                 Button("删除…", role: .destructive) { onDelete() }
@@ -523,8 +547,18 @@ struct ShelfListRow: View {
         .onTapGesture {
             openingFlag = true
             onOpen()
+            // 打开失败时不要永久半透明：3 秒后复位（成功会切到工作区，看不出影响）
+            Task {
+                try? await Task.sleep(nanoseconds: 3_000_000_000)
+                openingFlag = false
+            }
         }
-        .task { stats = await Task.detached { ShelfBookCard.loadStats(url: ref.url) }.value }
+        .accessibilityAddTraits(.isButton)
+        .accessibilityLabel("打开《\(ref.title)》")
+        .task {
+            stats = await Task.detached { ShelfBookCard.loadStats(url: ref.url) }.value
+            coverStyle = ShelfBookCard.loadProjectMeta(url: ref.url)?.coverStyle
+        }
         .opacity(openingFlag ? 0.5 : 1)
     }
 }
@@ -537,12 +571,11 @@ extension WelcomeView {
                 .font(.caption).foregroundStyle(.secondary)
 
             VStack(alignment: .leading, spacing: ZBSpace.sm) {
-                @FocusState var titleFocused: Bool
                 TextField("书名", text: $newTitle)
                     .textFieldStyle(.roundedBorder)
                     .focused($titleFocused)
                     .onSubmit { titleFocused = false }
-                    .onAppear { titleFocused = true }
+                    .onAppear { DispatchQueue.main.async { titleFocused = true } }
 
                 VStack(alignment: .leading, spacing: 6) {
                     Text("题材").font(.caption).foregroundStyle(.secondary)

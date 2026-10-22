@@ -9,6 +9,20 @@ struct OutlineView: View {
     @State private var showAddEvent = false
     @State private var outlineNotes = ""
     @State private var showCraftCodex = false
+    @State private var pendingDelete: PendingDelete?
+
+    private enum PendingDelete: Identifiable {
+        case storyline(String)
+        case stage(Int)
+        case event(String)
+        var id: String {
+            switch self {
+            case .storyline(let s): return "L-\(s)"
+            case .stage(let s): return "S-\(s)"
+            case .event(let s): return "E-\(s)"
+            }
+        }
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -56,7 +70,7 @@ struct OutlineView: View {
                     .disabled(vm.ai.running)
                 Button {
                     Task { await vm.ai.runOutlineTimeline(store: store, config: vm.config, notes: outlineNotes) }
-                } label: { Label("AI 建大纲（提案）", systemImage: "wand.and.stars") }
+                } label: { Label("AI 建大纲 / 时间线（提案）", systemImage: "wand.and.stars") }
                 .controlSize(.small)
                 .disabled(vm.ai.running)
             }
@@ -98,11 +112,6 @@ struct OutlineView: View {
                 Text("左栏只有你知道，右栏是读者被告知的——信息差就是悬念")
                     .font(.caption).foregroundStyle(.tertiary)
                 Spacer()
-                Button {
-                    Task { await vm.ai.runOutlineTimeline(store: store, config: vm.config, notes: outlineNotes) }
-                } label: { Label("AI 建时间线（提案）", systemImage: "sparkles") }
-                .controlSize(.small)
-                .disabled(vm.ai.running)
                 Button("加事件") { showAddEvent = true }
                     .controlSize(.small)
             }
@@ -112,10 +121,38 @@ struct OutlineView: View {
 
             outlineSyncBar
 
-            timelineTable
+            if store.timelineEvents.isEmpty {
+                VStack(spacing: 6) {
+                    Image(systemName: "timeline.selection").font(.system(size: 30)).foregroundStyle(.tertiary)
+                    Text("还没有时间线事件。\n点「加事件」手动登记，或用「AI 建大纲 / 时间线」出一份提案。")
+                        .font(.callout).foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                timelineTable
+            }
         }
         .sheet(isPresented: $showAddEvent) { addEventSheet }
         .sheet(isPresented: $showCraftCodex) { craftCodexSheet }
+        .confirmationDialog("确认删除？", isPresented: Binding(
+            get: { pendingDelete != nil },
+            set: { if !$0 { pendingDelete = nil } })) {
+            Button("删除（不可撤销）", role: .destructive) {
+                if let target = pendingDelete {
+                    switch target {
+                    case .storyline(let id): store.storylines.removeAll { $0.id == id }
+                    case .stage(let id): store.stages.removeAll { $0.id == id }
+                    case .event(let id): store.timelineEvents.removeAll { $0.id == id }
+                    }
+                    store.saveSoon()
+                }
+                pendingDelete = nil
+            }
+            Button("取消", role: .cancel) { pendingDelete = nil }
+        } message: {
+            Text("只删除结构与计划，不改动正文。删除后应用内无法恢复。")
+        }
     }
 
     // MARK: - 大纲实时同步 + 剧情线连贯性
@@ -123,6 +160,7 @@ struct OutlineView: View {
     /// 对账结果。不能直接在 body 里算：OutlineSync 要读各章正文做双字组匹配，
     /// 300 章量级是秒级的主线程开销，放进 body 就是每次 store 变化都卡一下。
     @State private var syncReport: OutlineSyncReport?
+    @State private var reconciling = false
 
     /// 触发重算的**粗签名**：只含结构（章数/事件/故事线/阶段/台账），故意不含字数。
     /// 含字数的话作者每敲一个字都会全量重算一遍——那比"稍微陈旧"糟得多。
@@ -152,16 +190,24 @@ struct OutlineView: View {
             HStack(spacing: 8) {
                 Image(systemName: "arrow.triangle.2.circlepath").foregroundStyle(Color.accentColor)
                 Text("大纲对账").font(.callout.bold())
-                if let report {
+                if reconciling {
+                    ProgressView().controlSize(.mini)
+                    Text("正在对账…").font(.caption).foregroundStyle(.tertiary)
+                } else if let report {
                     Text(report.summary).font(.caption).foregroundStyle(.secondary).lineLimit(2)
                 } else {
-                    Text("正在对账…").font(.caption).foregroundStyle(.tertiary)
+                    Text("尚未对账").font(.caption).foregroundStyle(.tertiary)
                 }
                 Spacer()
                 Button {
-                    Task { syncReport = await OutlineSync.syncAsync(store: store) }
+                    Task {
+                        reconciling = true
+                        syncReport = await OutlineSync.syncAsync(store: store)
+                        reconciling = false
+                    }
                 } label: { Label("重新对账", systemImage: "arrow.clockwise") }
                     .controlSize(.small)
+                    .disabled(reconciling)
                     .help("正文改动不会自动重算（避免每敲一个字就全量对账），写完一段点这里刷新")
                 Button {
                     Task { await vm.ai.runOutlineSync(store: store, config: vm.config) }
@@ -198,7 +244,9 @@ struct OutlineView: View {
         .padding(.top, 6)
         // 结构变了才重算；task 可取消，翻页/关窗不会留下孤儿计算
         .task(id: syncStamp) {
+            reconciling = true
             syncReport = await OutlineSync.syncAsync(store: store)
+            reconciling = false
         }
     }
 
@@ -250,7 +298,23 @@ struct OutlineView: View {
             })
         return VStack(alignment: .leading, spacing: 5) {
             HStack {
-                TextField("L 编号", text: binding.id)
+                TextField("L 编号", text: Binding(
+                    get: { store.storylines.indices.contains(i) ? store.storylines[i].id : "" },
+                    set: { newID in
+                        guard store.storylines.indices.contains(i) else { return }
+                        let old = store.storylines[i].id
+                        let trimmed = newID.trimmingCharacters(in: .whitespaces)
+                        guard !trimmed.isEmpty, trimmed != old,
+                              !store.storylines.contains(where: { $0.id == trimmed }) else { return }
+                        store.storylines[i].id = trimmed
+                        // 改 L 编号要把事件引用一起迁移，否则时间线变孤儿
+                        for eIdx in store.timelineEvents.indices {
+                            store.timelineEvents[eIdx].storylineIDs = store.timelineEvents[eIdx].storylineIDs.map {
+                                $0 == old ? trimmed : $0
+                            }
+                        }
+                        store.saveSoon()
+                    }))
                     .font(.caption2.monospaced())
                     .frame(width: 44)
                 TextField("名称", text: binding.name)
@@ -261,10 +325,11 @@ struct OutlineView: View {
                 .labelsHidden()
                 .controlSize(.mini)
                 Button(role: .destructive) {
-                    _ = withAnimation { store.storylines.remove(at: i) }
-                    store.saveSoon()
+                    guard store.storylines.indices.contains(i) else { return }
+                    pendingDelete = .storyline(store.storylines[i].id)
                 } label: { Image(systemName: "trash") }
                     .buttonStyle(.borderless).controlSize(.mini)
+                    .accessibilityLabel("删除故事线")
             }
             Toggle("贯穿线（造包常驻）", isOn: binding.isThroughLine)
                 .font(.caption2)
@@ -296,16 +361,31 @@ struct OutlineView: View {
                             .textFieldStyle(.plain)
                             .font(.caption.bold())
                         Button(role: .destructive) {
-                            _ = store.stages.remove(at: idx)
-                            store.saveSoon()
+                            pendingDelete = .stage(stage.id)
                         } label: { Image(systemName: "trash") }
                             .buttonStyle(.borderless).controlSize(.mini)
+                            .accessibilityLabel("删除阶段")
                     }
-                    HStack {
-                        Stepper("第\(binding.wrappedValue.chapterStart)-\(binding.wrappedValue.chapterEnd)章",
-                                value: Binding(get: { store.stages[idx].chapterEnd },
-                                               set: { store.stages[idx].chapterEnd = max($0, store.stages[idx].chapterStart); store.saveSoon() }))
-                            .font(.caption2)
+                    HStack(spacing: 4) {
+                        Text("第").font(.caption2).foregroundStyle(.secondary)
+                        TextField("", value: Binding(
+                            get: { store.stages[idx].chapterStart },
+                            set: { store.stages[idx].chapterStart = max(1, min($0, store.stages[idx].chapterEnd)); store.saveSoon() }),
+                                  format: .number)
+                            .textFieldStyle(.roundedBorder)
+                            .font(.caption2.monospacedDigit())
+                            .frame(width: 42)
+                            .accessibilityLabel("阶段起始章")
+                        Text("-").font(.caption2)
+                        TextField("", value: Binding(
+                            get: { store.stages[idx].chapterEnd },
+                            set: { store.stages[idx].chapterEnd = max($0, store.stages[idx].chapterStart); store.saveSoon() }),
+                                  format: .number)
+                            .textFieldStyle(.roundedBorder)
+                            .font(.caption2.monospacedDigit())
+                            .frame(width: 42)
+                            .accessibilityLabel("阶段结束章")
+                        Text("章").font(.caption2).foregroundStyle(.secondary)
                     }
                     TextField("主题/核心矛盾", text: binding.theme)
                         .textFieldStyle(.roundedBorder)
@@ -343,16 +423,18 @@ struct OutlineView: View {
                     Button(e.revealed ? "标记未揭示" : "标记已揭示") {
                         if let idx = store.timelineEvents.firstIndex(where: { $0.id == e.id && $0.chapter == e.chapter }) {
                             store.timelineEvents[idx].revealed.toggle()
-                            store.timelineEvents[idx].revealChapter = store.timelineEvents[idx].revealed ? store.currentChapter : nil
+                            // currentChapter 是「下一章」；揭示发生在已经写到的章
+                            store.timelineEvents[idx].revealChapter = store.timelineEvents[idx].revealed
+                                ? max(1, store.currentChapter - 1) : nil
                             store.saveSoon()
                         }
                     }
                     .buttonStyle(.borderless).controlSize(.mini)
                     Button(role: .destructive) {
-                        store.timelineEvents.removeAll { $0.id == e.id && $0.chapter == e.chapter }
-                        store.saveSoon()
+                        pendingDelete = .event(e.id)
                     } label: { Image(systemName: "trash") }
                     .buttonStyle(.borderless).controlSize(.mini)
+                    .accessibilityLabel("删除事件")
                 }
             }.width(110)
         } rows: {
@@ -380,9 +462,13 @@ struct OutlineView: View {
             }
             HStack {
                 Spacer()
-                Button("取消") { showAddEvent = false }
+                Button("取消") {
+                    // 取消要清掉草稿：否则下次打开还带着上次填了一半的事件
+                    newEvent = TimelineEvent()
+                    showAddEvent = false
+                }
                 Button("添加") {
-                    if newEvent.id.isEmpty {
+                    if newEvent.id.isEmpty || store.timelineEvents.contains(where: { $0.id == newEvent.id }) {
                         let maxE = store.timelineEvents.compactMap { e -> Int? in
                             guard e.id.hasPrefix("E"), let n = Int(e.id.dropFirst()) else { return nil }
                             return n
@@ -396,6 +482,7 @@ struct OutlineView: View {
                     showAddEvent = false
                 }
                 .buttonStyle(.borderedProminent)
+                .disabled(newEvent.objectiveFact.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
         }
         .padding(20)

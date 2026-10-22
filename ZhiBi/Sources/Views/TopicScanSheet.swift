@@ -8,6 +8,8 @@ import SwiftUI
 struct TopicScanSheet: View {
     @ObservedObject var vm: AppViewModel
     @ObservedObject var ai: AIService
+    /// 把调研结果带回新建表单（一句话核心预填）
+    var onStartProject: ((String) -> Void)? = nil
     @Environment(\.dismiss) private var dismiss
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -55,6 +57,13 @@ struct TopicScanSheet: View {
                     Task { try? await Task.sleep(nanoseconds: 1_500_000_000); copied = false }
                 }
                 .disabled(resultText.isEmpty)
+                if let onStartProject {
+                    Button("用这个方向新建") {
+                        onStartProject(resultText)
+                        dismiss()
+                    }
+                    .disabled(resultText.isEmpty)
+                }
                 Button(ai.running ? "调研中…" : "开始调研") {
                     resultText = ""
                     Task {
@@ -99,6 +108,5 @@ struct TopicScanSheet: View {
         }
         .padding(ZBSpace.lg)
         .frame(minWidth: ZBSpace.Sheet.wide, minHeight: 520)
-        .onDisappear { ai.lastError = nil }
     }
 }

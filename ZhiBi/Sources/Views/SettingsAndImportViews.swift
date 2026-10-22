@@ -6,6 +6,24 @@ struct ImportPreviewSheet: View {
     @ObservedObject var vm: AppViewModel
     @ObservedObject var ai: AIService
     @Environment(\.dismiss) private var dismiss
+    @State private var confirmOverwrite = false
+
+    /// 本次导入内部重复的章号（后者会覆盖前者）
+    private var duplicateChapterCount: Int {
+        guard let items = vm.importPreview?.items.filter({ $0.kind == .chapter }) else { return 0 }
+        let nums = items.compactMap(\.chapterNumber)
+        return nums.count - Set(nums).count
+    }
+
+    /// 并入当前作品时，预览里会覆盖已有正文的章数
+    private var overwriteCount: Int {
+        guard !vm.importTargetNewProject, let store = vm.store, let preview = vm.importPreview else { return 0 }
+        return preview.items.filter { item in
+            guard item.kind == .chapter, let n = item.chapterNumber,
+                  let existing = store.chapter(n) else { return false }
+            return !existing.prose.isEmpty
+        }.count
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -45,6 +63,16 @@ struct ImportPreviewSheet: View {
                 } else if let s = vm.importPreview {
                     Text("识别到 \(s.chapters) 章 · \(s.canon) 份设定 · \(s.outlines) 份大纲")
                         .font(.callout.bold())
+                    if duplicateChapterCount > 0 {
+                        Label("本次导入有 \(duplicateChapterCount) 个重复章号，后一个文件会覆盖前一个",
+                              systemImage: "exclamationmark.triangle.fill")
+                            .font(.caption).foregroundStyle(.orange)
+                    }
+                    if overwriteCount > 0 {
+                        Label("其中 \(overwriteCount) 章与当前作品章号重复，确认后会覆盖已有正文（覆盖前会自动存快照）",
+                              systemImage: "exclamationmark.triangle.fill")
+                            .font(.caption).foregroundStyle(.orange)
+                    }
                     Table(of: ImportItem.self, selection: .constant(Set<ImportItem.ID>())) {
                         TableColumn("类型") { item in
                             Picker("", selection: Binding(
@@ -72,24 +100,34 @@ struct ImportPreviewSheet: View {
                 }
 
                 HStack {
-                    Text("导入不会改动你的原目录；结构化伏笔/时间线建议导入后用「AI 盘点伏笔」「AI 建时间线」提案重建。")
+                    Text("导入不会改动你的原目录；结构化伏笔/时间线建议导入后用「AI 盘点伏笔」「AI 建大纲 / 时间线」提案重建。")
                         .font(.caption2).foregroundStyle(.tertiary)
                     Spacer()
                     Button("取消") { dismiss() }
                     Button("确认导入") {
-                        if vm.importTargetNewProject {
-                            vm.confirmImport()
-                        } else if let store = vm.store {
-                            vm.confirmImport(intoExisting: store)
-                        }
+                        if overwriteCount > 0 { confirmOverwrite = true } else { performImport() }
                     }
                     .buttonStyle(.borderedProminent)
-                    .disabled(vm.importScanning)
+                    .disabled(vm.importScanning || (!vm.importTargetNewProject && vm.store == nil))
+                    .confirmationDialog("有 \(overwriteCount) 章会被覆盖", isPresented: $confirmOverwrite) {
+                        Button("覆盖并导入", role: .destructive) { performImport() }
+                        Button("取消", role: .cancel) {}
+                    } message: {
+                        Text("被覆盖的章会先自动存一份快照，可在章节目录 snapshots/ 回滚。")
+                    }
                 }
             }
         }
         .padding(ZBSpace.lg)
         .frame(width: ZBSpace.Sheet.wide, height: 560)
+    }
+
+    private func performImport() {
+        if vm.importTargetNewProject {
+            vm.confirmImport()
+        } else if let store = vm.store {
+            vm.confirmImport(intoExisting: store)
+        }
     }
 
     // MARK: 确认导入后：AI 归类在本窗内跑，进度与结果就地反馈（不去收件箱）
@@ -371,7 +409,19 @@ struct SettingsView: View {
                 Stepper("上下文包预算：≈\(vm.config.contextTokenBudget) tokens", value: $vm.config.contextTokenBudget, in: 2000...32000, step: 1000)
                 Text("造包按此预算真实裁剪（保护层优先、低优先级先压）。本地 8K 模型建议 ≤4000——太大时模型会截断反而丢关键上下文。")
                     .font(.caption2).foregroundStyle(.tertiary)
-                Toggle("正文自动保存（永远先落盘）", isOn: $vm.config.autoSave)
+                Stepper("单次 AI 请求超时：\(vm.config.effectiveTimeout) 秒",
+                        value: Binding(
+                            get: { vm.config.effectiveTimeout },
+                            set: { vm.config.requestTimeoutSeconds = $0 }),
+                        in: 30...1800, step: 30)
+                Text("超时后宿主会中断本次请求；已产出的提案保留。")
+                    .font(.caption2).foregroundStyle(.tertiary)
+                Toggle("正文自动保存（关闭后需 ⌘S 手动保存）", isOn: $vm.config.autoSave)
+                    .onChange(of: vm.config.autoSave) { enabled in
+                        // 立即生效并持久化，不能等用户再点一次「保存设置」
+                        vm.store?.autoSaveEnabled = enabled
+                        vm.saveConfig()
+                    }
             }
             HStack { Spacer(); saveButton }
         }

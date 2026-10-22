@@ -6,6 +6,8 @@ struct ClueBoardView: View {
     @ObservedObject var vm: AppViewModel
     @ObservedObject var store: ProjectStore
     @State private var filter: FilterKind = .active
+    @State private var editing: Clue?
+    @State private var pendingDeleteID: String?
 
     enum FilterKind: String, CaseIterable {
         case active = "活跃"
@@ -54,7 +56,9 @@ struct ClueBoardView: View {
             if filtered.isEmpty {
                 VStack(spacing: 8) {
                     Image(systemName: "link.circle").font(.system(size: 36)).foregroundStyle(.tertiary)
-                    Text("台账空。\n写到正文里埋下的每一颗种子，都值得一条台账——含种下时的原文片段。")
+                    Text(filter == .all
+                         ? "台账空。\n写到正文里埋下的每一颗种子，都值得一条台账——含种下时的原文片段。"
+                         : "当前筛选下没有伏笔。\n切到「全部」查看完整台账，或点「新建」补一条。")
                         .font(.callout).foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
                 }
@@ -83,12 +87,40 @@ struct ClueBoardView: View {
                     TableColumn("目标章") { c in
                         Text(c.targetPayoffChapter.map { "第\($0)章" } ?? "—").font(.caption.monospacedDigit())
                     }.width(70)
+                    TableColumn("") { c in
+                        HStack(spacing: 4) {
+                            Button { editing = c } label: { Image(systemName: "pencil") }
+                                .buttonStyle(.borderless).controlSize(.mini)
+                                .help("编辑伏笔")
+                            Button(role: .destructive) { pendingDeleteID = c.id } label: { Image(systemName: "trash") }
+                                .buttonStyle(.borderless).controlSize(.mini)
+                                .help("删除伏笔")
+                        }
+                    }.width(56)
                 } rows: {
                     ForEach(filtered) { c in
                         TableRow(c)
                     }
                 }
             }
+        }
+        .sheet(item: $editing) { clue in
+            ClueEditSheet(store: store, clue: clue)
+        }
+        .confirmationDialog("删除伏笔 [\(pendingDeleteID ?? "")]？", isPresented: Binding(
+            get: { pendingDeleteID != nil },
+            set: { if !$0 { pendingDeleteID = nil } })) {
+            Button("删除（不可撤销）", role: .destructive) {
+                if let id = pendingDeleteID {
+                    store.clues.removeAll { $0.id == id }
+                    store.saveSoon()
+                    vm.showToast("已删除伏笔 [\(id)]")
+                }
+                pendingDeleteID = nil
+            }
+            Button("取消", role: .cancel) { pendingDeleteID = nil }
+        } message: {
+            Text("动作日志会一并删除；正文不会改动。如果只是暂时不写，建议把状态改成「已放弃」保留记录。")
         }
     }
 
@@ -133,6 +165,12 @@ struct ClueBoardView: View {
                     }
                     store.logClueAction(clueID: c.id, chapter: currentChapter, kind: kind,
                                         note: "状态改为「\(s.rawValue)」")
+                    // logClueAction 会按动作类型推导状态（如 resolve→已回收）；
+                    // 作者明确选的状态必须覆盖它，否则「已放弃」会被写成「已回收」。
+                    if let idx = store.clues.firstIndex(where: { $0.id == c.id }) {
+                        store.clues[idx].status = s
+                        store.saveSoon()
+                    }
                     vm.showToast("[\(c.id)] \(c.title) → \(s.rawValue)")
                 }
             }
@@ -158,5 +196,107 @@ struct ClueBoardView: View {
         c.actions = [ClueActionLog(chapter: currentChapter, kind: .plant, note: "手动登记")]
         store.clues.append(c)
         store.saveSoon()
+        editing = c   // 建完立刻打开编辑，避免留下一条改不掉的占位记录
+    }
+}
+
+// MARK: - 伏笔编辑（标题/详情/量级/节奏/章号都是可维护字段）
+
+private struct ClueEditSheet: View {
+    @ObservedObject var store: ProjectStore
+    let clue: Clue
+    @Environment(\.dismiss) private var dismiss
+
+    @State private var title = ""
+    @State private var detail = ""
+    @State private var scale: ClueScale = .medium
+    @State private var timing: ClueTiming = .midArc
+    @State private var importance = "中"
+    @State private var plantedChapter = 1
+    @State private var targetChapter = ""
+    @State private var plantedQuote = ""
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text("伏笔 [\(clue.id)]").font(.headline)
+                Spacer()
+                Text(clue.status.rawValue).font(.caption).foregroundStyle(.secondary)
+            }
+            Grid(alignment: .leading, horizontalSpacing: 10, verticalSpacing: 8) {
+                GridRow {
+                    Text("标题").foregroundStyle(.secondary)
+                    TextField("例如：断刀上的缺口", text: $title).textFieldStyle(.roundedBorder)
+                }
+                GridRow {
+                    Text("详情").foregroundStyle(.secondary)
+                    TextField("这条伏笔到底是什么、指向什么", text: $detail).textFieldStyle(.roundedBorder)
+                }
+                GridRow {
+                    Text("量级").foregroundStyle(.secondary)
+                    Picker("", selection: $scale) {
+                        ForEach(ClueScale.allCases, id: \.self) { Text($0.rawValue).tag($0) }
+                    }.pickerStyle(.menu).labelsHidden()
+                }
+                GridRow {
+                    Text("节奏").foregroundStyle(.secondary)
+                    Picker("", selection: $timing) {
+                        ForEach(ClueTiming.allCases, id: \.self) { Text($0.rawValue).tag($0) }
+                    }.pickerStyle(.menu).labelsHidden()
+                }
+                GridRow {
+                    Text("重要度").foregroundStyle(.secondary)
+                    Picker("", selection: $importance) {
+                        ForEach(["高", "中", "低"], id: \.self) { Text($0).tag($0) }
+                    }.pickerStyle(.segmented).labelsHidden().frame(width: 160)
+                }
+                GridRow {
+                    Text("埋设章").foregroundStyle(.secondary)
+                    Stepper("第\(plantedChapter)章", value: $plantedChapter, in: 1...9999)
+                }
+                GridRow {
+                    Text("目标回收章").foregroundStyle(.secondary)
+                    TextField("留空 = 未定", text: $targetChapter).textFieldStyle(.roundedBorder).frame(width: 140)
+                }
+                GridRow {
+                    Text("种下原文").foregroundStyle(.secondary)
+                    TextField("正文里的原句（兑现时对照）", text: $plantedQuote).textFieldStyle(.roundedBorder)
+                }
+            }
+            HStack {
+                Spacer()
+                Button("取消") { dismiss() }
+                Button("保存") { save() }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(title.trimmingCharacters(in: .whitespaces).isEmpty)
+            }
+        }
+        .padding(18)
+        .frame(width: 560)
+        .onAppear {
+            title = clue.title
+            detail = clue.detail
+            scale = clue.scale
+            timing = clue.timing
+            importance = clue.importance
+            plantedChapter = max(1, clue.plantedChapter)
+            targetChapter = clue.targetPayoffChapter.map(String.init) ?? ""
+            plantedQuote = clue.plantedQuote
+        }
+    }
+
+    private func save() {
+        guard let idx = store.clues.firstIndex(where: { $0.id == clue.id }) else { dismiss(); return }
+        store.clues[idx].title = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        store.clues[idx].detail = detail
+        store.clues[idx].scale = scale
+        store.clues[idx].timing = timing
+        store.clues[idx].importance = importance
+        store.clues[idx].plantedChapter = plantedChapter
+        store.clues[idx].plantedQuote = plantedQuote
+        let trimmed = targetChapter.trimmingCharacters(in: .whitespacesAndNewlines)
+        store.clues[idx].targetPayoffChapter = Int(trimmed)
+        store.saveSoon()
+        dismiss()
     }
 }

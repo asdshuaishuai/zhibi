@@ -95,3 +95,88 @@ struct CharacterAlias: Codable, Identifiable {
     var canonicalName: String = ""
     var aliases: [String] = []
 }
+
+// MARK: - 旧 JSON 兼容（显式解码，缺新键不整份失败）
+
+extension ClueActionLog {
+    private enum Keys: String, CodingKey { case id, chapter, kind, note, at }
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: Keys.self)
+        id = try c.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+        chapter = try c.decodeIfPresent(Int.self, forKey: .chapter) ?? 0
+        if let raw = try c.decodeIfPresent(String.self, forKey: .kind) {
+            kind = ClueActionKind(rawValue: raw) ?? .plant
+        } else {
+            kind = .plant
+        }
+        note = try c.decodeIfPresent(String.self, forKey: .note) ?? ""
+        at = try c.decodeIfPresent(Date.self, forKey: .at) ?? Date()
+    }
+}
+
+extension Clue {
+    private enum Keys: String, CodingKey {
+        case id, title, detail, scale, timing, importance, plantedChapter, plantedQuote
+        case targetPayoffChapter, status, lastActionChapter, actions
+    }
+
+    /// 旧 clues.json 可能没有 timing / importance / actions 等键：缺键必须兜底，
+    /// 否则整份伏笔台账会被隔离成空。
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: Keys.self)
+        id = try c.decodeIfPresent(String.self, forKey: .id) ?? ""
+        title = try c.decodeIfPresent(String.self, forKey: .title) ?? ""
+        detail = try c.decodeIfPresent(String.self, forKey: .detail) ?? ""
+        if let raw = try c.decodeIfPresent(String.self, forKey: .scale) {
+            scale = ClueScale(rawValue: raw) ?? .medium
+        } else {
+            scale = .medium
+        }
+        if let raw = try c.decodeIfPresent(String.self, forKey: .timing) {
+            timing = ClueTiming(rawValue: raw) ?? .midArc
+        } else {
+            timing = .midArc
+        }
+        importance = try c.decodeIfPresent(String.self, forKey: .importance) ?? "中"
+        plantedChapter = try c.decodeIfPresent(Int.self, forKey: .plantedChapter) ?? 0
+        plantedQuote = try c.decodeIfPresent(String.self, forKey: .plantedQuote) ?? ""
+        targetPayoffChapter = try c.decodeIfPresent(Int.self, forKey: .targetPayoffChapter)
+        if let raw = try c.decodeIfPresent(String.self, forKey: .status) {
+            status = ClueStatus(rawValue: raw) ?? .planted
+        } else {
+            status = .planted
+        }
+        lastActionChapter = try c.decodeIfPresent(Int.self, forKey: .lastActionChapter) ?? plantedChapter
+        actions = try c.decodeIfPresent([ClueActionLog].self, forKey: .actions) ?? []
+    }
+}
+
+extension MemoryFact {
+    private enum Keys: String, CodingKey {
+        case id, subject, predicate, object, fromChapter, invalidatedAtChapter
+        case publicToReader, source, note
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: Keys.self)
+        id = try c.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+        subject = try c.decodeIfPresent(String.self, forKey: .subject) ?? ""
+        predicate = try c.decodeIfPresent(String.self, forKey: .predicate) ?? ""
+        object = try c.decodeIfPresent(String.self, forKey: .object) ?? ""
+        fromChapter = try c.decodeIfPresent(Int.self, forKey: .fromChapter) ?? 0
+        invalidatedAtChapter = try c.decodeIfPresent(Int.self, forKey: .invalidatedAtChapter)
+        publicToReader = try c.decodeIfPresent(Bool.self, forKey: .publicToReader) ?? true
+        source = try c.decodeIfPresent(String.self, forKey: .source) ?? "extracted"
+        note = try c.decodeIfPresent(String.self, forKey: .note) ?? ""
+    }
+}
+
+extension CharacterAlias {
+    private enum Keys: String, CodingKey { case id, canonicalName, aliases }
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: Keys.self)
+        id = try c.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+        canonicalName = try c.decodeIfPresent(String.self, forKey: .canonicalName) ?? ""
+        aliases = try c.decodeIfPresent([String].self, forKey: .aliases) ?? []
+    }
+}

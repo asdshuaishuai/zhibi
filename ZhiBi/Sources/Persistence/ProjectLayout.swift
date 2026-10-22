@@ -1,7 +1,8 @@
 import Foundation
 
 enum WordStats {
-    /// 中文字符数（网文平台口径：CJK 汉字 + 中文标点，与起点/番茄展示字数一致）
+    /// 正文字数（网文平台口径：CJK 汉字 + 中文标点 + 英文/数字字符）。
+    /// 英文名、代号、等级（LV1 / S 级）不再被整段漏计。
     static func chineseCount(_ text: String) -> Int {
         text.unicodeScalars.filter { scalar in
             (0x4E00...0x9FFF).contains(scalar.value)      // CJK 基本区
@@ -9,6 +10,9 @@ enum WordStats {
                 || (0xF900...0xFAFF).contains(scalar.value) // 兼容表意
                 || (0x3000...0x303F).contains(scalar.value) // CJK 标点（。、「」等）
                 || (0xFF00...0xFFEF).contains(scalar.value) // 全角标点/符号
+                || (0x30...0x39).contains(scalar.value)     // 0-9
+                || (0x41...0x5A).contains(scalar.value)     // A-Z
+                || (0x61...0x7A).contains(scalar.value)     // a-z
         }.count
     }
 
@@ -80,20 +84,56 @@ enum Disk {
     /// 内容签名缓存：同一 URL 写过相同字节就不再落盘。
     /// saveNow 每次保存都重写全部结构文件——大书（数百 canon 节）时这是主线程
     /// 上最大的无谓 I/O（还会触发 FileProvider/iCloud 协调）。
+    private struct WriteSignature {
+        var hash: Int
+        var size: Int
+        var mtime: Date?
+    }
     private static let signatureLock = NSLock()
-    private static var signatures: [String: Int] = [:]
+    private static var signatures: [String: WriteSignature] = [:]
 
     static func write(_ data: Data, to url: URL) throws {
         let key = url.path
         let sig = data.hashValue
-        signatureLock.lock(); defer { signatureLock.unlock() }
-        if signatures[key] == sig { return }   // 内容没变：跳过（磁盘上已是这份）
+        // 跳过写的唯一依据必须是「磁盘上现在确实是这份内容」：
+        // 文件被删除/被外部改动后，仅凭内存里的内容哈希跳过会让保存变成假成功。
+        signatureLock.lock()
+        let cached = signatures[key]
+        signatureLock.unlock()
+        if let cached, cached.hash == sig, cached.size == data.count,
+           let attrs = try? FileManager.default.attributesOfItem(atPath: url.path),
+           let mtime = attrs[.modificationDate] as? Date,
+           let writtenAt = cached.mtime,
+           abs(mtime.timeIntervalSince(writtenAt)) < 1.0 {
+            return
+        }
         let dir = url.deletingLastPathComponent()
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         let tmp = dir.appendingPathComponent("." + url.lastPathComponent + ".tmp")
         try data.write(to: tmp, options: [.atomic])
         _ = try FileManager.default.replaceItemAt(url, withItemAt: tmp)
-        signatures[key] = sig
+        let attrs = try? FileManager.default.attributesOfItem(atPath: url.path)
+        let mtime = attrs?[.modificationDate] as? Date
+        signatureLock.lock()
+        signatures[key] = WriteSignature(hash: sig, size: data.count, mtime: mtime)
+        signatureLock.unlock()
+    }
+
+    /// 读 JSON：文件不存在 = 正常空档；文件存在但解析失败 = 隔离原文件并返回原因。
+    /// 绝不把坏档当成空数组继续跑——下一次保存会用空数组覆盖它。
+    static func readJSONOrQuarantine<T: Decodable>(_ type: T.Type, from url: URL,
+                                                   label: String) -> (value: T?, note: String?) {
+        guard FileManager.default.fileExists(atPath: url.path) else { return (nil, nil) }
+        do {
+            return (try readJSON(type, from: url), nil)
+        } catch {
+            // 带时间戳，避免第二次损坏把第一次的隔离备份覆盖掉
+            let stamp = ISO8601DateFormatter().string(from: Date())
+                .replacingOccurrences(of: ":", with: "-")
+            let quarantine = url.appendingPathExtension("corrupt-\(stamp)")
+            try? FileManager.default.moveItem(at: url, to: quarantine)
+            return (nil, "\(label)解析失败（\(error.localizedDescription)），原文件已保留为 \(quarantine.lastPathComponent)，不会用空数据覆盖。")
+        }
     }
 
     /// 外部改动（导入/用户手改/回滚）后让签名失效，强制下次写入落盘
@@ -124,8 +164,9 @@ enum Disk {
         }
         // latin1 总能解码：作为兜底显示（不丢内容），同时把原文隔离保留
         let salvage = (try? String(contentsOf: url, encoding: .isoLatin1)) ?? ""
-        let quarantine = url.appendingPathExtension("corrupt")
-        try? FileManager.default.removeItem(at: quarantine)
+        // 时间戳隔离：第二次损坏不能覆盖第一次的备份
+        let stamp = ISO8601DateFormatter().string(from: Date()).replacingOccurrences(of: ":", with: "-")
+        let quarantine = url.appendingPathExtension("corrupt-\(stamp)")
         try? FileManager.default.moveItem(at: url, to: quarantine)
         return (salvage, quarantine)
     }
