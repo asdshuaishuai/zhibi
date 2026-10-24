@@ -3,12 +3,12 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>执笔 ZhiBi · 人写正文，AI 理账</title>
-<meta name="description" content="执笔（ZhiBi）是 macOS 原生的小说写作软件：AI 搭骨架、记台账、查矛盾、给建议，正文永远由作者亲笔完成。12 项 AI 能力全部以提案交付，采纳前不落盘。">
+<title>执笔 ZhiBi · AI 写草稿，人做定稿</title>
+<meta name="description" content="执笔（ZhiBi）是 macOS 原生的小说写作软件：AI 可以搭骨架、一键写完整章草稿、记台账、查矛盾。所有会改书的产出一律先做提案，作者审查、修改、采纳后才进正文。">
 <meta name="theme-color" content="#0e0f12">
 <meta property="og:type" content="website">
-<meta property="og:title" content="执笔 ZhiBi · 人写正文，AI 理账">
-<meta property="og:description" content="macOS 原生（SwiftUI）小说写作软件。AI 只出提案，正文永远是你亲笔写的。">
+<meta property="og:title" content="执笔 ZhiBi · AI 写草稿，人做定稿">
+<meta property="og:description" content="macOS 原生（SwiftUI）小说写作软件。AI 可以一键写整章草稿，但只有你审查、修改、采纳后才进正文。">
 <meta property="og:image" content="./assets/icon.png">
 <link rel="icon" type="image/png" href="./assets/icon-256.png">
 <style>
@@ -270,12 +270,12 @@
       <div class="eyebrow">macOS · SwiftUI · 本地优先</div>
       <h1>执笔</h1>
       <div class="latin">Z H I B I</div>
-      <p class="tagline">人写正文，<b>AI 理账</b>。</p>
+      <p class="tagline">AI 写草稿，<b>人做定稿</b>。</p>
       <p class="lede">
         一本长篇写到第三百章时，真正的敌人不是文笔，是账：谁还活着、谁在两地同时出现、
         第 8 章埋的那把刀到底收没收、大纲里那条线什么时候断的。
-        执笔把这套账交给 AI 记，把笔留在你手里——
-        <strong style="color:var(--paper)">它的 12 项能力全部只产出提案，你采纳之前一个字的台账和正文都不会变。</strong>
+        执笔可以让 AI 搭骨架、写整章草稿，也可以把整套账记住；但决定权始终在你——
+        <strong style="color:var(--paper)">所有会改书的产出一律先做提案，你审查、修改、采纳之后才进正文。</strong>
       </p>
       <div class="cta">
         <a class="btn btn-primary" href="https://github.com/asdshuaishuai/zhibi" target="_blank" rel="noopener">在 GitHub 上查看</a>
@@ -313,7 +313,7 @@
 <!-- 宣言 -->
 <section class="voice">
   <div class="wrap">
-    <blockquote class="reveal">写作软件这两年都在抢着<em>替你写</em>。<br>执笔不抢这支笔——<br>它替你把<em>账</em>记住。</blockquote>
+    <blockquote class="reveal">写作软件这两年都在抢着<em>替你写</em>。<br>执笔也会替你写草稿——<br>但<em>定稿</em>永远由你说了算。</blockquote>
     <div class="after reveal">
       <span>谁还活着</span>
       <span>第 8 章那把刀收了没有</span>
@@ -328,8 +328,8 @@
   <div class="wrap">
     <div class="sec-head reveal">
       <div class="kicker">Product law</div>
-      <h2>铁律不是「AI 不能写正文」，<br>而是「AI 的一切产出都只是提案」</h2>
-      <p>包括整章草稿。作者采纳之前不落盘，采纳时自动留快照可回滚。完成与否以磁盘为准，不信模型口头声明。</p>
+      <h2>铁律不是「AI 不能写正文」，<br>而是「AI 写什么都要你点头」</h2>
+      <p>整章草稿也一样：作者审查、修改、采纳之前不落盘，采纳时自动留快照可回滚。完成与否以磁盘为准，不信模型口头声明。</p>
     </div>
     <div class="law">
       <div class="law-col reveal">
@@ -340,7 +340,8 @@
           <li>盘点伏笔、登记埋点（F 编号、五档节奏、种下原文）</li>
           <li>搭章节骨架：场景层节拍 + 章尾钩子 + 硬交付 + 伏笔触点合同</li>
           <li>规划卷级弧光（20–40 章路标 + 伏笔收支表 + 期待感账）</li>
-          <li>写整章草稿、按你的意见修订草稿</li>
+          <li>一键写整章草稿、按你的意见修订草稿（采纳前不进正文）</li>
+          <li>在右侧对话里查书、找伏笔，必要时直接提交整章草稿提案</li>
           <li>提取记忆、一键召回上下文包与写作备忘</li>
           <li>一键验证、全书连贯性审查（只查客观错误，只报告不代改）</li>
           <li>埋点修复方案、大纲同步建议、去AI味逐处建议</li>
@@ -423,6 +424,12 @@
         <h3>交叉记忆中枢</h3>
         <p>双时态事实三元组（谁在从第几章起相信什么、什么时候失效）＋ 人物别名表，派生出人物关系图 / 剧情图 / 事件图三张可拖拽的图。写到 100 章不会忘第 3 章的钩子；「一键召回」按当前章造上下文包。</p>
         <span class="tag">双时态 · 图谱</span>
+      </article>
+      <article class="card reveal">
+        <div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M4 5h16v11H8l-4 4V5Z"/><path d="M8 9h8M8 12h5"/></svg></div>
+        <h3>AI 协作面板 · 资料库</h3>
+        <p>右侧常驻「对话 / 轨迹」双窗。对话先检索正文、设定、档案卡、伏笔、事实与时间线，再回答并把回答里的短引用对齐到完整出处；来源芯片可点击跳到章节或台账，失败可重试、已答可重新生成，整段对话还能导出 Markdown 或归档到作品目录，并在应用内回看、恢复或删除归档；归档同时写可恢复 JSON，导出会附带本次登记的提案快照。可以选择对话针对的章节，从零提交整章草稿，也能搭/改该章骨架、做一致性验证、写档案卡或提议大纲更新，全部只登记提案。资料库索引覆盖正文、摘要、骨架与全套账本，关键词 BM25 + 本地哈希向量，同长度改字也会自动重建，切片与向量化在后台执行并显示确定进度；配置 embedding 模型后按 16 条分批走远程重排并缓存，失败会在页面上明确标出回退。每条命中都能直接前往出处，章内命中会自动滚动并持续高亮原文，直到你移动光标或开始打字。</p>
+        <span class="tag">⌘⇧J · 检索带来源 · 整章草稿提案</span>
       </article>
       <article class="card reveal">
         <div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="3" y="4" width="18" height="14" rx="2"/><path d="M8 21h8"/></svg></div>
@@ -546,10 +553,10 @@
       <p>项目自带一个无头自检 CLI 和一个 mock 模型端点。前者跑纯函数与内存账本，后者把「宿主交工具面 → 模型回调工具 → 落成提案 → 采纳 → 落盘」整条链变成可重复回归——不需要 API Key。</p>
     </div>
     <div class="stats">
-      <div class="stat reveal"><div class="num">280</div><div class="lbl">无头自检全通过</div><div class="src">ZhiBiCli · EXIT=0</div></div>
-      <div class="stat reveal"><div class="num">94</div><div class="lbl">宿主往返回归</div><div class="src">mock OpenAI 端点 · 零 Key</div></div>
+      <div class="stat reveal"><div class="num">445</div><div class="lbl">无头自检全通过</div><div class="src">ZhiBiCli · EXIT=0</div></div>
+      <div class="stat reveal"><div class="num">122</div><div class="lbl">宿主往返回归</div><div class="src">mock OpenAI 端点 · 零 Key</div></div>
       <div class="stat reveal"><div class="num">25<em>/20</em></div><div class="lbl">去AI味检测器 / 连贯性检查类</div><div class="src">全部零 LLM 成本</div></div>
-      <div class="stat reveal"><div class="num">12</div><div class="lbl">AI 能力，全部只出提案</div><div class="src">每项都有 propose_* 生产者</div></div>
+      <div class="stat reveal"><div class="num">20</div><div class="lbl">AI 能力，写作产出走提案</div><div class="src">会改书的能力都有 propose_* 生产者</div></div>
     </div>
     <p class="note reveal" style="margin-top:26px;color:var(--paper-faint);font-size:13.5px">
       这些数字是仓库里的自检跑出来的，不是宣传口径。自检里专门有一节守「老 JSON 向后兼容」——
@@ -669,7 +676,7 @@ ZhiBiCli --mock-agent http://127.0.0.1:8799/v1 /tmp/zbdump
 <footer>
   <div class="wrap foot">
     <img src="./assets/icon-256.png" alt="" width="22" height="22" style="border-radius:5px">
-    <span>执笔 ZhiBi · 人写正文，AI 理账</span>
+    <span>执笔 ZhiBi · AI 写草稿，人做定稿</span>
     <a href="https://github.com/asdshuaishuai/zhibi" target="_blank" rel="noopener">GitHub</a>
     <a href="https://github.com/asdshuaishuai/zhibi/blob/main/ARCHITECTURE.md" target="_blank" rel="noopener">架构文档</a>
     <a href="https://github.com/asdshuaishuai/zhibi/blob/main/README.md" target="_blank" rel="noopener">功能说明</a>

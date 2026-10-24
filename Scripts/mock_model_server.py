@@ -15,6 +15,7 @@ ProposalToolBridge 静默降级成空 schema → 模型拿不到字段定义 →
 这条链路上没有密钥就永远测不到。mock 端点让它变成一条可重复的确定性回归。
 """
 import json
+import math
 import os
 import sys
 import threading
@@ -138,6 +139,22 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):
         pass
 
+    @staticmethod
+    def _current_question(messages):
+        """取本轮真正问的那句；对话任务书里后续区块也会出现“骨架/草稿”，不能混为一谈。"""
+        for m in reversed(messages):
+            if m.get("role") != "user":
+                continue
+            content = m.get("content") or ""
+            if not isinstance(content, str):
+                content = json.dumps(content, ensure_ascii=False)
+            marker = "## 作者这次问"
+            if marker in content:
+                tail = content.split(marker, 1)[1]
+                return tail.split("\n## ", 1)[0].strip()
+            return content.strip()
+        return ""
+
     def _send_sse(self, chunks):
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream; charset=utf-8")
@@ -150,15 +167,41 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.flush()
 
     def do_POST(self):
-        if not self.path.endswith("/chat/completions"):
-            self.send_error(404, "unexpected path " + self.path)
-            return
         length = int(self.headers.get("Content-Length", 0))
         raw = self.rfile.read(length)
         try:
             body = json.loads(raw.decode("utf-8"))
         except Exception as exc:
             self.send_error(400, "bad json: %s" % exc)
+            return
+
+        # OpenAI 兼容的 /embeddings：给向量模块一条确定性的真实 HTTP 回归。
+        if self.path.rstrip("/").endswith("/embeddings"):
+            inputs = body.get("input")
+            if isinstance(inputs, str):
+                inputs = [inputs]
+            if not isinstance(inputs, list) or not all(isinstance(x, str) for x in inputs):
+                self.send_error(400, "input must be a string or string array")
+                return
+            data = []
+            for i, text in enumerate(inputs):
+                vec = [0.0] * 8
+                for pos, ch in enumerate(text):
+                    vec[(ord(ch) + pos) % 8] += 1.0
+                norm = math.sqrt(sum(x * x for x in vec)) or 1.0
+                data.append({"object": "embedding", "index": i,
+                             "embedding": [x / norm for x in vec]})
+            payload = json.dumps({"object": "list", "model": body.get("model", "mock-embedding"),
+                                  "data": data}, ensure_ascii=False).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+            return
+
+        if not self.path.endswith("/chat/completions"):
+            self.send_error(404, "unexpected path " + self.path)
             return
 
         with Handler.lock:
@@ -188,7 +231,13 @@ class Handler(BaseHTTPRequestHandler):
             names.append(fn.get("name") or t.get("name") or "")
         # 按能力的主工具优先：tools 数组的顺序来自 NovelTools.all()，
         # 比如骨架能力的集合里 propose_clues 排在 propose_skeleton 前面，取第一个就选错了。
-        target = next((nm for nm in PRIMARY_TOOLS if nm in names), None)
+        question = self._current_question(messages)
+        if "骨架" in question and "propose_skeleton" in names:
+            target = "propose_skeleton"
+        elif "草稿" in question and "propose_draft" in names:
+            target = "propose_draft"
+        else:
+            target = next((nm for nm in PRIMARY_TOOLS if nm in names), None)
         if target is None:
             target = next((nm for nm in names if nm.startswith("propose_")), None)
         if target is None:

@@ -58,6 +58,8 @@ struct AgentConfig: Codable {
     var apiKey: String = ""   // 仅内存使用；持久化走钥匙串
     var contextTokenBudget: Int = 12000
     var autoSave: Bool = true
+    /// 向量模型（OpenAI 兼容 /embeddings）。留空 = 只用本地哈希向量。
+    var embeddingModel: String? = nil
     /// 单次 AI 请求硬超时（秒）。可选：旧 settings.json 没有该键时用默认值。
     var requestTimeoutSeconds: Int? = nil
 

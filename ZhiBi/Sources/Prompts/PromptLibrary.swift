@@ -5,18 +5,32 @@ import Foundation
 // oh-story（细纲契约/三档授权/7 Gate）与 Humanizer v4.1（去AI味方法论）。
 
 enum PromptLibrary {
-    /// 通用人格：编辑搭档，不写正文，产出皆为提案
+    /// 通用人格：编辑搭档；可以写整章草稿，但绝不绕过提案与作者审查
     static let persona = """
-    你是一本中文小说的编辑搭档。这本书由作者亲笔写作；你的职责是规划、记账、查错、给建议。
+    你是一本中文小说的编辑搭档。作者是最终裁决者；你可以规划、记账、查错、给建议，也可以写整章草稿。
     铁律：
-    1. 你永远不写正文。你的所有产出都通过 propose_* 工具登记为"提案"，由作者在收件箱里确认、修改或拒绝。
-    2. 完成与否以提案落盘为准，不要在文字里声称"已完成/已保存/已采纳"。
+    1. 你从不直接改正文或台账。你的所有产出（包括整章草稿）都通过 propose_* 工具登记为"提案"，由作者在收件箱里审查、修改、采纳或拒绝；只有作者采纳后才会进入正文。
+    2. 完成与否以提案落盘和作者采纳为准，不要在文字里声称"已完成/已保存/已采纳"。
     3. 对作者说话只用作者词汇（人话），不要输出字段名、英文枚举、工程黑话。
     4. 做到就说做到，没做到就说没做到，不用"已充分考虑"这类话糊弄。
     """
 
+    /// 对话人格：回答可以直接说给作者听，只有「要改书」时才必须走提案。
+    static let chatPersona = """
+    你是作者的编辑搭档，正在和作者面对面聊这本书。
+    铁律：
+    1. 回答可以直接说给作者听，不必把每句话都登记成提案。
+    2. 需要整章草稿时，用 propose_draft 提交完整全文；草稿只是提案，作者审查、修改、采纳后才进入正文。绝不直接改正文或台账。
+    3. 涉及设定/伏笔/大纲/时间线/故事线/备忘时，用对应的 propose_* 工具登记提案，由作者在收件箱确认。
+    4. 对书内事实先查资料库再回答，引用具体章节/设定/伏笔；查不到就说不知道，不要编。
+    5. 用作者词汇，不用字段名、英文枚举、工程黑话。
+    """
+
     static func systemInstruction(for capability: AICapability) -> String {
-        persona + "\n\n当前任务：" + taskBrief(for: capability)
+        if capability == .chat {
+            return chatPersona + "\n\n当前任务：" + taskBrief(for: capability)
+        }
+        return persona + "\n\n当前任务：" + taskBrief(for: capability)
     }
 
     private static func taskBrief(for capability: AICapability) -> String {
@@ -59,6 +73,8 @@ enum PromptLibrary {
             return "对指定章节做去AI味诊断并给逐处修改建议。用 propose_deslop 提案。"
         case .recallMemo:
             return "基于上下文包给作者写本章备忘。用 propose_memo 提案。"
+        case .chat:
+            return "和作者进行编辑对话：先查资料库与账本，再回答；引用具体章节/设定/伏笔。问其他章骨架或对照骨架查草稿时，用 get_chapter_skeleton 取证。作者要整章草稿时，用 propose_draft 提交完整全文（提案）；要改上一版草稿时，先用 get_latest_draft 取全文与历次意见，再用 propose_draft 提交完整新版；要搭/改本章骨架用 propose_skeleton，要查本章客观错误用 propose_validation，要把本章压进长程记忆用 propose_dossier；需要改设定/伏笔/大纲/故事线时用对应的 propose_*。所有产出都只是提案，不要直接改正文或台账。"
         }
     }
 
@@ -285,7 +301,7 @@ enum PromptLibrary {
 
     static func bootstrapFrameworkTask(premise: String, canon: String, notes: String, targetChapters: Int) -> String {
         """
-        这是一本刚创建的新书。基于以下最小材料搭建初始框架。你只产出提案——不写正文、不改设定库，作者审阅采纳后才生效。
+        这是一本刚创建的新书。基于以下最小材料搭建初始框架。这次只搭框架、不写正文——你只产出提案，不改设定库，作者审阅采纳后才生效。
 
         ## 书籍信息
         \(premise)
@@ -311,12 +327,21 @@ enum PromptLibrary {
 
     static func chapterSkeletonTask(chapter n: Int, chapterTitle: String, pack: ContextPack,
                                     authorDirective: String, craft: String = "",
-                                    gateReport: String = "", prevHookKinds: String = "") -> String {
-        """
-        请为第\(n)章「\(chapterTitle)」搭骨架。你不写正文——你只规划这章要完成什么、兑现什么、不要做什么。
+                                    gateReport: String = "", prevHookKinds: String = "",
+                                    knowledgeRecall: [KnowledgeHit] = []) -> String {
+        let recallText = knowledgeRecall.isEmpty
+            ? "（无命中；需要更多细节时用 search_knowledge 查具体人名/物件/地名）"
+            : knowledgeRecall.map { hit in
+                "【\(hit.chunk.citation)】\n\(String(hit.chunk.text.prefix(600)))"
+            }.joined(separator: "\n\n---\n\n")
+        return """
+        请为第\(n)章「\(chapterTitle)」搭骨架。这一步只搭骨架、不写正文——你只规划这章要完成什么、兑现什么、不要做什么。
 
         ## 上下文（宿主已按预算组装，可信）
         \(pack.asText)
+
+        ## 资料库召回（宿主按本章指令/近章钩子检索；只作事实依据，不要照抄）
+        \(recallText)
 
         ## 作者对本章的直接要求（最高优先级）
         \(authorDirective.isEmpty ? "（无，按大纲与上下文推进）" : authorDirective)
@@ -471,7 +496,7 @@ enum PromptLibrary {
 
     static func validationTask(chapter n: Int, prose: String, skeleton: String, pack: ContextPack,
                               draftMode: Bool = false, proseCap: Int = 12000) -> String {
-        let header = draftMode ? "本章文本（流水线草稿，尚未入库）" : "本章正文（作者亲笔）"
+        let header = draftMode ? "本章文本（流水线草稿，尚未入库）" : "本章正文（已定稿）"
         let proseText = prose.count > proseCap ? String(prose.prefix(proseCap)) + "\n…（正文过长，已按上下文预算截断）" : prose
         return """
         请对第\(n)章做一致性审校，用 propose_validation 提案。
@@ -574,9 +599,15 @@ enum PromptLibrary {
     // MARK: - 流水线：一键写作 / 按意见修复（NarraCat 任务书形态）
 
     static func draftTask(chapter n: Int, title: String, targetWords: Int, mainline: String,
-                          skeletonText: String, pack: ContextPack, model: String) -> String {
-        """
-        请亲笔写第\(n)章整章正文，写完用 propose_draft 提交全文。
+                          skeletonText: String, pack: ContextPack, model: String,
+                          knowledgeRecall: [KnowledgeHit] = []) -> String {
+        let recallText = knowledgeRecall.isEmpty
+            ? "（本轮没有命中长程细节；需要更多证据时用 search_knowledge 查具体人名/物件/地名）"
+            : knowledgeRecall.map { hit in
+                "【\(hit.chunk.citation)】\n\(String(hit.chunk.text.prefix(700)))"
+            }.joined(separator: "\n\n---\n\n")
+        return """
+        请写第\(n)章整章草稿，写完用 propose_draft 提交全文。这是草稿提案：作者审查、修改、采纳后才进入正文。
 
         ## 一、这次委托
         第\(n)章「\(title)」。目标字数 \(targetWords) 字左右（±20% 可接受）。
@@ -588,7 +619,10 @@ enum PromptLibrary {
         ## 三、前情与状态（宿主组装，可信）
         \(pack.asText)
 
-        ## 四、怎么写（文风主权 + 叙事纪律）
+        ## 四、资料库召回（宿主按本章主线检索；只作事实依据，不要照抄）
+        \(recallText)
+
+        ## 五、怎么写（文风主权 + 叙事纪律）
         文风要求：\(pack.blocks.first { $0.title.contains("文风") }?.content ?? "（作者未填，用平实有力的叙事腔）")
         叙事纪律（写作时就做对，别留给修订）：
         1. 情绪行为优先、直接命名其次，身体化描写只留一两个峰值；嗅觉克制。
@@ -598,10 +632,10 @@ enum PromptLibrary {
         5. 章末用动作/画面收，禁止总结、感慨、"他终于明白"。
         6. 骨架里每个伏笔触点必须有可定位的兑现段（具体场景动作，不是内心提及）。
 
-        ## 五、执行模型自查（别把这些默认带进正文）
+        ## 六、执行模型自查（别把这些默认带进正文）
         \(narrativeFingerprint(for: model))
 
-        ## 六、输出
+        ## 七、输出
         propose_draft 一次提交全文；note 里一句话说明本稿要点。不要把正文拆进对话。
         """
     }
@@ -613,7 +647,13 @@ enum PromptLibrary {
                                beats: [Beat], isLast: Bool, endHook: String, hookKind: String,
                                mustDeliver: [String], mustAvoid: [String], clueTouches: [ClueTouch],
                                mainline: String, targetWords: Int, pack: ContextPack,
-                               previousText: String, model: String) -> String {
+                               previousText: String, model: String,
+                               knowledgeRecall: [KnowledgeHit] = []) -> String {
+        let recallText = knowledgeRecall.isEmpty
+            ? "（无命中；需要更多细节时用 search_knowledge）"
+            : knowledgeRecall.map { hit in
+                "【\(hit.chunk.citation)】\n\(String(hit.chunk.text.prefix(600)))"
+            }.joined(separator: "\n\n---\n\n")
         let beatLines = beats.enumerated().map { i, b -> String in
             var line = "\(i + 1). \(b.summary)（\(b.purpose)\(b.suggestedWords > 0 ? "｜约\(b.suggestedWords)字" : "")）"
             var scene: [String] = []
@@ -640,6 +680,9 @@ enum PromptLibrary {
 
         ## 前情与状态（宿主组装，可信）
         \(pack.asText)
+
+        ## 资料库召回（宿主按本章主线与本段节拍检索；只作事实依据，不要照抄）
+        \(recallText)
 
         ## 本章已经写出来的部分（你的开头必须无缝接住它的最后一句：情绪、时态、在场人物、镜头位置都要对得上）
         \(previousText.isEmpty ? "（这是本段开头，也是本章开头——直接进入场景，不要写章节标题、不要写任何开场白）" : String(previousText.suffix(1500)))
@@ -711,6 +754,104 @@ enum PromptLibrary {
         要求：
         1. 只说"不知道就会写错"的事：最容易踩的连续性雷、必须接住的前章情绪、本章最该兑现的伏笔账、时间线注意点。
         2. 每条一句话，具体可执行；不要空泛鼓励，不要复述全部上下文。
+        """
+    }
+
+    // MARK: - 编辑对话
+
+    /// 作者与 AI 的对话任务书。宿主已预取资料库片段；模型仍可再调用 search_knowledge 深挖。
+    @MainActor
+    static func chatTask(store: ProjectStore, history: [ChatMessage],
+                         knowledge: [KnowledgeHit], question: String,
+                         contextBudget: Int = 12000, targetChapter: Int? = nil) -> String {
+        let project = store.project
+        // 小模型（4K/8K）最怕长历史把问题本身挤掉：按预算收缩历史与资料，而不是盲目全塞。
+        let budget = max(3000, contextBudget)
+        let historyLimit = budget >= 9000 ? 10 : (budget >= 6000 ? 8 : 4)
+        let messageCap = budget >= 9000 ? 900 : (budget >= 6000 ? 700 : 450)
+        let refLimit = budget >= 9000 ? 5 : (budget >= 6000 ? 4 : 2)
+        let refCap = budget >= 9000 ? 700 : (budget >= 6000 ? 500 : 350)
+        let recent = history.suffix(historyLimit).map { msg in
+            "\(msg.role == .user ? "作者" : "你")：\(String(msg.text.prefix(messageCap)))"
+        }.joined(separator: "\n\n")
+        let refs = knowledge.isEmpty ? "（本轮没有检索到资料；需要时请调用 search_knowledge 再查）" :
+            knowledge.prefix(refLimit).map { hit in
+                "【\(hit.chunk.citation)】\n\(String(hit.chunk.text.prefix(refCap)))"
+            }.joined(separator: "\n\n---\n\n")
+        let written = store.chapters.filter { !$0.prose.isEmpty }.count
+        let writingChapter = targetChapter ?? store.currentChapter
+        let current = store.chapter(writingChapter)
+        var chapterBlock = "第\(writingChapter)章"
+        if let current {
+            chapterBlock += "「\(current.title.isEmpty ? "未命名" : current.title)」"
+            chapterBlock += "\n状态：\(current.status.rawValue)"
+            if let directive = current.directive, !directive.isEmpty {
+                chapterBlock += "\n本章指令：\(directive)"
+            }
+        }
+        if let sk = current?.skeleton, !sk.beats.isEmpty {
+            chapterBlock += "\n骨架（\(sk.humanApproved ? "作者已批准" : "尚未批准，仅作参考")）："
+            for (i, b) in sk.beats.prefix(8).enumerated() {
+                var line = "\n\(i + 1). \(b.summary)"
+                var scene: [String] = []
+                if !b.pov.isEmpty { scene.append("视角：\(b.pov)") }
+                if !b.location.isEmpty { scene.append("地点：\(b.location)") }
+                if !b.timeLabel.isEmpty { scene.append("时间：\(b.timeLabel)") }
+                if !b.cast.isEmpty { scene.append("在场：\(b.cast.joined(separator: "、"))") }
+                if !b.turn.isEmpty { scene.append("转折：\(b.turn)") }
+                if !scene.isEmpty { line += "（" + scene.joined(separator: "｜") + "）" }
+                chapterBlock += line
+            }
+            if !sk.endHook.isEmpty { chapterBlock += "\n章尾钩子：\(sk.endHook)" + (sk.hookKind.isEmpty ? "" : "（\(sk.hookKind)型）") }
+            if !sk.mustDeliver.isEmpty { chapterBlock += "\n硬交付：" + sk.mustDeliver.joined(separator: "；") }
+            if !sk.mustAvoid.isEmpty { chapterBlock += "\n禁止：" + sk.mustAvoid.joined(separator: "；") }
+            for t in sk.clueTouches {
+                chapterBlock += "\n伏笔触点：[\(t.clueID)] \(t.action.rawValue) —— \(t.requirement)"
+            }
+        } else {
+            chapterBlock += "\n骨架：尚无已批准骨架。若要写整章草稿，先说明你会按主线与资料库自拟结构，或建议作者先搭骨架。"
+        }
+        let previous = store.chapters
+            .filter { $0.number < writingChapter && !$0.prose.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+            .max { $0.number < $1.number }
+        let previousTail = previous.map {
+            "第\($0.number)章「\($0.title)」结尾：\n\(String($0.prose.suffix(500)))"
+        } ?? "（没有上一章正文）"
+        return """
+        你正在和《\(project.title)》的作者对话。
+
+        ## 当前书
+        题材：\(project.genre.isEmpty ? "未定" : project.genre)
+        一句话核心：\(project.premise.isEmpty ? "未定" : project.premise)
+        作者意图：\(project.authorIntent.isEmpty ? "未填" : project.authorIntent)
+        当前焦点：\(project.currentFocus.isEmpty ? "未填" : project.currentFocus)
+        进度：已写 \(written) 章 / 目标约 \(project.targetChapters) 章；当前写作章约第 \(writingChapter) 章
+
+        ## 当前写作章（宿主提供，可信）
+        \(chapterBlock)
+
+        ## 上一章结尾（续写时接住视角、时态、在场人物与镜头位置）
+        \(previousTail)
+
+        ## 你的写作能力
+        作者要整章草稿时，你可以用 propose_draft 为**当前写作章（第 \(writingChapter) 章）**提交完整全文。要改上一版草稿时，先用 get_latest_draft 读取最新草稿与作者历次修改意见，再提交完整新版；不要凭聊天记忆改稿。要对照骨架检查漏拍/偏移、或讨论其他章骨架时，用 get_chapter_skeleton 取证；要搭/改本章骨架用 propose_skeleton（先读现有骨架再改）；作者问本章有没有客观错误时，用 propose_validation；要把本章压进长程记忆时，用 propose_dossier。所有产出都进入提案收件箱，作者审查、修改、采纳后才生效；不要把整章正文直接贴在聊天里。
+
+        ## 最近对话（从旧到新）
+        \(recent.isEmpty ? "（这是第一轮对话）" : recent)
+
+        ## 资料库预取（宿主按本次问题检索，可信；引用时必须写来源）
+        \(refs)
+
+        ## 作者这次问
+        \(question)
+
+        ## 回答要求
+        1. 中文，先结论后依据；默认 2-6 句，作者要求展开时再展开。
+        2. 引用书内信息时写出来源，例如【第12章】、【设定《世界观》】、【伏笔 [F03]】、【档案卡 第8章】。
+        3. 资料里没有依据就直说“书里还没写到/账本里没有”，不要编造；需要更多证据时调用 search_knowledge（换更具体的人名/物件/地点再查）。
+        4. 作者要整章草稿时，用 propose_draft 提交完整全文（不要只给片段或大纲），并说明“已登记草稿提案，待你审查采纳”。
+        5. 需要搭/改骨架、验证本章、写档案卡，或新增修改设定、伏笔、大纲、时间线、故事线时，调用对应的 propose_* 工具登记提案，并在回答里明确说“已登记提案，待你在收件箱确认”。
+        6. 你只能提案，不能声称已经改了正文或台账；整章草稿也只有作者采纳后才进正文。
         """
     }
 }

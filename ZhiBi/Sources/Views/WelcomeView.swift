@@ -93,16 +93,16 @@ struct WelcomeView: View {
                     .frame(width: 38, height: 38)
                     .rotationEffect(.degrees(-4))
                 }
-                Text("人写正文，AI 理账。")
+                Text("AI 写草稿，人做定稿。")
                     .font(.title3)
                     .foregroundStyle(.white.opacity(0.85))
                 Rectangle().fill(.white.opacity(0.18)).frame(height: 1).padding(.vertical, 4)
                 VStack(alignment: .leading, spacing: 13) {
                     featureRow("bone.fill", "AI 搭骨架", "时间线、章节骨架、关键节点由 AI 提案，作者修改批准")
-                    featureRow("wand.and.stars", "AI 一键成章", "给一条主线就出整章草稿：审查→修复→记忆/文风审查→采纳入库")
-                    featureRow("pencil.line", "人亲笔写作", "所见即所得的富文本手写——与 AI 成章并行，随时切换，字句永远是你的")
+                    featureRow("wand.and.stars", "AI 一键成章", "给一条主线就出整章草稿：审查→修复→文风审查，停在采纳前由你定稿")
+                    featureRow("pencil.line", "人机共写", "AI 可以写整章草稿；你在富文本里审查、改写、采纳后才进正文——最终字句由你定")
                     featureRow("link", "伏笔与记忆中枢", "线索埋点、双时态事实，写到 100 章不忘第 3 章的钩子")
-                    featureRow("checkmark.seal", "一键验证 · 一键召回", "一致性体检与上下文召回，只报告不代笔")
+                    featureRow("checkmark.seal", "一键验证 · 一键召回", "一致性体检与上下文召回，只报告、不改稿")
                     featureRow("sparkles", "去AI味", "叙事架构→篇章→措辞三 pass，配模型指纹与确定性扫描")
                 }
                 Spacer()

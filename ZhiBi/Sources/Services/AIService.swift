@@ -2,8 +2,8 @@ import Foundation
 import OpenAgentSDK
 
 /// AI 任务编排器。所有能力都走同一通道：
-/// 造包 → 组 prompt → OpenAgentSDK agent（工具循环）→ 提案落收件箱。
-/// 没有"写正文"通道——这是结构保证，不是口头约定。
+/// 造包 → 组 prompt → OpenAgentSDK agent（工具循环）→ 提案落收件箱 / 对话回答。
+/// 没有任何绕过提案直接写正文的通道——这是结构保证，不是口头约定。
 @MainActor
 final class AIService: ObservableObject {
     @Published var running = false
@@ -11,6 +11,12 @@ final class AIService: ObservableObject {
     @Published var cancelRequested = false
     @Published var runningCapability: AICapability?
     @Published var streamPreview = ""
+    /// 右侧「对话」窗的流式状态与正文（与 streamPreview 分开，轨迹窗仍能看到实时片段）
+    @Published var chatStreaming = false
+    @Published var chatStream = ""
+    @Published var chatError: String?
+    /// 最近一次对话新登记的提案数（对话窗据此给「去收件箱」入口）
+    @Published var lastChatNewProposals: Int?
     @Published var lastError: String?
     @Published var lastToolLog: [String] = []
     /// 上一次运行新登记的提案数（nil = 本次运行未统计/无新增）
@@ -66,6 +72,14 @@ final class AIService: ObservableObject {
         cancelRequested = true
         // 直接中断 SDK 的流：挂起的网络请求不必等下一个事件
         activeAgent?.interrupt()
+    }
+
+    /// 切换作品时清掉项目级对话状态（正在跑的任务不打断，避免误伤）。
+    func resetChatSessionState() {
+        guard !running else { return }
+        chatStream = ""
+        chatError = nil
+        lastChatNewProposals = nil
     }
 
     /// 清空轨迹（同时落盘，否则重启后历史又回来）
@@ -247,7 +261,7 @@ final class AIService: ObservableObject {
     /// 卷级设计只交 memo：不能给章节骨架工具（chapter 为 nil 会被绑到第 0 章）。
     /// 抽成静态函数，自检据此验证「卷级不会拿到 propose_skeleton」。
     static func volumeSkeletonToolNames() -> Set<String> {
-        ["propose_memo", "get_outline", "get_clues", "get_facts", "get_canon"]
+        ["propose_memo", "search_knowledge", "get_outline", "get_clues", "get_facts", "get_canon"]
     }
 
     /// 任务 → 该能力可用的工具名子集。
@@ -261,7 +275,7 @@ final class AIService: ObservableObject {
         case .analyze:
             return ["propose_memo"]
         case .organize:
-            return ["propose_canon", "propose_clues", "propose_memo", "get_chapter", "get_facts", "get_clues"]
+            return ["propose_canon", "propose_clues", "propose_memo", "search_knowledge", "get_chapter", "get_facts", "get_clues"]
         case .shortStory:
             return ["propose_draft", "get_canon"]
         case .canonClassify:
@@ -273,31 +287,39 @@ final class AIService: ObservableObject {
         case .clueLedger:
             return ["propose_clues", "get_clues", "get_outline", "get_chapter"]
         case .chapterSkeleton:
-            return ["propose_skeleton", "propose_clues", "get_clues", "get_outline", "get_facts"]
+            return ["propose_skeleton", "propose_clues", "search_knowledge", "get_clues", "get_outline", "get_facts"]
         case .chapterDraft:
-            return ["propose_draft", "get_clues", "get_canon", "get_facts", "get_outline"]
+            return ["propose_draft", "get_latest_draft", "get_chapter_skeleton", "search_knowledge", "get_clues", "get_canon", "get_facts", "get_outline"]
         case .chapterRevise:
-            return ["propose_draft"]
+            return ["propose_draft", "get_latest_draft", "get_chapter_skeleton", "search_knowledge"]
         case .memoryExtract:
             return ["propose_memory", "propose_clues", "get_clues", "get_facts"]
         case .validation:
-            return ["propose_validation", "get_chapter", "get_clues", "get_facts", "get_canon", "get_outline"]
+            return ["propose_validation", "search_knowledge", "get_chapter", "get_clues", "get_facts", "get_canon", "get_outline"]
         case .continuityAudit:
-            return ["propose_continuity", "get_chapter", "get_clues", "get_facts", "get_canon", "get_outline"]
+            return ["propose_continuity", "search_knowledge", "get_chapter", "get_clues", "get_facts", "get_canon", "get_outline"]
         case .outlineSync:
-            return ["propose_outline_updates", "propose_outline_events", "get_outline", "get_chapter", "get_clues"]
+            return ["propose_outline_updates", "propose_outline_events", "search_knowledge", "get_outline", "get_chapter", "get_clues"]
         case .deslop:
             return ["propose_deslop"]
         case .recallMemo:
             return ["propose_memo"]
+        case .chat:
+            // 对话是日常协作入口：查资料、搭骨架、写整章草稿、做一致性验证、改结构都行，
+            // 但全部落成提案。草稿/骨架/验证按对话选中的章绑定；没有任何直接写正文的工具。
+            return ["search_knowledge", "get_chapter", "get_clues", "get_outline", "get_canon", "get_facts",
+                    "get_chapter_skeleton", "get_latest_draft",
+                    "propose_draft", "propose_skeleton", "propose_validation", "propose_dossier",
+                    "propose_memo", "propose_clues", "propose_outline_events", "propose_outline_updates",
+                    "propose_storylines", "propose_canon"]
         }
     }
 
     /// 任务 → 该能力可用的工具子集。
     /// override 用于特殊入口（如卷级设计：同一能力但只允许 memo，不允许章节骨架）。
     private func tools(for capability: AICapability, store: ProjectStore, chapter: Int?,
-                       override: Set<String>? = nil) -> [AgentTool] {
-        let all = NovelTools.all(store: store)
+                       override: Set<String>? = nil, config: AgentConfig? = nil) -> [AgentTool] {
+        let all = NovelTools.all(store: store, config: config)
         let needed = override ?? Self.toolNames(for: capability)
         let selected = all.filter { needed.contains($0.name) }.map { tool in
             // memo 的归属能力随任务走，否则卷级设计/拆书会统一记成「写作备忘」
@@ -321,6 +343,7 @@ final class AIService: ObservableObject {
         lastToolLog = []
         lastRunNewProposals = nil
         lastRunProposalIDs = []
+        lastChatNewProposals = nil
         trace(capability, "开始处理")
         defer {
             // 不在这里清 cancelRequested：取消标记要活到流水线的下一步检查，
@@ -337,8 +360,8 @@ final class AIService: ObservableObject {
                 return
             }
             let toolNames = toolNamesOverride ?? Self.toolNames(for: capability)
-            trace(capability, "准备上下文与工具（\(tools(for: capability, store: store, chapter: chapter, override: toolNamesOverride).count) 个工具）")
-            let toolset = tools(for: capability, store: store, chapter: chapter, override: toolNamesOverride)
+            trace(capability, "准备上下文与工具（\(tools(for: capability, store: store, chapter: chapter, override: toolNamesOverride, config: config).count) 个工具）")
+            let toolset = tools(for: capability, store: store, chapter: chapter, override: toolNamesOverride, config: config)
             // 创作法典集中注入：流派契约 + 网文创作法 + 传统文学创作法，按能力裁剪。
             // 骨架任务书里已经内嵌（位置更靠前、还带着近章钩子形态），这里跳过避免重复。
             var taskMessage: String
@@ -440,6 +463,193 @@ final class AIService: ObservableObject {
             }
             trace(capability, "失败", detail: lastError ?? "", isError: true)
         }
+    }
+
+    // MARK: - 编辑对话（右侧聊天窗）
+
+    /// 作者与 AI 的编辑对话：先检索资料库，再用同一套工具循环回答。
+    /// 回答本身不落提案；只有模型主动调用 propose_* 时才产生待审提案。
+    func sendChat(store: ProjectStore, config: AgentConfig, text: String,
+                  chapter: Int? = nil, recordUserMessage: Bool = true) async {
+        let question = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let targetChapter = chapter ?? store.currentChapter
+        guard !question.isEmpty else { return }
+        guard !running else {
+            chatError = "已有 AI 任务在运行，等它结束再问。"
+            return
+        }
+        if let problem = validateConfig(config) {
+            chatError = problem
+            return
+        }
+        // 重试/重新生成时问题已经在 chat.json 里：历史去掉最后一条提问，避免同一句出现两次。
+        let history = recordUserMessage
+            ? Array(store.chatMessages.suffix(12))
+            : Array(store.chatMessages.dropLast().suffix(12))
+        if recordUserMessage {
+            store.appendChatMessage(ChatMessage(role: .user, text: question))
+        }
+        running = true
+        cancelRequested = false
+        runningCapability = .chat
+        chatStreaming = true
+        chatStream = ""
+        chatError = nil
+        lastChatNewProposals = nil
+        streamPreview = ""
+        lastError = nil
+        lastToolLog = []
+        lastRunNewProposals = nil
+        lastRunProposalIDs = []
+        currentStep = "AI 对话 · 检索资料"
+        trace(.chat, "开始处理")
+        defer {
+            running = false
+            runningCapability = nil
+            chatStreaming = false
+            endAgent()
+        }
+
+        do {
+            guard !_Concurrency.Task.isCancelled else { throw CancellationError() }
+            let hits = await KnowledgeEngine.search(store: store, query: question, limit: 6, config: config)
+            trace(.chat, "检索资料库", detail: hits.isEmpty ? "无命中" : "\(hits.count) 条线索")
+            currentStep = "AI 对话 · 组织回答"
+            let task = PromptLibrary.chatTask(store: store, history: history,
+                                              knowledge: hits, question: question,
+                                              contextBudget: config.contextTokenBudget,
+                                              targetChapter: targetChapter)
+            let toolset = tools(for: .chat, store: store, chapter: targetChapter, config: config)
+            let agent = createAgent(options: AgentOptions(
+                apiKey: Self.effectiveKey(config),
+                model: config.model,
+                baseURL: config.baseURL,
+                provider: .openai,
+                systemPrompt: PromptLibrary.systemInstruction(for: .chat) + "\n\n"
+                    + PromptLibrary.craft(for: .chat, genre: store.project.genre,
+                                          written: store.chapters.filter { !$0.prose.isEmpty }.count,
+                                          target: store.project.targetChapters),
+                maxTurns: 10,
+                permissionMode: .bypassPermissions,
+                tools: ProposalToolBridge.sdkTools(toolset)))
+            beginAgent(agent, timeoutSeconds: config.effectiveTimeout)
+            let proposalsBefore = store.proposals.count
+            let existingProposalIDs = Set(store.proposals.map(\.id))
+            // 引用池：预取资料 + 模型自己 search_knowledge 找回的来源，统一对齐成完整标注。
+            var citationPool = Set(hits.map(\.chunk.citation))
+            var filter = ThinkTagFilter()
+            var answer = ""
+            var resultText = ""
+
+            for await message in agent.stream(task) {
+                if cancelRequested {
+                    if lastError == nil { lastError = "已停止本次回答。" }
+                    break
+                }
+                switch message {
+                case .partialMessage(let data):
+                    let piece = filter.push(data.text)
+                    answer += piece
+                    chatStream += piece
+                    streamPreview = String((streamPreview + piece).suffix(4000))
+                case .toolUse(let data):
+                    lastToolLog.append("🛠 \(data.toolName)")
+                    trace(.chat, "调用 \(data.toolName)", detail: String(data.input.prefix(120)))
+                    currentStep = "AI 对话 · \(data.toolName)"
+                case .toolResult(let data):
+                    lastToolLog.append("↳ \(String(data.content.prefix(120)))")
+                    for citation in KnowledgeCitations.bracketed(in: data.content) {
+                        citationPool.insert(citation)
+                    }
+                    trace(.chat, data.isError ? "工具报错" : "工具完成",
+                          detail: String(data.content.prefix(120)), isError: data.isError)
+                case .result(let data):
+                    let tail = filter.flush()
+                    answer += tail
+                    chatStream += tail
+                    if !data.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        resultText = data.text
+                    }
+                    if data.subtype != .success {
+                        if lastError == nil { lastError = data.text }
+                        trace(.chat, "运行异常", detail: data.text, isError: true)
+                    }
+                default:
+                    break
+                }
+            }
+
+            if answer.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+               !resultText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                answer = resultText
+            }
+            var final = answer.trimmingCharacters(in: .whitespacesAndNewlines)
+            let newCount = max(0, store.proposals.count - proposalsBefore)
+            lastChatNewProposals = newCount
+            lastRunNewProposals = newCount
+            lastRunProposalIDs = store.proposals.filter { !existingProposalIDs.contains($0.id) }.map(\.id)
+            // 先按回答里真正引用到的来源对齐；一句来源都没写时退回预取资料，保证芯片可用。
+            var citations = KnowledgeCitations.resolve(in: final, pool: Array(citationPool)).sorted()
+            if citations.isEmpty {
+                let fallback = hits.isEmpty ? citationPool.sorted() : hits.map(\.chunk.citation)
+                citations = Array(Set(fallback)).sorted()
+            }
+            if newCount > 0 {
+                let note = "已登记 \(newCount) 条提案，待你在收件箱确认。"
+                final = final.isEmpty ? note : final + "\n\n（\(note)）"
+            }
+            if cancelRequested {
+                let note = "已停止本次回答。"
+                final = final.isEmpty ? note : final + "\n\n（\(note)）"
+            }
+            if final.isEmpty {
+                final = "（这次没有生成可读回答，详情见右侧轨迹。）"
+            }
+            store.appendChatMessage(ChatMessage(role: .assistant, text: final,
+                                                citations: citations,
+                                                proposalIDs: lastRunProposalIDs,
+                                                isError: answer.isEmpty && newCount == 0))
+            if let err = lastError, !err.isEmpty {
+                chatError = err
+                trace(.chat, cancelRequested ? "已停止" : "失败", detail: err, isError: true)
+            } else {
+                trace(.chat, "完成", detail: newCount > 0 ? "新登记 \(newCount) 条提案，待作者审阅" : "回答完成")
+            }
+            chatStream = ""
+        } catch {
+            let message = (cancelRequested || error is CancellationError) ? "已停止本次回答。" : error.localizedDescription
+            if lastError == nil { lastError = message }
+            chatError = message
+            store.appendChatMessage(ChatMessage(role: .assistant, text: "这次没答上来：\(message)", isError: true))
+            trace(.chat, cancelRequested ? "已停止" : "失败", detail: message, isError: true)
+            chatStream = ""
+        }
+    }
+
+    /// 重试上一条提问：只撤掉失败回复，问题本身不重复入库。
+    func retryLastChat(store: ProjectStore, config: AgentConfig, chapter: Int? = nil) async {
+        guard !running else { return }
+        if let last = store.chatMessages.last, last.role == .assistant, last.isError {
+            store.removeLastChatMessage()
+        }
+        guard let question = store.chatMessages.last(where: { $0.role == .user })?.text,
+              !question.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        chatError = nil
+        await sendChat(store: store, config: config, text: question, chapter: chapter,
+                       recordUserMessage: false)
+    }
+
+    /// 重新生成最后一条回答：成功失败都撤掉旧回复，再按原问题重跑。
+    func regenerateLastChat(store: ProjectStore, config: AgentConfig, chapter: Int? = nil) async {
+        guard !running else { return }
+        if let last = store.chatMessages.last, last.role == .assistant {
+            store.removeLastChatMessage()
+        }
+        guard let question = store.chatMessages.last(where: { $0.role == .user })?.text,
+              !question.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        chatError = nil
+        await sendChat(store: store, config: config, text: question, chapter: chapter,
+                       recordUserMessage: false)
     }
 
     // MARK: - 具体能力入口
@@ -748,11 +958,24 @@ final class AIService: ObservableObject {
                 }.joined(separator: "\n")
             }
         }
+        // 规划阶段也带着长程记忆：把本章指令、上一章摘要和近章钩子当检索词，
+        // 自动召回具体名词/物件/伏笔，避免骨架只凭抽象大纲漂移。
+        var recallQuery = directive + " " + title + " " + store.project.currentFocus
+        if let prev = store.chapters.filter({ $0.number < n && $0.summary != nil })
+            .max(by: { $0.number < $1.number })?.summary {
+            recallQuery += " " + prev.summary
+        }
+        recallQuery += " " + recentHooks.joined(separator: " ")
+        var recallConfig = config
+        recallConfig.embeddingModel = nil
+        let recall = await KnowledgeEngine.search(store: store, query: String(recallQuery.prefix(2000)),
+                                                  limit: 4, config: recallConfig)
         await run(capability: .chapterSkeleton, store: store, config: config, chapter: n,
                   userMessage: PromptLibrary.chapterSkeletonTask(
                     chapter: n, chapterTitle: title, pack: pack, authorDirective: directive,
                     craft: craft, gateReport: gateReport,
-                    prevHookKinds: recentHooks.joined(separator: "\n")))
+                    prevHookKinds: recentHooks.joined(separator: "\n"),
+                    knowledgeRecall: recall))
     }
 
     /// 卷骨架：一次规划连续多章的弧光，作者认可后再逐章细化。
@@ -1103,6 +1326,23 @@ final class AIService: ObservableObject {
             if !sk.mustAvoid.isEmpty { skeletonText += "\n禁止：" + sk.mustAvoid.joined(separator: "；") }
             for t in sk.clueTouches { skeletonText += "\n伏笔触点：[\(t.clueID)] \(t.action.rawValue) —— \(t.requirement)" }
         }
+        // 自动召回：把本章主线/骨架/伏笔触点里出现的具体名词拉回上下文。
+        // 这里只走本地关键词 + 哈希向量，不阻塞草稿等待远程 embedding；需要更深检索时模型可再调 search_knowledge。
+        var recallQuery = mainline
+        if let sk = store.chapter(n)?.skeleton {
+            recallQuery += " " + sk.beats.map(\.summary).joined(separator: " ")
+            recallQuery += " " + sk.mustDeliver.joined(separator: " ")
+            recallQuery += " " + sk.clueTouches.map { "\($0.clueID) \($0.requirement)" }.joined(separator: " ")
+            recallQuery += " " + sk.newExpectation
+        }
+        recallQuery += " " + store.project.currentFocus
+        if recallQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            recallQuery = "第\(n)章 " + (store.chapter(n)?.title ?? "")
+        }
+        var recallConfig = config
+        recallConfig.embeddingModel = nil
+        let recall = await KnowledgeEngine.search(store: store, query: String(recallQuery.prefix(2000)),
+                                                  limit: 5, config: recallConfig)
         let message = PromptLibrary.draftTask(
             chapter: n,
             title: store.chapter(n)?.title ?? "",
@@ -1110,7 +1350,8 @@ final class AIService: ObservableObject {
             mainline: mainline,
             skeletonText: skeletonText,
             pack: pack,
-            model: config.model)
+            model: config.model,
+            knowledgeRecall: recall)
         await run(capability: .chapterDraft, store: store, config: config, chapter: n, userMessage: message)
     }
 
@@ -1246,6 +1487,14 @@ final class AIService: ObservableObject {
             return
         }
         let pack = ContextPackBuilder.build(store: store, forChapter: n, budget: config.contextTokenBudget)
+        var recallQuery = mainline
+        recallQuery += " " + sk.beats.map(\.summary).joined(separator: " ")
+        recallQuery += " " + sk.mustDeliver.joined(separator: " ")
+        recallQuery += " " + sk.clueTouches.map { "\($0.clueID) \($0.requirement)" }.joined(separator: " ")
+        var recallConfig = config
+        recallConfig.embeddingModel = nil
+        let recall = await KnowledgeEngine.search(store: store, query: String(recallQuery.prefix(2000)),
+                                                  limit: 4, config: recallConfig)
         let perChunk = max(400, wordsPerChunk)
 
         // 按建议字数把节拍打包成块：一块控制在 perChunk 字上下，至少一拍，不让单拍被切开
@@ -1282,7 +1531,8 @@ final class AIService: ObservableObject {
                 mustDeliver: sk.mustDeliver, mustAvoid: sk.mustAvoid,
                 clueTouches: sk.clueTouches, mainline: mainline,
                 targetWords: max(400, chunk.reduce(0) { $0 + $1.suggestedWords }),
-                pack: pack, previousText: written, model: config.model)
+                pack: pack, previousText: written, model: config.model,
+                knowledgeRecall: recall)
             streamPreview = ""
             guard let piece = await streamTextOnly(store: store, config: config,
                                                    capability: .chapterDraft, userMessage: message) else {

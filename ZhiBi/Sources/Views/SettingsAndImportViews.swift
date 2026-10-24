@@ -409,6 +409,12 @@ struct SettingsView: View {
                 Stepper("上下文包预算：≈\(vm.config.contextTokenBudget) tokens", value: $vm.config.contextTokenBudget, in: 2000...32000, step: 1000)
                 Text("造包按此预算真实裁剪（保护层优先、低优先级先压）。本地 8K 模型建议 ≤4000——太大时模型会截断反而丢关键上下文。")
                     .font(.caption2).foregroundStyle(.tertiary)
+                TextField("向量模型（可选，如 text-embedding-3-small）", text: Binding(
+                    get: { vm.config.embeddingModel ?? "" },
+                    set: { vm.config.embeddingModel = $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : $0 }))
+                    .textFieldStyle(.roundedBorder)
+                Text("与对话共用同一 Base URL / API Key。留空时资料库使用本地哈希向量；填了模型后优先用远程嵌入做检索重排，失败会自动回退。")
+                    .font(.caption2).foregroundStyle(.tertiary)
                 Stepper("单次 AI 请求超时：\(vm.config.effectiveTimeout) 秒",
                         value: Binding(
                             get: { vm.config.effectiveTimeout },

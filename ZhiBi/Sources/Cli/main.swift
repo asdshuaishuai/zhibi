@@ -133,7 +133,51 @@ if let mIdx = CommandLine.arguments.firstIndex(of: "--mock-agent"), mIdx + 2 < C
     config.baseURL = baseURL
     config.model = "mock-model"
     config.apiKey = ""
+    config.embeddingModel = "mock-embedding"
     let ai = AIService()
+
+    let embedProbe = await EmbeddingService.embed(texts: ["断刀", "少年"], config: config)
+    mck("远程向量端点可用", embedProbe?.count == 2 && embedProbe?.first?.count == 8,
+        "vectors=\(embedProbe?.count ?? -1) dim=\(embedProbe?.first?.count ?? -1)")
+    EmbeddingService.clearCache()
+    let firstEmbed = await EmbeddingService.embed(texts: ["断刀", "少年", "断刀"], config: config)
+    mck("重复文本去重后仍按输入顺序返回",
+        firstEmbed?.count == 3 && firstEmbed?[0] == firstEmbed?[2],
+        "count=\(firstEmbed?.count ?? -1)")
+    mck("远程嵌入进入进程缓存（重复文本只请求一次）", EmbeddingService.cachedCount() == 2,
+        "cached=\(EmbeddingService.cachedCount())")
+    let secondEmbed = await EmbeddingService.embed(texts: ["断刀", "少年", "断刀"], config: config)
+    mck("缓存命中后仍返回完整向量",
+        secondEmbed?.count == 3 && secondEmbed?[0] == firstEmbed?[0]
+        && secondEmbed?[1] == firstEmbed?[1],
+        "count=\(secondEmbed?.count ?? -1)")
+    let vectorHits = await KnowledgeEngine.search(store: store, query: "断刀 界字", limit: 5, config: config)
+    mck("远程向量重排仍能召回断刀", vectorHits.contains { $0.chunk.text.contains("断刀") },
+        "hits=\(vectorHits.map(\.chunk.citation))")
+    let detailedHits = await KnowledgeEngine.searchDetailed(store: store, query: "断刀 界字",
+                                                            limit: 5, config: config)
+    mck("检索能标记远程向量通道", detailedHits.run == .remote, "run=\(detailedHits.run)")
+    var fallbackConfig = config
+    fallbackConfig.baseURL = "http://127.0.0.1:1/v1"
+    let fallbackProbe = await KnowledgeEngine.searchDetailed(store: store, query: "断刀 界字",
+                                                             limit: 5, config: fallbackConfig)
+    mck("远程失败会回退本地并标记", fallbackProbe.run == .fallback && !fallbackProbe.hits.isEmpty,
+        "run=\(fallbackProbe.run) hits=\(fallbackProbe.hits.count)")
+    EmbeddingService.clearCache()
+    let manyTexts = (1...40).map { "断刀 \($0) 号线索" }
+    let batched = await EmbeddingService.embed(texts: manyTexts, config: config)
+    mck("远程嵌入分批请求仍保持条数与顺序",
+        batched?.count == 40 && batched?.allSatisfy { $0.count == 8 } == true,
+        "count=\(batched?.count ?? -1)")
+    mck("分批请求的向量都进入缓存", EmbeddingService.cachedCount() == 40,
+        "cached=\(EmbeddingService.cachedCount())")
+    KnowledgeIndexCache.invalidate()
+    let rebuiltIndex = await KnowledgeIndexCache.indexAsync(for: store)
+    mck("后台索引完成后进度归位",
+        !KnowledgeIndexProgress.shared.isBuilding
+        && KnowledgeIndexProgress.shared.fraction >= 1
+        && !rebuiltIndex.chunks.isEmpty,
+        "building=\(KnowledgeIndexProgress.shared.isBuilding) fraction=\(KnowledgeIndexProgress.shared.fraction)")
 
     // ---- 1. 章节骨架：工具往返 + 场景层解析 + 闸门打分 ----
     await ai.runSkeleton(store: store, config: config, chapter: 3, directive: "这一章要让断刀来历往前推一层")
@@ -274,7 +318,7 @@ if let mIdx = CommandLine.arguments.firstIndex(of: "--mock-agent"), mIdx + 2 < C
     if let draftReq = draftReqs.first(where: { r in
         guard let msgs = r["messages"] as? [[String: Any]] else { return false }
         let j = msgs.compactMap { $0["content"] as? String }.joined(separator: "\n")
-        return j.contains("请亲笔写第3章整章正文")
+        return j.contains("请写第3章整章草稿")
     }), let msgs = draftReq["messages"] as? [[String: Any]] {
         let j = msgs.compactMap { $0["content"] as? String }.joined(separator: "\n")
         mck("草稿任务拿到白描与文气法典", j.contains("白描") && j.contains("文气"))
@@ -330,7 +374,6 @@ if let mIdx = CommandLine.arguments.firstIndex(of: "--mock-agent"), mIdx + 2 < C
     mck("一键流水线有轨迹完成标记", ai.trajectory.contains {
         $0.capability == AICapability.chapterDraft.rawValue && $0.event == "完成"
     }, "\(ai.trajectory.prefix(6).map { "\($0.capability)/\($0.event)" })")
-
 
     // ---- 7. 分段写作：长章按节拍分块续写再拼装 ----
     // 纯函数：剥壳。模型几乎总会加开场白与围栏，分块拼装时这些壳会夹在正文中间
@@ -388,6 +431,63 @@ if let mIdx = CommandLine.arguments.firstIndex(of: "--mock-agent"), mIdx + 2 < C
     } else {
         for _ in 0..<4 { mck("分段任务书内容", false, "找不到第 2/3 段的请求转储") }
     }
+
+    // ---- 8. 编辑对话：检索资料 → agent 工具循环 → 回答/草稿提案，不动正文 ----
+    let chatBefore = store.chatMessages.count
+    let proposalsBeforeChat = store.proposals.count
+    let nextChapter = store.currentChapter
+    let targetChatChapter = max(1, nextChapter + 1)
+    let draftsBeforeChat = store.proposals.filter {
+        $0.chapterNumber == targetChatChapter && ($0.capability == .chapterDraft || $0.capability == .chapterRevise)
+    }.count
+    let proseBeforeChat = store.chapter(3)?.prose
+    let nextProseBeforeChat = store.chapter(targetChatChapter)?.prose
+    await ai.sendChat(store: store, config: config, text: "用断刀的线索写下一章草稿。", chapter: targetChatChapter)
+    mck("对话往返无错误", ai.chatError == nil, String(describing: ai.chatError))
+    mck("对话记录落用户+AI两条", store.chatMessages.count == chatBefore + 2,
+        "before=\(chatBefore) after=\(store.chatMessages.count)")
+    let lastReply = store.chatMessages.last
+    mck("对话最后一条是 AI 回答", lastReply?.role == .assistant && !(lastReply?.text.isEmpty ?? true),
+        lastReply?.text ?? "nil")
+    mck("对话回答带资料库引用", !(lastReply?.citations.isEmpty ?? true),
+        "\(lastReply?.citations ?? [])")
+    mck("对话不改已有正文", store.chapter(3)?.prose == proseBeforeChat)
+    mck("对话登记了待审提案", store.proposals.count > proposalsBeforeChat,
+        "before=\(proposalsBeforeChat) after=\(store.proposals.count)")
+    let draftsAfterChat = store.proposals.filter {
+        $0.chapterNumber == targetChatChapter && ($0.capability == .chapterDraft || $0.capability == .chapterRevise)
+    }.count
+    mck("对话按选中章提交整章草稿提案", draftsAfterChat > draftsBeforeChat,
+        "targetChapter=\(targetChatChapter) drafts=\(draftsBeforeChat)->\(draftsAfterChat)")
+    mck("对话草稿采纳前正文没动", store.chapter(targetChatChapter)?.prose == nextProseBeforeChat)
+    mck("对话回复记录了本次提案 ID",
+        lastReply?.proposalIDs.contains { id in store.proposals.contains { $0.id == id } } == true,
+        "ids=\(lastReply?.proposalIDs.count ?? 0)")
+
+    // 对话不只写草稿：也能为选中章搭骨架，仍然只是提案
+    let skeletonChatChapter = targetChatChapter + 1
+    let skeletonsBefore = store.proposals.filter {
+        $0.capability == .chapterSkeleton && $0.chapterNumber == skeletonChatChapter
+    }.count
+    await ai.sendChat(store: store, config: config,
+                      text: "给这一章搭个骨架提案，先给我审。", chapter: skeletonChatChapter)
+    mck("对话搭骨架往返无错误", ai.chatError == nil, String(describing: ai.chatError))
+    let skeletonsAfter = store.proposals.filter {
+        $0.capability == .chapterSkeleton && $0.chapterNumber == skeletonChatChapter
+    }.count
+    mck("对话可提交骨架提案并绑定选中章", skeletonsAfter > skeletonsBefore,
+        "targetChapter=\(skeletonChatChapter) skeletons=\(skeletonsBefore)->\(skeletonsAfter)")
+
+    // 重新回答：撤掉旧回复、保留原问题，再跑一遍
+    let chatCountBeforeRegen = store.chatMessages.count
+    let proposalsBeforeRegen = store.proposals.count
+    await ai.regenerateLastChat(store: store, config: config, chapter: skeletonChatChapter)
+    mck("重新回答不堆叠用户提问", store.chatMessages.count == chatCountBeforeRegen,
+        "before=\(chatCountBeforeRegen) after=\(store.chatMessages.count)")
+    mck("重新回答后末尾仍是 AI 回答", store.chatMessages.last?.role == .assistant,
+        store.chatMessages.last?.text ?? "nil")
+    mck("重新回答会重新登记提案", store.proposals.count > proposalsBeforeRegen,
+        "before=\(proposalsBeforeRegen) after=\(store.proposals.count)")
 
     print("\n======== 宿主往返自检：通过 \(mok) 项，失败 \(mbad.count) 项 ========")
     for f in mbad { print("  FAIL: \(f)") }
@@ -2605,6 +2705,256 @@ MainActor.assumeIsolated {
     check("连贯性审查能拿到取证工具", AIService.toolNames(for: .continuityAudit).contains("get_chapter"))
     check("大纲同步能读到大纲", AIService.toolNames(for: .outlineSync).contains("get_outline"))
     check("大纲同步能补新事件", AIService.toolNames(for: .outlineSync).contains("propose_outline_events"))
+
+    // MARK: 资料库 / 向量 / 对话
+    let kbRoot = FileManager.default.temporaryDirectory
+        .appendingPathComponent("zb-kb-\(UUID().uuidString)", isDirectory: true)
+    try? FileManager.default.createDirectory(at: kbRoot, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: kbRoot) }
+    let kb = ProjectStore(rootURL: kbRoot)
+    kb.project.title = "断刀记"
+    _ = kb.ensureChapter(1)
+    kb.updateChapter(1) { ch in
+        ch.title = "废窑"; ch.status = .written
+        ch.prose = "少年在废窑里捡到一把断刀，刀柄上刻着一个界字。他把刀揣进怀里，听见窑外有人咳嗽。"
+        ch.summary = ChapterSummary(chapter: 1, summary: "少年在废窑捡到断刀，窑外传来咳嗽声。",
+                                    keyEvents: ["得刀", "被窥视"], emotionalTone: "警觉")
+        ch.skeleton = ChapterSkeleton(
+            beats: [Beat(summary: "少年在废窑捡到断刀", purpose: "推进", suggestedWords: 800,
+                         pov: "少年", location: "废窑", timeLabel: "当夜", cast: ["少年"],
+                         turn: "从躲藏到得刀")],
+            endHook: "窑外有人咳嗽", humanApproved: true, hookKind: "悬念")
+    }
+    kb.canonSections = [CanonSection(title: "兵器谱", content: "断刀是前朝兵器，刀柄的界字指向北境。",
+                                     certainty: .canon)]
+    kb.dossiers = [ChapterDossier(chapter: 1, headline: "废窑得刀",
+                                  scenes: ["废窑"], cast: ["少年"], advances: ["捡到断刀"],
+                                  turns: ["躲藏→得刀"], hooks: ["窑外咳嗽"], relics: ["断刀"])]
+    kb.clues = [Clue(id: "F01", title: "断刀来历", detail: "刀柄界字指向北境",
+                     plantedChapter: 1, plantedQuote: "刀柄上刻着一个界字", status: .planted)]
+    kb.facts = [MemoryFact(subject: "少年", predicate: "持有", object: "断刀", fromChapter: 1, source: "extracted")]
+    kb.timelineEvents = [TimelineEvent(id: "E01", chapter: 1, objectiveFact: "少年在废窑捡到断刀",
+                                       readerKnowledge: "读者知道得刀", revealed: true)]
+    kb.storylines = [Storyline(id: "L01", name: "查清断刀来历", kind: .main, isThroughLine: true, status: .active)]
+    kb.stages = [Stage(id: 1, name: "废窑开局", chapterStart: 1, chapterEnd: 3, theme: "得刀与追查")]
+
+    let kbIndex = KnowledgeIndex.build(from: kb)
+    let kinds = Set(kbIndex.chunks.map(\.kind))
+    check("资料库索引覆盖正文/章摘要/骨架/设定/档案卡/伏笔/事实/时间线/故事线/阶段",
+          kinds.isSuperset(of: [.prose, .summary, .skeleton, .canon, .dossier, .clue, .fact, .event, .storyline, .stage]),
+          "kinds=\(kinds.map(\.rawValue).sorted())")
+    let kbHits = kbIndex.keywordSearch("断刀 界字", limit: 10)
+    check("资料库能按具体名词召回多个来源", Set(kbHits.prefix(6).map(\.chunk.kind)).count >= 3,
+          "hits=\(kbHits.map { "\($0.chunk.kind.rawValue):\($0.chunk.citation)" })")
+    check("资料库命中带可引用来源", kbHits.allSatisfy { !$0.chunk.citation.isEmpty })
+    check("资料库对无关词不硬凑", kbIndex.keywordSearch("量子飞船曲率引擎", limit: 5).isEmpty)
+    let vectorProbe = HashingVectorizer.vector("断刀")
+    check("本地哈希向量已归一化", abs(vectorProbe.reduce(0) { $0 + $1 * $1 } - 1) < 0.001)
+    if let first = kbIndex.chunks.first(where: { $0.text.contains("断刀") }), !vectorProbe.isEmpty {
+        check("向量能对同主题片段给出正相关", VectorMath.cosine(vectorProbe, first.vector) > 0)
+    } else {
+        check("向量能对同主题片段给出正相关", false, "没有断刀片段")
+    }
+    check("资料库检索工具已注册", NovelTools.all(store: kb).contains { $0.name == "search_knowledge" })
+    let chatToolNames = AIService.toolNames(for: .chat)
+    check("对话能力有资料库/骨架/草稿读取",
+          chatToolNames.contains("search_knowledge")
+          && chatToolNames.contains("get_chapter_skeleton")
+          && chatToolNames.contains("get_latest_draft"))
+    check("对话能力可登记非章节提案",
+          chatToolNames.contains("propose_clues") && chatToolNames.contains("propose_storylines"))
+    check("对话能力可提交整章草稿提案", chatToolNames.contains("propose_draft"))
+    check("对话能力可搭骨架/验证/写档案卡",
+          chatToolNames.contains("propose_skeleton")
+          && chatToolNames.contains("propose_validation")
+          && chatToolNames.contains("propose_dossier"))
+    check("对话能力可提议大纲更新", chatToolNames.contains("propose_outline_updates"))
+    check("对话能力没有直接写正文工具",
+          !chatToolNames.contains("write_prose") && !chatToolNames.contains("update_prose"))
+    let draftProbe = ChapterDraft(chapter: 1, text: "少年把断刀裹进破布，窑外的脚步声停了。",
+                                  version: 1, mainline: "断刀线索",
+                                  feedbackHistory: [DraftFeedback(feedback: "开头太慢，直接进废窑。", fromVersion: 1)])
+    kb.proposals = [AIProposal(capability: .chapterDraft, chapterNumber: 1,
+                               title: "第1章 草稿 v1", payload: .draft(draftProbe))]
+    let skeletonText = NovelTools.chapterSkeletonDescription(store: kb, chapter: 1)
+    check("对话能读取任意章骨架与场景层",
+          skeletonText.contains("作者已批准") && skeletonText.contains("废窑")
+          && skeletonText.contains("从躲藏到得刀") && skeletonText.contains("窑外有人咳嗽"),
+          String(skeletonText.prefix(160)))
+    let draftText = NovelTools.latestDraftDescription(store: kb, chapter: 1)
+    check("对话能读取最新草稿与作者意见",
+          draftText.contains("草稿") && draftText.contains("开头太慢") && draftText.contains("v1"),
+          String(draftText.prefix(120)))
+    let chatPrompt = PromptLibrary.chatTask(store: kb, history: [], knowledge: Array(kbHits.prefix(3)),
+                                            question: "断刀在哪出现过？")
+    check("对话任务书带上资料库引用", chatPrompt.contains("【") && chatPrompt.contains("断刀"))
+    check("对话任务书带当前写作章与续接信息",
+          chatPrompt.contains("当前写作章") && chatPrompt.contains("上一章结尾"))
+    check("对话任务书告知骨架/验证/档案卡能力",
+          chatPrompt.contains("propose_skeleton")
+          && chatPrompt.contains("propose_validation")
+          && chatPrompt.contains("propose_dossier"))
+    let packProbe = ContextPackBuilder.build(store: kb, forChapter: 1, budget: 4000)
+    let draftPrompt = PromptLibrary.draftTask(chapter: 1, title: "废窑", targetWords: 3000,
+                                              mainline: "断刀线索", skeletonText: "",
+                                              pack: packProbe, model: "mock",
+                                              knowledgeRecall: Array(kbHits.prefix(2)))
+    check("草稿任务书带上资料库召回",
+          draftPrompt.contains("资料库召回") && draftPrompt.contains(kbHits[0].chunk.citation))
+    let skeletonPrompt = PromptLibrary.chapterSkeletonTask(
+        chapter: 1, chapterTitle: "废窑", pack: packProbe, authorDirective: "断刀线索",
+        knowledgeRecall: Array(kbHits.prefix(2)))
+    check("骨架任务书带上资料库召回",
+          skeletonPrompt.contains("资料库召回") && skeletonPrompt.contains(kbHits[0].chunk.citation))
+
+    // 回答里的短引用 → 资料库完整来源；工具结果里的完整来源 → 引用池
+    let citationPool = ["第12章《雾隐》", "设定《世界观》", "伏笔 [F03] 断刀", "档案卡 第8章"]
+    let resolved = KnowledgeCitations.resolve(
+        in: "见【第12章】与【设定《世界观》】，另有【伏笔 [F03]】和【不存在的来源】。",
+        pool: citationPool)
+    check("回答引用能对齐到完整来源",
+          resolved.contains("第12章《雾隐》") && resolved.contains("设定《世界观》")
+          && resolved.contains("伏笔 [F03] 断刀"), "resolved=\(resolved)")
+    check("未匹配的引用保留原标注", resolved.contains("不存在的来源"), "resolved=\(resolved)")
+    check("引用标注去重", KnowledgeCitations.bracketed(in: "【第1章】【第1章】").count == 1)
+    check("工具结果来源可提取",
+          KnowledgeCitations.bracketed(in: "【第3章《废窑》】\n正文……\n（来源：第3章）") == ["第3章《废窑》"])
+    check("引用跳转·正文回章节",
+          KnowledgeCitations.target(for: "第12章《雾隐》") == .chapter(12))
+    check("引用跳转·摘要/骨架/档案卡回章节",
+          KnowledgeCitations.target(for: "章摘要 第3章") == .chapter(3)
+          && KnowledgeCitations.target(for: "骨架 第4章") == .chapter(4)
+          && KnowledgeCitations.target(for: "档案卡 第8章") == .chapter(8))
+    check("引用跳转·设定/伏笔/记忆/大纲归位",
+          KnowledgeCitations.target(for: "设定《世界观》") == .canon
+          && KnowledgeCitations.target(for: "伏笔 [F03] 断刀") == .clues
+          && KnowledgeCitations.target(for: "记忆账本·第3章起") == .memory
+          && KnowledgeCitations.target(for: "时间线 [E01]·第12章") == .outline
+          && KnowledgeCitations.target(for: "故事线 [L01]") == .outline)
+    check("无法识别的引用不误导跳转", KnowledgeCitations.target(for: "作者笔记") == nil)
+    let focusNeedle = kbHits.first.flatMap { KnowledgeFocus.needle(for: $0) }
+    check("资料库命中能选出一个可定位的针",
+          focusNeedle != nil && focusNeedle.map { kbHits[0].chunk.text.contains($0) } == true,
+          "needle=\(focusNeedle ?? "nil")")
+    check("能在原文里定位命中针",
+          KnowledgeFocus.range(of: "断刀", in: "少年在废窑里捡到一把断刀。")
+            .map { $0.location != NSNotFound } == true)
+    check("定位不到返回 nil", KnowledgeFocus.range(of: "不存在的词", in: "少年捡到断刀") == nil)
+
+    // 同长度修订（北境→南境）也必须让派生索引失效
+    KnowledgeIndexCache.invalidate()
+    kb.canonSections[0].content = "断刀是前朝兵器，刀柄的界字指向北境。"
+    let beforeCache = KnowledgeIndexCache.index(for: kb)
+    kb.canonSections[0].content = "断刀是前朝兵器，刀柄的界字指向南境。"
+    let afterCache = KnowledgeIndexCache.index(for: kb)
+    check("同长度内容修改会重建索引",
+          beforeCache.chunks.contains { $0.kind == .canon && $0.text.contains("北境") }
+          && afterCache.chunks.contains { $0.kind == .canon && $0.text.contains("南境") }
+          && !afterCache.chunks.contains { $0.kind == .canon && $0.text.contains("北境") },
+          "before=\(beforeCache.chunks.filter { $0.kind == .canon }.map(\.text))")
+
+    let chatRoot = FileManager.default.temporaryDirectory
+        .appendingPathComponent("zb-chat-\(UUID().uuidString)", isDirectory: true)
+    try? FileManager.default.createDirectory(at: chatRoot, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: chatRoot) }
+    let chatStore = ProjectStore(rootURL: chatRoot)
+    try? chatStore.saveNow()   // 先建出书；下面只靠 append 自己落 chat.json
+    chatStore.appendChatMessage(ChatMessage(role: .user, text: "断刀在哪出现过？"))
+    chatStore.appendChatMessage(ChatMessage(role: .assistant, text: "第1章废窑。", citations: ["第1章《废窑》"]))
+    let chatReloaded = ProjectStore(rootURL: chatRoot)
+    try? chatReloaded.load()
+    check("对话记录即时保存（不靠整书保存）", chatReloaded.chatMessages.count == 2
+          && chatReloaded.chatMessages.last?.citations == ["第1章《废窑》"],
+          "count=\(chatReloaded.chatMessages.count)")
+    let removedReply = chatReloaded.removeLastChatMessage()
+    let chatAfterRemove = ProjectStore(rootURL: chatRoot)
+    try? chatAfterRemove.load()
+    check("撤掉上一条回复会即时落盘",
+          removedReply?.role == .assistant && chatAfterRemove.chatMessages.count == 1,
+          "count=\(chatAfterRemove.chatMessages.count)")
+    chatReloaded.clearChat()
+    let chatCleared = ProjectStore(rootURL: chatRoot)
+    try? chatCleared.load()
+    check("清空对话会落盘不复活", chatCleared.chatMessages.isEmpty, "count=\(chatCleared.chatMessages.count)")
+
+    // 对话导出 / 归档
+    let transcript = ChatTranscript.markdown(
+        messages: [ChatMessage(role: .user, text: "断刀在哪？"),
+                   ChatMessage(role: .assistant, text: "第1章废窑。", citations: ["第1章《废窑》"])],
+        projectTitle: "断刀记", exportedAt: Date(timeIntervalSince1970: 0))
+    check("对话可导出为 Markdown",
+          transcript.contains("作者") && transcript.contains("AI 搭档")
+          && transcript.contains("来源：【第1章《废窑》】"),
+          String(transcript.prefix(120)))
+    let exportName = ChatTranscript.fileName(projectTitle: "断/刀:记")
+    check("导出文件名避开路径分隔符",
+          !exportName.contains("/") && !exportName.contains(":"), exportName)
+
+    let archiveRoot = FileManager.default.temporaryDirectory
+        .appendingPathComponent("zb-chat-archive-\(UUID().uuidString)", isDirectory: true)
+    try? FileManager.default.createDirectory(at: archiveRoot, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: archiveRoot) }
+    let archiveStore = ProjectStore(rootURL: archiveRoot)
+    try? archiveStore.saveNow()
+    archiveStore.appendChatMessage(ChatMessage(role: .user, text: "断刀在哪出现过？"))
+    archiveStore.appendChatMessage(ChatMessage(role: .assistant, text: "第1章废窑。"))
+    let archiveURL = archiveStore.archiveChat()
+    let archivedText = archiveURL.flatMap { try? String(contentsOf: $0, encoding: .utf8) }
+    let archiveReloaded = ProjectStore(rootURL: archiveRoot)
+    try? archiveReloaded.load()
+    check("归档对话会写文件并清空",
+          archiveURL != nil && archivedText?.contains("断刀") == true
+          && archiveReloaded.chatMessages.isEmpty,
+          "url=\(archiveURL?.lastPathComponent ?? "nil") count=\(archiveReloaded.chatMessages.count)")
+    let archiveList = archiveStore.listChatArchives()
+    check("归档列表能列出归档文件",
+          archiveList.count == 1
+          && archiveList.first?.url.lastPathComponent == archiveURL?.lastPathComponent,
+          "count=\(archiveList.count)")
+    check("归档内容可在应用内回读",
+          archiveList.first.flatMap { archiveStore.readChatArchive($0.url) }?.contains("断刀") == true)
+    let payloadURL = archiveURL.flatMap { archiveStore.chatArchivePayloadURL(for: $0) }
+    check("归档同时写入可恢复 JSON",
+          payloadURL != nil && archiveURL.flatMap { archiveStore.readChatArchivePayload($0) }?.messages.count == 2)
+    let restoredCount = archiveURL.flatMap { archiveStore.restoreChatArchive($0) }
+    check("归档可恢复追加到当前对话",
+          restoredCount == 2 && archiveStore.chatMessages.count == 2)
+    let restoredReloaded = ProjectStore(rootURL: archiveRoot)
+    try? restoredReloaded.load()
+    check("恢复后的对话已落盘", restoredReloaded.chatMessages.count == 2)
+    let secondRestore = archiveURL.flatMap { archiveStore.restoreChatArchive($0) }
+    check("重复恢复同一归档不会产生重复消息",
+          secondRestore == 0 && archiveStore.chatMessages.count == 2,
+          "restored=\(secondRestore ?? -1) count=\(archiveStore.chatMessages.count)")
+    check("不会删除作品目录外的文件",
+          !archiveStore.deleteChatArchive(URL(fileURLWithPath: "/tmp/zhibi-not-ours.md")))
+    let decoyDir = archiveRoot.appendingPathComponent("chat-archive-evil.md", isDirectory: true)
+    try? FileManager.default.createDirectory(at: decoyDir, withIntermediateDirectories: true)
+    check("不会删除同名的目录",
+          !archiveStore.deleteChatArchive(decoyDir)
+          && FileManager.default.fileExists(atPath: decoyDir.path))
+    check("目录不会被当成可恢复归档",
+          archiveStore.readChatArchivePayload(decoyDir) == nil)
+    check("删除归档只删归档文件",
+          archiveList.first.map { archiveStore.deleteChatArchive($0.url) } == true
+          && archiveStore.listChatArchives().isEmpty
+          && payloadURL.map { !FileManager.default.fileExists(atPath: $0.path) } == true)
+
+    let proposalProbe = AIProposal(capability: .chapterDraft, chapterNumber: 1,
+                                   title: "第1章 草稿 v1",
+                                   payload: .draft(ChapterDraft(chapter: 1, text: "少年把断刀裹进破布。")))
+    let proposalMessage = ChatMessage(role: .assistant, text: "已登记。",
+                                      proposalIDs: [proposalProbe.id])
+    let transcriptWithProposals = ChatTranscript.markdown(
+        messages: [proposalMessage], projectTitle: "断刀记", proposals: [proposalProbe],
+        exportedAt: Date(timeIntervalSince1970: 0))
+    check("导出对话附带提案快照",
+          transcriptWithProposals.contains("第1章 草稿 v1")
+          && transcriptWithProposals.contains("待确认"),
+          String(transcriptWithProposals.suffix(120)))
+    let legacyJSON = #"{"role":"AI","text":"旧消息"}"#.data(using: .utf8)!
+    let legacyMessage = try? JSONDecoder().decode(ChatMessage.self, from: legacyJSON)
+    check("旧对话缺提案字段也能解", legacyMessage?.proposalIDs.isEmpty == true)
 }
 fputs("[p] summary\n", stderr)
 // MARK: - 汇总

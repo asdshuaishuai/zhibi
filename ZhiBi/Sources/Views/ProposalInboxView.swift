@@ -306,7 +306,7 @@ struct ProposalInboxView: View {
                     Text("伏笔触点：" + sk.clueTouches.map { "[\($0.clueID)] \($0.action.rawValue)" }.joined(separator: "，"))
                         .font(.caption).foregroundStyle(.teal)
                 }
-                Text("采纳后请到章节页检查、修改骨架，再点「批准此骨架」。正文永远由你亲笔。")
+                Text("采纳后请到章节页检查、修改骨架，再点「批准此骨架」。整章草稿可以由 AI 写，但只有你审查、修改、采纳后才进入正文。")
                     .font(.caption2).foregroundStyle(.tertiary)
             }
 

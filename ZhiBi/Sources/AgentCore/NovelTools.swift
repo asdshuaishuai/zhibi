@@ -1,13 +1,14 @@
 import Foundation
 
 /// 宿主提供的工具面。铁律：
-/// 1. 只存在 propose_*（提案）与只读查询工具——**不存在任何写正文的工具**；
-/// 2. 工具执行 = 创建提案进收件箱，回复模型"等待作者确认"，模型口头声明不算采纳。
+/// 1. 只存在 propose_*（提案）与只读查询工具——**不存在任何绕过提案直接写正文的工具**；
+/// 2. 会改书的工具执行 = 创建提案进收件箱，回复模型"等待作者确认"；只读查询直接返回证据，
+///    模型口头声明不算采纳。
 enum NovelTools {
     private static let timingMap = ["immediate": ClueTiming.immediate, "near_term": ClueTiming.nearTerm, "mid_arc": ClueTiming.midArc, "slow_burn": ClueTiming.slowBurn, "endgame": ClueTiming.endgame]
     private static let scaleMap = ["small": ClueScale.small, "medium": ClueScale.medium, "major": ClueScale.major]
 
-    static func all(store: ProjectStore, chapter: Int = 0) -> [AgentTool] {
+    static func all(store: ProjectStore, chapter: Int = 0, config: AgentConfig? = nil) -> [AgentTool] {
         [
             proposeOutlineEvents(store: store),
             proposeStorylines(store: store),
@@ -28,6 +29,9 @@ enum NovelTools {
             getOutline(store: store),
             getCanon(store: store),
             getFacts(store: store),
+            getChapterSkeleton(store: store),
+            getLatestDraft(store: store),
+            searchKnowledge(store: store, config: config),
         ]
     }
 
@@ -272,7 +276,7 @@ enum NovelTools {
                 请修好后再调用一次 propose_skeleton（会登记为新提案，作者取用哪版由他决定）。
                 """
             }
-            return "已登记为提案「章节骨架」（闸门 \(gate.score)/100，\(gate.warnings.count) 项建议已附在提案说明里），等待作者在收件箱确认。正文由作者亲笔完成。"
+            return "已登记为提案「章节骨架」（闸门 \(gate.score)/100，\(gate.warnings.count) 项建议已附在提案说明里），等待作者在收件箱确认。下一步可生成整章草稿提案；正文由作者审查、修改、采纳后定稿。"
         }
     }
 
@@ -496,7 +500,7 @@ enum NovelTools {
     static func proposeDraft(store: ProjectStore, chapter: Int) -> AgentTool {
         AgentTool(
             name: "propose_draft",
-            description: "提交整章草稿提案（你亲笔的初稿/修订稿）。全文放入 text，不要分段输出到对话里。这是提案：作者审查、给修改意见、采纳之后才会进入正文。每次修订都提交完整全文（不是补丁）。",
+            description: "提交整章草稿提案（你写的初稿/修订稿）。全文放入 text，不要分段输出到对话里。这是提案：作者审查、修改、给意见、采纳之后才会进入正文。每次修订都提交完整全文（不是补丁）。",
             parametersJSON: """
             {"type":"object","properties":{"note":{"type":"string","description":"给作者的一句话说明本稿改了什么"},"text":{"type":"string","description":"整章正文全文"}},"required":["text"]}
             """
@@ -618,7 +622,7 @@ enum NovelTools {
     static func getChapter(store: ProjectStore) -> AgentTool {
         AgentTool(
             name: "get_chapter",
-            description: "读取某章正文（作者亲笔）。用于验证时对照原文取证。",
+            description: "读取某章正文原文。用于验证、对话与检索时对照取证。",
             parametersJSON: """
             {"type":"object","properties":{"chapter":{"type":"integer"}},"required":["chapter"]}
             """
@@ -628,6 +632,99 @@ enum NovelTools {
             let text = await MainActor.run { store.chapter(p.chapter)?.prose ?? "" }
             return text.isEmpty ? "第\(p.chapter)章还没有正文。" : String(text.prefix(12000))
         }
+    }
+
+    /// 读取任意章的骨架（含场景层、钩子、硬交付、伏笔触点与批准状态）。
+    /// 对话默认只带当前章骨架；问其他章或对照骨架查草稿时，用这个工具取证。
+    static func getChapterSkeleton(store: ProjectStore, chapter: Int? = nil) -> AgentTool {
+        AgentTool(
+            name: "get_chapter_skeleton",
+            description: "读取某章骨架：节拍（含视角/地点/时间/在场/转折）、章尾钩子、硬交付、禁止项、伏笔触点与作者批准状态。chapter 省略则取当前写作章。对照草稿是否漏拍/偏移时先用它。",
+            parametersJSON: """
+            {"type":"object","properties":{"chapter":{"type":"integer","description":"章号；省略取当前写作章"}}}
+            """
+        ) { args in
+            struct P: Decodable { let chapter: Int? }
+            let p = try decode(P.self, args)
+            return await MainActor.run {
+                let n = p.chapter ?? chapter ?? store.currentChapter
+                return chapterSkeletonDescription(store: store, chapter: n)
+            }
+        }
+    }
+
+    /// 供工具与自检共用的同步实现（纯读，不改账本）
+    @MainActor
+    static func chapterSkeletonDescription(store: ProjectStore, chapter n: Int) -> String {
+        guard let sk = store.chapter(n)?.skeleton, !sk.beats.isEmpty else {
+            return "第\(n)章还没有骨架。可以先让 AI 搭骨架提案，作者批准后再对照检查。"
+        }
+        var lines: [String] = [
+            "第\(n)章「\(store.chapter(n)?.title ?? "")」骨架（\(sk.humanApproved ? "作者已批准" : "尚未批准")）"
+        ]
+        for (i, b) in sk.beats.enumerated() {
+            var scene: [String] = []
+            if !b.pov.isEmpty { scene.append("视角：\(b.pov)") }
+            if !b.location.isEmpty { scene.append("地点：\(b.location)") }
+            if !b.timeLabel.isEmpty { scene.append("时间：\(b.timeLabel)") }
+            if !b.cast.isEmpty { scene.append("在场：\(b.cast.joined(separator: "、"))") }
+            if !b.turn.isEmpty { scene.append("转折：\(b.turn)") }
+            var line = "\(i + 1). \(b.summary)（\(b.purpose)"
+            if b.suggestedWords > 0 { line += "｜约\(b.suggestedWords)字" }
+            line += "）"
+            if !scene.isEmpty { line += "\n   " + scene.joined(separator: "｜") }
+            lines.append(line)
+        }
+        if !sk.endHook.isEmpty { lines.append("章尾钩子：\(sk.endHook)" + (sk.hookKind.isEmpty ? "" : "（\(sk.hookKind)型）")) }
+        if !sk.mustDeliver.isEmpty { lines.append("硬交付：" + sk.mustDeliver.joined(separator: "；")) }
+        if !sk.mustAvoid.isEmpty { lines.append("禁止：" + sk.mustAvoid.joined(separator: "；")) }
+        if !sk.clueTouches.isEmpty {
+            lines.append("伏笔触点：" + sk.clueTouches.map { "[\($0.clueID)] \($0.action.rawValue) —— \($0.requirement)" }.joined(separator: "；"))
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    /// 读取某章最新一份可修订草稿（含作者历次意见）。对话要“改上一版”时先取全文，
+    /// 再让模型用 propose_draft 提交完整新版；不能靠历史对话里的记忆改稿。
+    static func getLatestDraft(store: ProjectStore, chapter: Int? = nil) -> AgentTool {
+        AgentTool(
+            name: "get_latest_draft",
+            description: "读取某章最新一份可修订的草稿提案（含版本、主线、作者历次修改意见与全文）。作者要求“改上一版/按意见修”时先用它，再用 propose_draft 提交完整新版。chapter 省略则取当前写作章。",
+            parametersJSON: """
+            {"type":"object","properties":{"chapter":{"type":"integer","description":"章号；省略取当前写作章"}}}
+            """
+        ) { args in
+            struct P: Decodable { let chapter: Int? }
+            let p = try decode(P.self, args)
+            return await MainActor.run {
+                let n = p.chapter ?? chapter ?? store.currentChapter
+                return latestDraftDescription(store: store, chapter: n)
+            }
+        }
+    }
+
+    /// 供工具与自检共用的同步实现（纯读，不改账本）
+    @MainActor
+    static func latestDraftDescription(store: ProjectStore, chapter n: Int) -> String {
+        guard let proposal = store.latestAnyDraftProposal(for: n),
+              let draft = store.draftPayload(of: proposal) else {
+            return "第\(n)章还没有可修订的草稿提案。先写一版草稿，或直接调用 propose_draft 提交新草稿。"
+        }
+        let feedback = draft.feedbackHistory.isEmpty
+            ? "（还没有作者修改意见）"
+            : draft.feedbackHistory.map { "v\($0.fromVersion) 作者意见：\($0.feedback)" }.joined(separator: "\n")
+        let text = draft.text.count > 24000
+            ? String(draft.text.prefix(24000)) + "\n…（全文过长，已截断；修订时请向作者确认未读部分）"
+            : draft.text
+        return """
+        第\(n)章草稿 v\(draft.version)（\(proposal.status.rawValue)｜\(WordStats.chineseCount(draft.text)) 字）
+        主线：\(draft.mainline.isEmpty ? "（未记录）" : draft.mainline)
+        作者历次意见：
+        \(feedback)
+
+        当前全文：
+        \(text)
+        """
     }
 
     static func getClues(store: ProjectStore) -> AgentTool {
@@ -697,12 +794,37 @@ enum NovelTools {
         }
     }
 
+    /// 资料库检索：跨正文/设定/档案卡/伏笔/事实/时间线做关键词 + 向量混合召回。
+    /// 对话与审校都靠它把「书里到底写过什么」找回来；只读，不产生提案。
+    static func searchKnowledge(store: ProjectStore, config: AgentConfig? = nil) -> AgentTool {
+        AgentTool(
+            name: "search_knowledge",
+            description: "检索本书资料库（正文/设定/档案卡/伏笔/记忆事实/时间线/故事线/阶段）。回答书内问题前先用它找证据；返回带来源的行。query 用具体名词（人名/物件/地点/伏笔名），limit 默认 6。",
+            parametersJSON: """
+            {"type":"object","properties":{"query":{"type":"string","description":"要查的具体问题或关键词"},"limit":{"type":"integer","description":"返回条数，默认 6，最大 12"}},"required":["query"]}
+            """
+        ) { args in
+            struct Payload: Decodable { let query: String; let limit: Int? }
+            let p = try decode(Payload.self, args)
+            let limit = min(12, max(1, p.limit ?? 6))
+            let hits = await KnowledgeEngine.search(store: store, query: p.query,
+                                                    limit: limit, config: config ?? AgentConfig.load())
+            guard !hits.isEmpty else { return "资料库里没有找到与「\(p.query)」相关的内容。" }
+            return hits.map { hit in
+                let chapter = hit.chunk.chapter.map { "第\($0)章" } ?? hit.chunk.kind.rawValue
+                return "【\(hit.chunk.citation)】\n\(hit.chunk.text)\n（来源：\(chapter)｜相关度 \(String(format: "%.2f", hit.score))）"
+            }.joined(separator: "\n\n---\n\n")
+        }
+    }
+
     /// 把按章绑定的工具版本替换进工具面（单点实现，供工具循环与围栏 JSON 回退共用）
     static func bindChapter(tools: [AgentTool], store: ProjectStore, chapter: Int?) -> [AgentTool] {
         // 0 章/无章号不是合法绑定目标：否则卷级任务的骨架会静默落到「第 0 章」
         guard let n = chapter, n > 0 else { return tools }
         var out = tools
         let bindings: [(String, AgentTool)] = [
+            ("get_chapter_skeleton", getChapterSkeleton(store: store, chapter: n)),
+            ("get_latest_draft", getLatestDraft(store: store, chapter: n)),
             ("propose_skeleton", proposeSkeleton(store: store, chapter: n)),
             ("propose_draft", proposeDraft(store: store, chapter: n)),
             ("propose_memory", proposeMemory(store: store, chapter: n)),

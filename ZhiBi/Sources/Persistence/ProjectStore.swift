@@ -1,6 +1,21 @@
 import Foundation
 import Combine
 
+/// 作品目录里的一份对话归档（chat-archive-*.md）。
+struct ChatArchiveEntry: Identifiable, Hashable {
+    var id: URL { url }
+    var url: URL
+    var name: String
+    var createdAt: Date
+    var bytes: Int
+
+    var sizeLabel: String {
+        if bytes < 1024 { return "\(bytes) B" }
+        if bytes < 1024 * 1024 { return String(format: "%.1f KB", Double(bytes) / 1024) }
+        return String(format: "%.1f MB", Double(bytes) / 1024 / 1024)
+    }
+}
+
 /// 全量项目状态。单一权威（oh-story：单一 JSON 权威 + 派生视图）。
 /// 一切变更走这里；保存 = 原子落盘。
 @MainActor
@@ -20,6 +35,8 @@ final class ProjectStore: ObservableObject {
     /// 长程记忆：章档案卡（每章一张，跨全书可检索）
     @Published var dossiers: [ChapterDossier] = []
     @Published var proposals: [AIProposal] = []
+    /// 作者与 AI 的对话（项目级，随书保存；上限 200 条）
+    @Published var chatMessages: [ChatMessage] = []
     /// 最近一次保存失败原因（磁盘满/权限等）——UI 状态条展示
     @Published var lastSaveError: String?
     /// 读盘隔离/损坏警告（不随自动保存成功被清掉，需作者确认）
@@ -71,6 +88,7 @@ final class ProjectStore: ObservableObject {
         var memory: MemoryFile?
         var proposals: [AIProposal]
         var dossiers: [ChapterDossier]
+        var chatMessages: [ChatMessage]
         var chapters: [Chapter]
         var quarantineNotes: [String]
 
@@ -104,6 +122,7 @@ final class ProjectStore: ObservableObject {
             let memory = Disk.readJSONOrQuarantine(MemoryFile.self, from: ProjectLayout.memoryFile(rootURL), label: "记忆库")
             if let note = memory.note { quarantineNotes.append(note) }
             let dossiers = read([ChapterDossier].self, ProjectLayout.dossiersFile(rootURL), "档案卡", fallback: [])
+            let chatMessages = read([ChatMessage].self, ProjectLayout.chatFile(rootURL), "对话记录", fallback: [])
             let pending = read([AIProposal].self, ProjectLayout.proposalsFile(rootURL), "提案收件箱", fallback: [])
             let archived = read([AIProposal].self, ProjectLayout.proposalsArchiveFile(rootURL), "提案归档", fallback: [])
             let proposals = (pending + archived).sorted { $0.createdAt > $1.createdAt }
@@ -131,7 +150,8 @@ final class ProjectStore: ObservableObject {
             }
             return LoadSnapshot(project: project, coverSVG: coverSVG, canonSections: canon, storylines: storylines,
                                 timelineEvents: timelineEvents, stages: stages, clues: clues, memory: memory.value,
-                                proposals: proposals, dossiers: dossiers, chapters: loaded, quarantineNotes: quarantineNotes)
+                                proposals: proposals, dossiers: dossiers, chatMessages: chatMessages,
+                                chapters: loaded, quarantineNotes: quarantineNotes)
         }
     }
 
@@ -150,6 +170,7 @@ final class ProjectStore: ObservableObject {
         self.dismissedConflicts = snapshot.memory?.dismissedConflicts ?? []
         self.proposals = snapshot.proposals
         self.dossiers = snapshot.dossiers
+        self.chatMessages = Array(snapshot.chatMessages.suffix(200))
         self.chapters = snapshot.chapters.sorted { $0.number < $1.number }
         dirtyChapters.removeAll()
         if !snapshot.quarantineNotes.isEmpty {
@@ -188,6 +209,7 @@ final class ProjectStore: ObservableObject {
         let pendingLoaded = read([AIProposal].self, ProjectLayout.proposalsFile(rootURL), "提案收件箱", fallback: [])
         let archivedLoaded = read([AIProposal].self, ProjectLayout.proposalsArchiveFile(rootURL), "提案归档", fallback: [])
         proposals = (pendingLoaded + archivedLoaded).sorted { $0.createdAt > $1.createdAt }
+        chatMessages = Array(read([ChatMessage].self, ProjectLayout.chatFile(rootURL), "对话记录", fallback: []).suffix(200))
 
         var loaded: [Chapter] = []
         let fm = FileManager.default
@@ -341,6 +363,7 @@ final class ProjectStore: ObservableObject {
         // 旧 archive.json 还在盘上，下次打开会把刚清掉的提案全部复活。
         try Disk.writeJSON(archivedProposals, to: ProjectLayout.proposalsArchiveFile(rootURL))
         try Disk.writeJSON(dossiers, to: ProjectLayout.dossiersFile(rootURL))
+        try Disk.writeJSON(Array(chatMessages.suffix(200)), to: ProjectLayout.chatFile(rootURL))
         dirtyChapters.removeAll()
         if canonWriteFailed {
             // 其余账本已全部落盘；把单节 md 导出失败升级为可展示的错误（不阻塞保存本身）
@@ -476,6 +499,160 @@ final class ProjectStore: ObservableObject {
     var currentChapter: Int {
         let drafted = chapters.filter { $0.status != .empty && $0.status != .skeletoned }.map(\.number).max() ?? 0
         return drafted + 1
+    }
+
+    // MARK: - 作者 ↔ AI 对话
+
+    func appendChatMessage(_ message: ChatMessage) {
+        chatMessages.append(message)
+        if chatMessages.count > 200 { chatMessages.removeFirst(chatMessages.count - 200) }
+        // 对话是独立小文件：立即落盘，避免“关自动保存/快速退出”时丢掉刚聊完的内容
+        saveChatNow()
+    }
+
+    /// 重新回答前撤掉上一条回复；问题本身保留，避免对话里堆两层相同提问。
+    @discardableResult
+    func removeLastChatMessage() -> ChatMessage? {
+        guard let last = chatMessages.popLast() else { return nil }
+        saveChatNow()
+        return last
+    }
+
+    func clearChat() {
+        chatMessages.removeAll()
+        saveChatNow()
+    }
+
+    /// 导出对话为 Markdown（作者在保存面板里选路径）。
+    func exportChat(to url: URL) throws {
+        let markdown = ChatTranscript.markdown(messages: chatMessages, projectTitle: project.title,
+                                               proposals: proposals)
+        try markdown.write(to: url, atomically: true, encoding: .utf8)
+    }
+
+    /// 归档到作品目录并清空 chat.json；写失败时保持对话不动。
+    /// 返回归档文件 URL；没有对话或写入失败返回 nil（失败原因进 lastSaveError）。
+    @discardableResult
+    func archiveChat() -> URL? {
+        guard !chatMessages.isEmpty else { return nil }
+        let baseName = ChatTranscript.archiveFileName()
+        var url = rootURL.appendingPathComponent(baseName)
+        var suffix = 2
+        while FileManager.default.fileExists(atPath: url.path) {
+            let name = baseName.replacingOccurrences(of: ".md", with: "-\(suffix).md")
+            url = rootURL.appendingPathComponent(name)
+            suffix += 1
+        }
+        do {
+            let markdown = ChatTranscript.markdown(messages: chatMessages, projectTitle: project.title,
+                                                   proposals: proposals)
+            try markdown.write(to: url, atomically: true, encoding: .utf8)
+        } catch {
+            lastSaveError = "对话归档失败：\(error.localizedDescription)"
+            return nil
+        }
+        // 可恢复快照与 Markdown 同名；写失败不影响人类可读归档，只是恢复按钮不可用。
+        let payloadURL = url.deletingPathExtension().appendingPathExtension("json")
+        let payload = ChatArchivePayload(projectTitle: project.title,
+                                         messages: chatMessages, proposals: proposals)
+        try? Disk.writeJSON(payload, to: payloadURL)
+        chatMessages.removeAll()
+        saveChatNow()
+        return url
+    }
+
+    // MARK: - 归档浏览
+
+    /// 列出作品目录里的对话归档，按时间倒序。
+    func listChatArchives() -> [ChatArchiveEntry] {
+        let keys: Set<URLResourceKey> = [.contentModificationDateKey, .fileSizeKey, .isRegularFileKey]
+        guard let urls = try? FileManager.default.contentsOfDirectory(
+            at: rootURL, includingPropertiesForKeys: Array(keys), options: [.skipsHiddenFiles]) else {
+            return []
+        }
+        return urls
+            .filter { $0.lastPathComponent.hasPrefix("chat-archive-") && $0.pathExtension == "md" }
+            .compactMap { url in
+                let values = try? url.resourceValues(forKeys: keys)
+                guard values?.isRegularFile == true else { return nil }
+                return ChatArchiveEntry(
+                    url: url,
+                    name: url.lastPathComponent,
+                    createdAt: values?.contentModificationDate ?? .distantPast,
+                    bytes: values?.fileSize ?? 0)
+            }
+            .sorted { $0.createdAt > $1.createdAt }
+    }
+
+    func readChatArchive(_ url: URL) -> String? {
+        guard isChatArchive(url) else { return nil }
+        return try? String(contentsOf: url, encoding: .utf8)
+    }
+
+    /// 与 Markdown 同名的可恢复 JSON；没有或不是普通文件时返回 nil。
+    func chatArchivePayloadURL(for url: URL) -> URL? {
+        guard isChatArchive(url) else { return nil }
+        let candidate = url.deletingPathExtension().appendingPathExtension("json")
+        let values = try? candidate.resourceValues(forKeys: [.isRegularFileKey])
+        guard values?.isRegularFile == true else { return nil }
+        return candidate
+    }
+
+    func readChatArchivePayload(_ url: URL) -> ChatArchivePayload? {
+        guard let payloadURL = chatArchivePayloadURL(for: url) else { return nil }
+        return try? Disk.readJSON(ChatArchivePayload.self, from: payloadURL)
+    }
+
+    /// 把归档消息追加到当前对话（不重新登记提案）。
+    /// 返回追加条数；没有可恢复快照返回 nil。
+    @discardableResult
+    func restoreChatArchive(_ url: URL) -> Int? {
+        guard let payload = readChatArchivePayload(url), !payload.messages.isEmpty else { return nil }
+        // 同一份归档重复恢复时按消息 ID 去重：ForEach 的 id 必须唯一。
+        let existing = Set(chatMessages.map(\.id))
+        let incoming = payload.messages.filter { !existing.contains($0.id) }
+        guard !incoming.isEmpty else { return 0 }
+        chatMessages.append(contentsOf: incoming)
+        if chatMessages.count > 200 {
+            chatMessages.removeFirst(chatMessages.count - 200)
+        }
+        saveChatNow()
+        return incoming.count
+    }
+
+    /// 只允许删除作品目录内、以 chat-archive- 开头且存在的 .md 文件；连同同名 JSON 快照一起删。
+    @discardableResult
+    func deleteChatArchive(_ url: URL) -> Bool {
+        guard isChatArchive(url) else { return false }
+        let payloadURL = chatArchivePayloadURL(for: url)
+        do {
+            try FileManager.default.removeItem(at: url)
+        } catch {
+            lastSaveError = "删除对话归档失败：\(error.localizedDescription)"
+            return false
+        }
+        if let payloadURL { try? FileManager.default.removeItem(at: payloadURL) }
+        return true
+    }
+
+    private func isChatArchive(_ url: URL) -> Bool {
+        let folder = url.standardizedFileURL.deletingLastPathComponent()
+        let root = rootURL.standardizedFileURL
+        guard folder.path == root.path,
+              url.lastPathComponent.hasPrefix("chat-archive-"),
+              url.pathExtension == "md" else { return false }
+        // 必须是普通文件：否则同名的目录会被 removeItem 整个递归删掉。
+        let values = try? url.resourceValues(forKeys: [.isRegularFileKey])
+        return values?.isRegularFile == true
+    }
+
+    /// 只写 chat.json（不动整本书的账本）；失败进 lastSaveError，仍可通过 ⌘S 重试
+    func saveChatNow() {
+        do {
+            try Disk.writeJSON(Array(chatMessages.suffix(200)), to: ProjectLayout.chatFile(rootURL))
+        } catch {
+            lastSaveError = "对话记录保存失败：\(error.localizedDescription)"
+        }
     }
 
     // MARK: - 伏笔
@@ -801,7 +978,7 @@ final class ProjectStore: ObservableObject {
 
     // MARK: - 埋点修复（台账修正；铁律：改账本，不改正文）
 
-    /// 采纳一条伏笔修复方案。只动台账与动作日志——正文永远由作者亲笔补写。
+    /// 采纳一条伏笔修复方案。只动台账与动作日志——正文修改仍以作者定稿为准。
     /// 幂等：同一条 fix 采纳两次结果一致，所以收件箱里既可以整包采纳也可以逐条采纳。
     @discardableResult
     func applyClueFix(_ fix: ClueFix) -> Bool {

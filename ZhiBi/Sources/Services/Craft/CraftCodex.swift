@@ -564,6 +564,9 @@ enum CraftCodex {
         case .recallMemo:
             parts.append(WebNovelCraft.expectationManagement)
             parts.append("节奏参数：" + profile.pacingNote)
+        case .chat:
+            parts.append("对话是编辑搭档：可以直接给建议，也可以写整章草稿、搭骨架、做一致性验证，全部以提案交付；先查资料再回答，引用要能落到具体章节/设定/伏笔。草稿与结构仍由作者审查、修改、采纳。")
+            parts.append(WebNovelCraft.expectationManagement)
         }
         return parts.joined(separator: "\n\n")
     }

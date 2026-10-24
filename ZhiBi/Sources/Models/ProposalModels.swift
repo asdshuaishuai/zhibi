@@ -25,6 +25,7 @@ enum AICapability: String, Codable, CaseIterable {
     case outlineSync = "大纲同步"
     case deslop = "去AI味"
     case recallMemo = "写作备忘"
+    case chat = "AI 对话"
 }
 
 // MARK: - 整章草稿（流水线产物；采纳前不进正文）

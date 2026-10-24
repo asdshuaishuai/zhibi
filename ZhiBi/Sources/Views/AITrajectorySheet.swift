@@ -9,6 +9,7 @@ import SwiftUI
 struct AgentTrajectoryPanel: View {
     @ObservedObject var ai: AIService
     let onClose: () -> Void
+    var showsCloseButton = true
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var confirmClear = false
 
@@ -69,15 +70,17 @@ struct AgentTrajectoryPanel: View {
             } message: {
                 Text("会同时删除磁盘上的轨迹历史，重启后不会恢复。")
             }
-            Button {
-                onClose()
-            } label: {
-                Image(systemName: "xmark.circle.fill")
-                    .foregroundStyle(.secondary)
+            if showsCloseButton {
+                Button {
+                    onClose()
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundStyle(.secondary)
+                }
+                .controlSize(.small)
+                .buttonStyle(.borderless)
+                .help("收起 AI 协作面板（⌘⇧J）")
             }
-            .controlSize(.small)
-            .buttonStyle(.borderless)
-            .help("收起轨迹面板（⌘⇧J）")
         }
         .padding(.horizontal, ZBSpace.sm)
         .padding(.vertical, ZBSpace.xs + 2)

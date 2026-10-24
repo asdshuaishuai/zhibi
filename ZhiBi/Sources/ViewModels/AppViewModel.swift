@@ -2,6 +2,14 @@ import Foundation
 import AppKit
 import Combine
 
+/// 从资料库/来源芯片跳到正文时要定位的原文片段。token 每次点击都换，
+/// 同一个词连点两次也能再次闪烁定位。
+struct ChapterFocus: Equatable {
+    var chapter: Int
+    var needle: String?
+    var token: UUID = UUID()
+}
+
 /// 根应用状态：项目列表、当前打开的项目、AI 服务
 @MainActor
 final class AppViewModel: ObservableObject {
@@ -51,6 +59,8 @@ final class AppViewModel: ObservableObject {
         }
     }
     @Published var navigateToSection: WorkspaceSection?
+    /// 资料库命中的原文定位指令（章节编辑器消费）
+    @Published var chapterFocus: ChapterFocus?
 
     let ai = AIService()
 
@@ -149,6 +159,9 @@ final class AppViewModel: ObservableObject {
 
     private func open(store: ProjectStore) {
         self.store = store
+        // 对话是项目级状态：切换作品时清掉上一本的流式片段/错误/提案提示，
+        // 否则新书右侧会挂着旧书的回答尾巴。
+        ai.resetChatSessionState()
         // 自动保存开关随持久化配置恢复，而不是等用户进章编辑器
         store.autoSaveEnabled = config.autoSave
         screen = .project

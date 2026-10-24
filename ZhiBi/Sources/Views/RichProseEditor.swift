@@ -26,6 +26,9 @@ struct RichProseEditor: NSViewRepresentable {
     let textColor: NSColor
     /// 高亮词表（如活跃伏笔的标题/种下原文关键词）
     var clueNeedles: [String] = []
+    /// 资料库命中跳转：定位 needle 首次出现的位置并选中/滚动。
+    var focusNeedle: String?
+    var focusToken: UUID?
     /// 编辑暂停后回传一次完整 AI 味扫描结果（与高亮共用同一次后台扫描）
     var onLint: ((LintSummary) -> Void)?
 
@@ -78,6 +81,7 @@ struct RichProseEditor: NSViewRepresentable {
         context.coordinator.lastSerialized = markdown
         context.coordinator.reload(markdown: markdown, baseFont: baseFont, textColor: textColor)
         context.coordinator.installFlushHooks()
+        context.coordinator.applyFocusIfNeeded()
         // 点击别处（失焦）也 flush：防抖窗口不再依赖用户停笔
         NotificationCenter.default.addObserver(
             forName: NSWindow.didResignKeyNotification, object: nil, queue: .main) { [weak coordinator = context.coordinator] _ in
@@ -104,6 +108,7 @@ struct RichProseEditor: NSViewRepresentable {
             coordinator.lastFont = baseFont
             coordinator.reload(markdown: coordinator.lastSerialized, baseFont: baseFont, textColor: textColor)
             coordinator.scheduleHighlights()
+            coordinator.applyFocusIfNeeded()
             return
         }
 
@@ -117,11 +122,13 @@ struct RichProseEditor: NSViewRepresentable {
             let maxLoc = max(0, (tv.string as NSString).length)
             tv.setSelectedRange(NSRange(location: min(selected.location, maxLoc), length: 0))
             coordinator.scheduleHighlights()
+            coordinator.applyFocusIfNeeded()
             return
         }
 
         // 文本与词表都未变时不重排高亮——断开自馈循环
         coordinator.scheduleHighlightsIfChanged()
+        coordinator.applyFocusIfNeeded()
     }
 
     @MainActor
@@ -135,6 +142,9 @@ struct RichProseEditor: NSViewRepresentable {
         private var lastNeedles: [String] = []
         private var lastHighlightText: String = ""
         private var lastLintSignature: String = ""
+        private var lastFocusToken: UUID?
+        /// 资料库命中后保持高亮的范围；作者一改选区/打字就撤掉。
+        private var focusHighlightRange: NSRange?
         private var highlightWork: DispatchWorkItem?
         /// 大章节流的序列化（每键击全量 serialize 在 10 万字章上 ~25ms）
         private var serializeWork: DispatchWorkItem?
@@ -147,12 +157,23 @@ struct RichProseEditor: NSViewRepresentable {
 
         func textDidChange(_ notification: Notification) {
             guard let tv = textView else { return }
+            // 作者开始改稿：命中定位高亮让位，避免和编辑选区抢视觉焦点
+            focusHighlightRange = nil
             // 新段落回归正文样式，避免标题/引用样式黏连；
             // 表格单元格内保留单元格属性，否则打字会脱出表格
             tv.typingAttributes = Self.typingAttributes(in: tv, baseFont: parent.baseFont, textColor: parent.textColor)
 
             scheduleSerialize()
             scheduleHighlights()
+        }
+
+        func textViewDidChangeSelection(_ notification: Notification) {
+            guard let tv = textView, let focused = focusHighlightRange else { return }
+            // 程序定位时选区正好等于高亮范围；作者点到别处才撤掉持续高亮。
+            if tv.selectedRange() != focused {
+                focusHighlightRange = nil
+                scheduleHighlights()
+            }
         }
 
         /// 序列化回 markdown：小改（逐字输入）防抖 250ms；结构性变化（大段增删/
@@ -222,6 +243,19 @@ struct RichProseEditor: NSViewRepresentable {
             return [.font: baseFont, .foregroundColor: textColor, .paragraphStyle: ps]
         }
 
+        /// 资料库命中跳转：只消费一次 token，避免每次 updateNSView 都抢选区。
+        func applyFocusIfNeeded() {
+            guard let token = parent.focusToken, token != lastFocusToken else { return }
+            lastFocusToken = token
+            guard let tv = textView, let needle = parent.focusNeedle,
+                  let range = KnowledgeFocus.range(of: needle, in: tv.string) else { return }
+            focusHighlightRange = range
+            tv.setSelectedRange(range)
+            tv.scrollRangeToVisible(range)
+            tv.showFindIndicator(for: range)
+            scheduleHighlights()
+        }
+
         // MARK: 高亮（临时属性，不落盘）
 
         func scheduleHighlights() {
@@ -267,6 +301,17 @@ struct RichProseEditor: NSViewRepresentable {
                             lm.addTemporaryAttribute(.underlineStyle, value: markUnderline, forCharacterRange: range)
                             lm.addTemporaryAttribute(.underlineColor, value: markUnderlineColor, forCharacterRange: range)
                         }
+                    }
+                    // 资料库命中定位：持续蓝色高亮，直到作者移动选区或开始打字
+                    if let focused = self.focusHighlightRange, NSMaxRange(focused) <= ns.length {
+                        lm.addTemporaryAttribute(.backgroundColor,
+                                                 value: NSColor.systemBlue.withAlphaComponent(0.18),
+                                                 forCharacterRange: focused)
+                        lm.addTemporaryAttribute(.underlineStyle, value: markUnderline,
+                                                 forCharacterRange: focused)
+                        lm.addTemporaryAttribute(.underlineColor,
+                                                 value: NSColor.systemBlue.withAlphaComponent(0.75),
+                                                 forCharacterRange: focused)
                     }
                     // 签名去重：结果无变化不回写，避免 onLint→重渲染→重扫描的自馈循环
                     let signature = "\(summary.grade)|\(summary.topIssues.map { "\($0.kind):\($0.count)" }.joined(separator: ","))|\(summary.wordCount)"

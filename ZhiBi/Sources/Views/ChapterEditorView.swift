@@ -1,7 +1,7 @@
 import SwiftUI
 
-/// 章节编辑器：上=骨架（AI 提案→人改→人批），下=正文（人亲笔）。
-/// 工具栏五个动作全部产出提案或报告，没有任何"AI 代写"入口。
+/// 章节编辑器：上=骨架（AI 提案→人改→人批），下=正文（手写或采纳 AI 草稿后由作者定稿）。
+/// 工具栏动作全部产出提案或报告；整章草稿走 propose_draft，作者采纳前不进正文。
 struct ChapterEditorView: View {
     @ObservedObject var vm: AppViewModel
     @ObservedObject var store: ProjectStore
@@ -28,6 +28,12 @@ struct ChapterEditorView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var chapter: Chapter { store.chapter(chapterNumber) ?? Chapter(number: chapterNumber) }
+
+    /// 只有选中了本章的资料库命中，才把定位指令交给正文编辑器。
+    private var proseFocus: ChapterFocus? {
+        guard let focus = vm.chapterFocus, focus.chapter == chapterNumber else { return nil }
+        return focus
+    }
 
     /// 每日目标环：今日净增 / 目标
     private var dailyChip: some View {
@@ -364,7 +370,7 @@ struct ChapterEditorView: View {
         HSplitView {
             VStack(spacing: 0) {
                 HStack {
-                    Text("正文（你亲笔）").font(.caption.bold()).foregroundStyle(.secondary)
+                    Text("正文（作者定稿）").font(.caption.bold()).foregroundStyle(.secondary)
                     Text("\(chapter.wordCount) 字 / 目标 \(store.project.chapterWordTarget)")
                         .font(.caption2).foregroundStyle(.tertiary)
                     Spacer()
@@ -389,6 +395,8 @@ struct ChapterEditorView: View {
                             baseFont: proseNSFont,
                             textColor: NSColor.labelColor,
                             clueNeedles: clueNeedles,
+                            focusNeedle: proseFocus?.needle,
+                            focusToken: proseFocus?.token,
                             onLint: { summary in lintResult = summary })
                     .padding(.horizontal, proseCentered || focusMode ? 24 : 8)
                     .frame(maxWidth: proseCentered || focusMode ? 780 : .infinity)

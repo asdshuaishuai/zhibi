@@ -58,6 +58,8 @@ enum ProjectLayout {
     /// 长程记忆：章档案卡
     static func dossiersFile(_ root: URL) -> URL { root.appendingPathComponent("dossiers.json") }
     static func memoryFile(_ root: URL) -> URL { root.appendingPathComponent("memory.json") }
+    /// 作者与 AI 的对话记录（项目级，随书走）
+    static func chatFile(_ root: URL) -> URL { root.appendingPathComponent("chat.json") }
     static func projectFile(_ root: URL) -> URL { root.appendingPathComponent("project.json") }
     static func checkpointsDir(_ root: URL) -> URL { root.appendingPathComponent("checkpoints", isDirectory: true) }
     static func proseFile(_ root: URL, number: Int) -> URL {

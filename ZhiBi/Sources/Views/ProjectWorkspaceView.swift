@@ -9,6 +9,7 @@ enum WorkspaceSection: Hashable {
     case clues
     case characters
     case canon
+    case knowledge
     case memory
     case inbox
     case graph
@@ -47,6 +48,7 @@ struct ProjectWorkspaceView: View {
                     Label("写作统计", systemImage: "chart.bar.fill").tag(WorkspaceSection.stats)
                 }
                 Section("账房") {
+                    Label("资料库", systemImage: "books.vertical.circle").tag(WorkspaceSection.knowledge)
                     Label("记忆中枢", systemImage: "brain").tag(WorkspaceSection.memory)
                     Label("记忆图谱", systemImage: "point.3.connected.trianglepath.dotted").tag(WorkspaceSection.graph)
                     Label("提案收件箱", systemImage: "tray.full").badge(pendingCount).tag(WorkspaceSection.inbox)
@@ -64,10 +66,21 @@ struct ProjectWorkspaceView: View {
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 if showTrajectory && !focusMode {
-                    AgentTrajectoryPanel(ai: vm.ai, onClose: {
+                    AgentRightPanel(vm: vm, store: store, ai: vm.ai, onClose: {
                         withAnimation(ZBMotion.standard(reduceMotion: reduceMotion)) { showTrajectory = false }
+                    }, onOpenInbox: {
+                        selection = .inbox
+                    }, onOpenChapter: { n, needle in
+                        vm.chapterFocus = ChapterFocus(chapter: n, needle: needle)
+                        selectedChapter = n
+                        selection = .chapters
+                        if focusMode { focusMode = false }
+                    }, onOpenSection: { section in
+                        selection = section
+                        if focusMode { focusMode = false }
                     })
-                    .frame(minWidth: 300, idealWidth: 360, maxWidth: 480, maxHeight: .infinity)
+                    .frame(minWidth: 300, idealWidth: 370, maxWidth: 500, maxHeight: .infinity)
+                    .id(store.rootURL)
                 }
             }
         }
@@ -92,13 +105,13 @@ struct ProjectWorkspaceView: View {
                 Button {
                     withAnimation(ZBMotion.standard(reduceMotion: reduceMotion)) { showTrajectory.toggle() }
                 } label: {
-                    Label("Agent 轨迹", systemImage: "point.topleft.down.curvedto.point.bottomright.up")
+                    Label("AI 协作", systemImage: "bubble.left.and.bubble.right")
                 }
                 .keyboardShortcut("j", modifiers: [.command, .shift])
                 .disabled(focusMode)
                 .help(focusMode
-                      ? "专注模式下不展开轨迹面板（退出专注后恢复）"
-                      : "右侧 Agent 轨迹对话窗：完整工具调用/结果/流式输出（⌘⇧J）")
+                      ? "专注模式下不展开 AI 协作面板（退出专注后恢复）"
+                      : "右侧 AI 协作面板：和 AI 对话，或看完整工具轨迹（⌘⇧J）")
             }
             ToolbarItem(placement: .primaryAction) { exportMenu }
             ToolbarItem(placement: .primaryAction) { importButton }
@@ -165,6 +178,19 @@ struct ProjectWorkspaceView: View {
             ClueBoardView(vm: vm, store: store)
         case .characters:
             CharactersView(store: store, vm: vm)
+        case .knowledge:
+            KnowledgeBaseView(
+                vm: vm, store: store,
+                onOpenChapter: { n, needle in
+                    vm.chapterFocus = ChapterFocus(chapter: n, needle: needle)
+                    selectedChapter = n
+                    selection = .chapters
+                    if focusMode { focusMode = false }
+                },
+                onOpenSection: { section in
+                    selection = section
+                    if focusMode { focusMode = false }
+                })
         case .memory:
             MemoryView(store: store, vm: vm)
         case .canon:

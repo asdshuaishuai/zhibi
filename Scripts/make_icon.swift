@@ -1,5 +1,5 @@
 // 生成 执笔 macOS App Icon（1024×1024，Big Sur 圆角规格）
-// 设计概念：宣纸底 · 虚线骨架+关键节点（AI 搭骨架）· 实心墨迹（人写正文）· 朱砂「执」印
+// 设计概念：宣纸底 · 虚线骨架+关键节点（AI 搭骨架）· 实心墨迹（作者定稿的正文）· 朱砂「执」印
 // 运行：swift Scripts/make_icon.swift <输出目录>
 
 import Foundation
