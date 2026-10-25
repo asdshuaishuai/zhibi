@@ -101,7 +101,7 @@
 
 - **宿主三提供**：指令（系统 prompt = PromptLibrary）、工具（`propose_*` 结构化提案工具 + `search_knowledge` 等只读查询工具）、凭据（API Key 存 macOS 钥匙串）。
 - **传输**：OpenAI 兼容 SSE chat/completions + tool-calling 循环，兼容 DeepSeek / GLM / Moonshot / OpenAI / Ollama 与本地端点。没有单独的 ACP 子进程通道；模型不调用工具时，宿主解析围栏 JSON 兜底登记提案（工具名仍受当前能力白名单约束）。
-- **对话**：`AIService.sendChat` 走同一套 agent 循环（maxTurns 10），先 `KnowledgeEngine.search` 预取资料，再把选中章骨架/上一章结尾、历史与资料一起交给模型；流式片段进右侧聊天窗，工具调用同步进轨迹窗。作者可在对话底部切换目标章，`propose_draft` / `propose_skeleton` / `propose_validation` / `propose_dossier` / `get_latest_draft` / `get_chapter_skeleton` 都跟随目标章，不再误落到全局下一章。回答里的【第12章】会被对齐到资料库的完整出处（第12章《雾隐》），工具结果里的来源也会并入引用池；来源芯片可点击跳到对应章节/台账。失败可重试，已答可重新生成——两者都会撤掉旧回复、保留原问题，不把同一句提问堆两层。对话历史存 `chat.json`，不是 SDK checkpoint；作者可导出 Markdown，或归档到作品目录（`chat-archive-<时间>.md`）后清空。归档可在应用内列出/预览/在访达中定位/安全删除，并可从同名 JSON 快照恢复到当前对话（只追加消息，不重新登记提案）；每条 AI 回复记录 `proposalIDs`，导出与归档会附带对应提案的状态与说明快照。旧 `chat.json` 缺该字段按空数组解码。
+- **对话**：`AIService.sendChat` 走同一套 agent 循环（maxTurns 10），先 `KnowledgeEngine.search` 预取资料，再把选中章骨架/上一章结尾、历史与资料一起交给模型；流式片段进右侧聊天窗，工具调用同步进轨迹窗。作者可在对话底部切换目标章，`propose_draft` / `propose_skeleton` / `propose_validation` / `propose_dossier` / `get_latest_draft` / `get_chapter_skeleton` 都跟随目标章，不再误落到全局下一章。回答里的【第12章】会被对齐到资料库的完整出处（第12章《雾隐》），工具结果里的来源也会并入引用池；来源芯片可点击跳到对应章节/台账。失败可重试，已答可重新生成——两者都会撤掉旧回复、保留原问题，不把同一句提问堆两层。对话历史存 `chat.json`，不是 SDK checkpoint；作者可导出 Markdown，或归档到作品目录（`chat-archive-<时间>.md`）后清空。归档可在应用内列出/预览/按文件名·日期·大小筛选/多选批量安全删除，并可从同名 JSON 快照恢复到当前对话（只追加消息，不重新登记提案）；每条 AI 回复记录 `proposalIDs`，导出与归档会附带对应提案的状态与说明快照。旧 `chat.json` 缺该字段按空数组解码。
 - **会话状态**：每次任务独立，不持久化会话 checkpoint；`checkpoints/` 目录为预留。
 - **裁决机制**：模型调用 `propose_*` 工具 → 宿主把 payload 建成提案并回复"已登记为提案，等待作者确认"。整章草稿也走 `propose_draft`；不存在任何绕过提案直接写 `prose.md` 的工具，模型口头声明不算数，一切以落盘提案 + 人的点击为准。
 
@@ -114,7 +114,7 @@
 - **向量**：每片生成本地 256 维哈希向量（token 哈希 + 符号 + L2 归一化），无网络也能做余弦召回/重排；配置 `embeddingModel` 后调用 OpenAI 兼容 `/embeddings` 对候选片段远程重排，按 16 条分批，失败自动回退并在资料库页标出「远程失败 / 已回退」。
 - **缓存**：`KnowledgeIndexCache` 按正文/账本的真实内容签名失效（同长度改字也会重建），索引是派生数据、不落盘。主线程只把 store 读成纯值 `KnowledgeSource` 快照，切片/分词/向量化在 `Task.detached` 后台完成，`KnowledgeIndexProgress` 把确定进度推给资料库页；构建期间内容再变则丢弃旧结果，不让过期索引覆盖新稿。远程嵌入另按「端点 + 模型 + 原文」缓存，避免每次检索重复上传整批正文。
 - **消费**：`search_knowledge` 工具（对话/骨架/草稿/修订/审校/连贯性/大纲同步/卷级设计可用）；对话预取 6 条资料，搭骨架按本章指令/上一章摘要/近章钩子召回 4 条，一键写作按主线/骨架/伏笔触点召回 5 条，分段写作每段 4 条，回答携带来源标注。
-- **UI**：侧栏「资料库」页可搜索、看来源/相关度/命中词；命中「前往」到章节时，`RichProseEditor` 用命中针滚动并持续高亮原文，作者移动光标或开始打字后撤掉；右侧「对话 / 轨迹」双窗承担日常人机协作。
+- **UI**：侧栏「资料库」页可搜索、看来源/相关度/命中词；命中「前往」到章节时，`RichProseEditor` 用命中针滚动并持续高亮原文，作者移动光标或开始打字后撤掉；命中也能「交给 AI」——把出处与摘录作为待发提示词送进右侧对话并自动展开面板；右侧「对话 / 轨迹」双窗承担日常人机协作。
 
 ## 数据与磁盘布局（人随时可以拿走自己的稿子）
 

@@ -10,6 +10,13 @@ struct ChapterFocus: Equatable {
     var token: UUID = UUID()
 }
 
+/// 跨视图把一段提示词送进右侧对话输入框（资料库「交给 AI」等）。
+struct ChatInvocation: Equatable {
+    var prompt: String
+    var chapter: Int?
+    var token: UUID = UUID()
+}
+
 /// 根应用状态：项目列表、当前打开的项目、AI 服务
 @MainActor
 final class AppViewModel: ObservableObject {
@@ -61,6 +68,8 @@ final class AppViewModel: ObservableObject {
     @Published var navigateToSection: WorkspaceSection?
     /// 资料库命中的原文定位指令（章节编辑器消费）
     @Published var chapterFocus: ChapterFocus?
+    /// 资料库「交给 AI」：把提示词送进右侧对话（面板消费者会清空）
+    @Published var chatInvocation: ChatInvocation?
 
     let ai = AIService()
 

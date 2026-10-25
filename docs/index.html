@@ -428,7 +428,7 @@
       <article class="card reveal">
         <div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M4 5h16v11H8l-4 4V5Z"/><path d="M8 9h8M8 12h5"/></svg></div>
         <h3>AI 协作面板 · 资料库</h3>
-        <p>右侧常驻「对话 / 轨迹」双窗。对话先检索正文、设定、档案卡、伏笔、事实与时间线，再回答并把回答里的短引用对齐到完整出处；来源芯片可点击跳到章节或台账，失败可重试、已答可重新生成，整段对话还能导出 Markdown 或归档到作品目录，并在应用内回看、恢复或删除归档；归档同时写可恢复 JSON，导出会附带本次登记的提案快照。可以选择对话针对的章节，从零提交整章草稿，也能搭/改该章骨架、做一致性验证、写档案卡或提议大纲更新，全部只登记提案。资料库索引覆盖正文、摘要、骨架与全套账本，关键词 BM25 + 本地哈希向量，同长度改字也会自动重建，切片与向量化在后台执行并显示确定进度；配置 embedding 模型后按 16 条分批走远程重排并缓存，失败会在页面上明确标出回退。每条命中都能直接前往出处，章内命中会自动滚动并持续高亮原文，直到你移动光标或开始打字。</p>
+        <p>右侧常驻「对话 / 轨迹」双窗。对话先检索正文、设定、档案卡、伏笔、事实与时间线，再回答并把回答里的短引用对齐到完整出处；来源芯片可点击跳到章节或台账，失败可重试、已答可重新生成，整段对话还能导出 Markdown 或归档到作品目录，并在应用内回看、筛选、批量删除或恢复归档；归档同时写可恢复 JSON，导出会附带本次登记的提案快照。可以选择对话针对的章节，从零提交整章草稿，也能搭/改该章骨架、做一致性验证、写档案卡或提议大纲更新，全部只登记提案。资料库索引覆盖正文、摘要、骨架与全套账本，关键词 BM25 + 本地哈希向量，同长度改字也会自动重建，切片与向量化在后台执行并显示确定进度；配置 embedding 模型后按 16 条分批走远程重排并缓存，失败会在页面上明确标出回退。每条命中都能直接前往出处，章内命中会自动滚动并持续高亮原文，直到你移动光标或开始打字；也可以一键交给 AI，把出处与摘录带进右侧对话继续提问或续写。</p>
         <span class="tag">⌘⇧J · 检索带来源 · 整章草稿提案</span>
       </article>
       <article class="card reveal">
@@ -553,7 +553,7 @@
       <p>项目自带一个无头自检 CLI 和一个 mock 模型端点。前者跑纯函数与内存账本，后者把「宿主交工具面 → 模型回调工具 → 落成提案 → 采纳 → 落盘」整条链变成可重复回归——不需要 API Key。</p>
     </div>
     <div class="stats">
-      <div class="stat reveal"><div class="num">445</div><div class="lbl">无头自检全通过</div><div class="src">ZhiBiCli · EXIT=0</div></div>
+      <div class="stat reveal"><div class="num">449</div><div class="lbl">无头自检全通过</div><div class="src">ZhiBiCli · EXIT=0</div></div>
       <div class="stat reveal"><div class="num">122</div><div class="lbl">宿主往返回归</div><div class="src">mock OpenAI 端点 · 零 Key</div></div>
       <div class="stat reveal"><div class="num">25<em>/20</em></div><div class="lbl">去AI味检测器 / 连贯性检查类</div><div class="src">全部零 LLM 成本</div></div>
       <div class="stat reveal"><div class="num">20</div><div class="lbl">AI 能力，写作产出走提案</div><div class="src">会改书的能力都有 propose_* 生产者</div></div>

@@ -252,6 +252,17 @@ struct KnowledgeBaseView: View {
                 Spacer()
                 Text(String(format: "%.2f", hit.score))
                     .font(.caption2.monospacedDigit()).foregroundStyle(.tertiary)
+                Button {
+                    vm.chatInvocation = ChatInvocation(
+                        prompt: KnowledgeQuickPrompt.handOff(hit),
+                        chapter: hit.chunk.chapter)
+                } label: {
+                    Label("交给 AI", systemImage: "bubble.left.and.text.bubble.right")
+                        .font(.caption2)
+                }
+                .buttonStyle(.borderless)
+                .controlSize(.mini)
+                .help("把这段资料带进右侧 AI 对话，接着提问或续写")
                 if let target = jumpTarget(for: hit.chunk) {
                     Button {
                         jump(target, needle: KnowledgeFocus.needle(for: hit))

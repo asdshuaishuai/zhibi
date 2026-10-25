@@ -636,6 +636,26 @@ enum KnowledgeFocus {
     }
 }
 
+// MARK: - 资料库 → AI 对话
+
+enum KnowledgeQuickPrompt {
+    /// 把一条资料命中带进对话输入框：保留出处与可核对的原文，用户接着补需求。
+    static func handOff(_ hit: KnowledgeHit, maxExcerpt: Int = 280) -> String {
+        let text = hit.chunk.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let excerpt = text.count > maxExcerpt
+            ? String(text.prefix(maxExcerpt)).trimmingCharacters(in: .whitespacesAndNewlines) + "…"
+            : text
+        let chapter = hit.chunk.chapter.map { "（第\($0)章）" } ?? ""
+        return """
+        我在资料库找到这段\(chapter)：
+        【\(hit.chunk.citation)】
+        \(excerpt)
+
+        请基于这段资料：
+        """
+    }
+}
+
 // MARK: - 回答来源对齐
 //
 // 模型回答里常写短标注（【第12章】【伏笔 [F03]】），资料库的完整标注更具体

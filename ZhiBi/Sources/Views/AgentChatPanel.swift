@@ -53,6 +53,12 @@ struct AgentRightPanel: View {
             }
         }
         .background(Color(nsColor: .windowBackgroundColor))
+        .onChange(of: vm.chatInvocation?.token) { _, token in
+            if token != nil { tab = "chat" }
+        }
+        .onAppear {
+            if vm.chatInvocation != nil { tab = "chat" }
+        }
     }
 }
 
@@ -133,8 +139,12 @@ struct AgentChatPanel: View {
             archiveNote = nil
             showArchives = false
         }
+        .onChange(of: vm.chatInvocation?.token) { _, _ in
+            consumeInvocation()
+        }
         .onAppear {
             if targetChapter == nil { targetChapter = store.currentChapter }
+            consumeInvocation()
             inputFocused = true
         }
     }
@@ -465,6 +475,18 @@ struct AgentChatPanel: View {
         .padding(ZBSpace.sm)
     }
 
+    /// 资料库等外部入口送来的提示词：填进输入框、切到对应章，然后消费掉请求。
+    private func consumeInvocation() {
+        guard let invocation = vm.chatInvocation else { return }
+        draft = invocation.prompt
+        if let chapter = invocation.chapter {
+            targetChapter = chapter
+        }
+        vm.chatInvocation = nil
+        archiveNote = nil
+        inputFocused = true
+    }
+
     private func send(_ text: String? = nil) {
         let outbound = (text ?? draft).trimmingCharacters(in: .whitespacesAndNewlines)
         guard !outbound.isEmpty, !ai.running else { return }
@@ -498,104 +520,57 @@ struct ChatArchiveSheet: View {
     @ObservedObject var store: ProjectStore
     @Environment(\.dismiss) private var dismiss
     @State private var entries: [ChatArchiveEntry] = []
-    @State private var selected: URL?
+    @State private var selection: Set<URL> = []
+    @State private var query = ""
     @State private var preview = ""
-    @State private var confirmDelete: URL?
+    @State private var deleteURLs: Set<URL> = []
     @State private var canRestore = false
+    @State private var restoreURL: URL?
     @State private var restoreCount = 0
+    @State private var confirmDelete = false
     @State private var confirmRestore = false
     @State private var note: String?
 
+    private var visibleEntries: [ChatArchiveEntry] {
+        let q = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !q.isEmpty else { return entries }
+        return entries.filter { $0.matches(query: q) }
+    }
+
+    private var singleSelection: URL? {
+        selection.count == 1 ? selection.first : nil
+    }
+
     var body: some View {
         VStack(spacing: 0) {
-            HStack(spacing: 8) {
-                Image(systemName: "archivebox").foregroundStyle(Color.accentColor)
-                Text("对话归档").font(.headline)
-                Text("\(entries.count) 份").font(.caption).foregroundStyle(.secondary)
-                if let note {
-                    Text(note).font(.caption2).foregroundStyle(.green).lineLimit(1)
-                }
-                Spacer()
-                Button("恢复到当前对话") {
-                    guard let selected, let payload = store.readChatArchivePayload(selected) else { return }
-                    restoreCount = payload.messages.count
-                    confirmRestore = true
-                }
-                .controlSize(.small)
-                .disabled(!canRestore)
-                .help(canRestore ? "把归档消息追加到当前对话（不重新登记提案）" : "这份归档没有可恢复的 JSON 快照")
-                Button("在访达中显示") {
-                    if let selected { NSWorkspace.shared.activateFileViewerSelecting([selected]) }
-                }
-                .controlSize(.small)
-                .disabled(selected == nil)
-                Button("删除…", role: .destructive) { confirmDelete = selected }
-                    .controlSize(.small)
-                    .disabled(selected == nil)
-                Button("完成") { dismiss() }
-                    .controlSize(.small)
-            }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 10)
+            header
             Divider()
-            if entries.isEmpty {
-                VStack(spacing: 8) {
-                    Image(systemName: "archivebox").font(.system(size: 30)).foregroundStyle(.tertiary)
-                    Text("还没有对话归档").font(.headline)
-                    Text("在对话窗的导出菜单里点「归档到项目并清空」，这里就会出现可回看、可恢复的记录。")
-                        .font(.caption).foregroundStyle(.secondary)
-                        .multilineTextAlignment(.center)
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .padding(30)
-            } else {
-                HSplitView {
-                    List(selection: $selected) {
-                        ForEach(entries) { entry in
-                            VStack(alignment: .leading, spacing: 3) {
-                                Text(entry.name)
-                                    .font(.callout)
-                                    .lineLimit(1)
-                                Text("\(entry.createdAt.formatted(date: .abbreviated, time: .shortened)) · \(entry.sizeLabel)")
-                                    .font(.caption2)
-                                    .foregroundStyle(.secondary)
-                            }
-                            .padding(.vertical, 2)
-                            .tag(entry.url)
-                        }
-                    }
-                    .listStyle(.inset)
-                    .frame(minWidth: 240, idealWidth: 290)
-
-                    ScrollView {
-                        Text(preview.isEmpty ? "选择左侧归档查看内容。" : preview)
-                            .font(.callout)
-                            .textSelection(.enabled)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(14)
-                    }
-                }
-            }
+            searchBar
+            Divider()
+            content
         }
-        .frame(minWidth: 720, minHeight: 480)
+        .frame(minWidth: 760, minHeight: 500)
         .onAppear { reload() }
-        .onChange(of: selected) { _, url in loadPreview(url) }
-        .confirmationDialog("删除这份对话归档？", isPresented: Binding(
-            get: { confirmDelete != nil },
-            set: { if !$0 { confirmDelete = nil } }
-        )) {
-            Button("删除", role: .destructive) {
-                if let url = confirmDelete { _ = store.deleteChatArchive(url) }
-                confirmDelete = nil
+        .onChange(of: selection) { _, _ in updatePreview() }
+        .onChange(of: query) { _, _ in
+            let visible = Set(visibleEntries.map(\.url))
+            selection = selection.intersection(visible)
+        }
+        .confirmationDialog("删除选中的对话归档？", isPresented: $confirmDelete) {
+            Button("删除 \(deleteURLs.count) 份", role: .destructive) {
+                let n = store.deleteChatArchives(Array(deleteURLs))
+                note = "已删除 \(n) 份归档"
+                deleteURLs.removeAll()
+                selection.removeAll()
                 reload()
             }
-            Button("取消", role: .cancel) { confirmDelete = nil }
+            Button("取消", role: .cancel) { deleteURLs.removeAll() }
         } message: {
-            Text("只删除归档文件，不影响当前对话、正文和提案。")
+            Text("只删除归档文件（连同可恢复 JSON），不影响当前对话、正文和提案。")
         }
         .confirmationDialog("恢复这份归档到当前对话？", isPresented: $confirmRestore) {
             Button("恢复 \(restoreCount) 条消息") {
-                if let selected, let count = store.restoreChatArchive(selected) {
+                if let url = restoreURL, let count = store.restoreChatArchive(url) {
                     note = "已恢复 \(count) 条消息到当前对话"
                 } else {
                     note = "恢复失败：归档缺少可恢复快照"
@@ -607,13 +582,128 @@ struct ChatArchiveSheet: View {
         }
     }
 
+    private var header: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "archivebox").foregroundStyle(Color.accentColor)
+            Text("对话归档").font(.headline)
+            Text("\(visibleEntries.count)/\(entries.count) 份")
+                .font(.caption).foregroundStyle(.secondary)
+            if let note {
+                Text(note).font(.caption2).foregroundStyle(.green).lineLimit(1)
+            }
+            Spacer()
+            Button("恢复到当前对话") {
+                guard let url = singleSelection,
+                      let payload = store.readChatArchivePayload(url) else { return }
+                restoreURL = url
+                restoreCount = payload.messages.count
+                confirmRestore = true
+            }
+            .controlSize(.small)
+            .disabled(!canRestore)
+            .help(canRestore ? "把归档消息追加到当前对话（不重新登记提案）" : "选中一份带 JSON 快照的归档才能恢复")
+            Button("在访达中显示") {
+                if let url = singleSelection {
+                    NSWorkspace.shared.activateFileViewerSelecting([url])
+                }
+            }
+            .controlSize(.small)
+            .disabled(singleSelection == nil)
+            Button("删除所选…", role: .destructive) {
+                deleteURLs = selection
+                confirmDelete = true
+            }
+            .controlSize(.small)
+            .disabled(selection.isEmpty)
+            Button("完成") { dismiss() }
+                .controlSize(.small)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+    }
+
+    private var searchBar: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+            TextField("筛选归档（文件名 / 日期 / 大小）", text: $query)
+                .textFieldStyle(.roundedBorder)
+            if !query.isEmpty {
+                Button("清除") { query = "" }
+                    .controlSize(.small)
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.bottom, 8)
+    }
+
+    @ViewBuilder
+    private var content: some View {
+        if entries.isEmpty {
+            VStack(spacing: 8) {
+                Image(systemName: "archivebox").font(.system(size: 30)).foregroundStyle(.tertiary)
+                Text("还没有对话归档").font(.headline)
+                Text("在对话窗的导出菜单里点「归档到项目并清空」，这里就会出现可回看、可恢复的记录。")
+                    .font(.caption).foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .padding(30)
+        } else if visibleEntries.isEmpty {
+            VStack(spacing: 8) {
+                Image(systemName: "line.3.horizontal.decrease.circle")
+                    .font(.system(size: 30)).foregroundStyle(.tertiary)
+                Text("没有匹配的归档").font(.headline)
+                Text("换个文件名、日期或大小试试。")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .padding(30)
+        } else {
+            HSplitView {
+                List(selection: $selection) {
+                    ForEach(visibleEntries) { entry in
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(entry.name)
+                                .font(.callout)
+                                .lineLimit(1)
+                            Text("\(entry.createdAt.formatted(date: .abbreviated, time: .shortened)) · \(entry.sizeLabel)")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        }
+                        .padding(.vertical, 2)
+                        .tag(entry.url)
+                    }
+                }
+                .listStyle(.inset)
+                .frame(minWidth: 240, idealWidth: 290)
+
+                ScrollView {
+                    Text(preview.isEmpty ? "选择左侧归档查看内容；按住 ⌘ 可多选。" : preview)
+                        .font(.callout)
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(14)
+                }
+            }
+        }
+    }
+
     private func reload() {
         entries = store.listChatArchives()
-        if let selected, entries.contains(where: { $0.url == selected }) {
-            loadPreview(selected)
+        let existing = Set(entries.map(\.url))
+        selection = selection.intersection(existing)
+        if selection.isEmpty, let first = entries.first?.url {
+            selection = [first]
+        }
+        updatePreview()
+    }
+
+    private func updatePreview() {
+        if selection.count == 1, let url = selection.first {
+            loadPreview(url)
         } else {
-            selected = entries.first?.url
-            loadPreview(selected)
+            preview = selection.isEmpty ? "" : "已选 \(selection.count) 份归档"
+            canRestore = false
         }
     }
 

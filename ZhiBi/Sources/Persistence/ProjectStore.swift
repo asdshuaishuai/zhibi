@@ -14,6 +14,16 @@ struct ChatArchiveEntry: Identifiable, Hashable {
         if bytes < 1024 * 1024 { return String(format: "%.1f KB", Double(bytes) / 1024) }
         return String(format: "%.1f MB", Double(bytes) / 1024 / 1024)
     }
+
+    /// 归档面板的本地筛选：文件名 / 日期 / 大小都可以。
+    func matches(query: String) -> Bool {
+        let q = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !q.isEmpty else { return true }
+        let date = createdAt.formatted(date: .abbreviated, time: .shortened).lowercased()
+        return name.lowercased().contains(q)
+            || date.contains(q)
+            || sizeLabel.lowercased().contains(q)
+    }
 }
 
 /// 全量项目状态。单一权威（oh-story：单一 JSON 权威 + 派生视图）。
@@ -633,6 +643,14 @@ final class ProjectStore: ObservableObject {
         }
         if let payloadURL { try? FileManager.default.removeItem(at: payloadURL) }
         return true
+    }
+
+    /// 批量删除；返回真正删除的份数（不合法的路径会被逐条跳过）。
+    @discardableResult
+    func deleteChatArchives(_ urls: [URL]) -> Int {
+        var deleted = 0
+        for url in urls where deleteChatArchive(url) { deleted += 1 }
+        return deleted
     }
 
     private func isChatArchive(_ url: URL) -> Bool {

@@ -147,6 +147,11 @@ struct ProjectWorkspaceView: View {
                 vm.navigateToSection = nil
             }
         }
+        .onChange(of: vm.chatInvocation?.token) { _, token in
+            guard token != nil else { return }
+            if focusMode { focusMode = false }
+            showTrajectory = true
+        }
         .onAppear {
             if selectedChapter == nil {
                 selectedChapter = (store.chapters.last { !$0.prose.isEmpty } ?? store.chapters.last)?.number

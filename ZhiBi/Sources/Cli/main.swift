@@ -2840,6 +2840,19 @@ MainActor.assumeIsolated {
           KnowledgeFocus.range(of: "断刀", in: "少年在废窑里捡到一把断刀。")
             .map { $0.location != NSNotFound } == true)
     check("定位不到返回 nil", KnowledgeFocus.range(of: "不存在的词", in: "少年捡到断刀") == nil)
+    let handOff = KnowledgeQuickPrompt.handOff(kbHits[0])
+    check("资料库命中可交给 AI 续问",
+          handOff.contains("【\(kbHits[0].chunk.citation)】")
+          && handOff.hasSuffix("请基于这段资料："),
+          String(handOff.prefix(120)))
+    let longChunk = KnowledgeChunk(id: "long", kind: .prose, title: "长段",
+                                   citation: "第1章《长段》", chapter: 1,
+                                   text: String(repeating: "断刀", count: 300), vector: [])
+    let longHit = KnowledgeHit(chunk: longChunk, keywordScore: 1, score: 1, matchedTerms: [])
+    let truncatedHandOff = KnowledgeQuickPrompt.handOff(longHit, maxExcerpt: 20)
+    check("交给 AI 的摘录会截断",
+          truncatedHandOff.contains("…") && truncatedHandOff.count < 140,
+          "len=\(truncatedHandOff.count)")
 
     // 同长度修订（北境→南境）也必须让派生索引失效
     KnowledgeIndexCache.invalidate()
@@ -2939,6 +2952,23 @@ MainActor.assumeIsolated {
           archiveList.first.map { archiveStore.deleteChatArchive($0.url) } == true
           && archiveStore.listChatArchives().isEmpty
           && payloadURL.map { !FileManager.default.fileExists(atPath: $0.path) } == true)
+    let syntheticEntry = ChatArchiveEntry(
+        url: URL(fileURLWithPath: "/tmp/x.md"),
+        name: "chat-archive-20261025-120000.md",
+        createdAt: Date(timeIntervalSince1970: 0), bytes: 2048)
+    check("归档可按文件名/大小筛选",
+          syntheticEntry.matches(query: "20261025")
+          && syntheticEntry.matches(query: "2.0 KB")
+          && !syntheticEntry.matches(query: "不存在"))
+    archiveStore.appendChatMessage(ChatMessage(role: .user, text: "第二轮"))
+    _ = archiveStore.archiveChat()
+    archiveStore.appendChatMessage(ChatMessage(role: .user, text: "第三轮"))
+    _ = archiveStore.archiveChat()
+    let batchURLs = archiveStore.listChatArchives().map(\.url)
+    check("可批量删除归档",
+          batchURLs.count == 2 && archiveStore.deleteChatArchives(batchURLs) == 2
+          && archiveStore.listChatArchives().isEmpty,
+          "urls=\(batchURLs.count)")
 
     let proposalProbe = AIProposal(capability: .chapterDraft, chapterNumber: 1,
                                    title: "第1章 草稿 v1",
